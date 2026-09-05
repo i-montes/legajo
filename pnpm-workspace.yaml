@@ -1,0 +1,8 @@
+# pnpm 11 lee su configuracion desde aqui (camelCase), no desde .npmrc.
+# Vite 7 no necesita el binario nativo de esbuild, asi que su post-install
+# se ignora a proposito y desactivamos la verificacion previa a cada script.
+verifyDepsBeforeRun: false
+ignoredBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: set this to true or false

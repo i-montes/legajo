@@ -1,0 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+:root{
+  --font-serif-display: "Cormorant Garamond", "Tiempos Headline", Georgia, serif; /* substitute for licensed Copernicus */
+  --font-sans: "Inter", "StyreneB", -apple-system, sans-serif; /* substitute for licensed StyreneB */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}

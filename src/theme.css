@@ -1,0 +1,102 @@
+/* ── Fuentes locales ───────────────────────────────────────────────────────
+   Se empaquetan en vez de cargarse desde Google Fonts a proposito: la promesa
+   de la app es que el archivo nunca sale de este computador, y pedir tipografias
+   a un servidor externo en cada arranque filtraria el uso de la herramienta.   */
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/manrope";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+:root {
+  --font-serif-display: "Fraunces Variable", "Fraunces", Georgia, serif;
+  --font-sans: "Manrope Variable", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Fraunces es variable en óptica y suavidad. En los titulares grandes se le
+     pide el eje óptico alto, que es para lo que está pensado; en los cuerpos
+     pequeños queda demasiado dramático. */
+  --fraunces-display: "SOFT" 0, "WONK" 1, "opsz" 96;
+  --fraunces-titulo: "SOFT" 0, "WONK" 0, "opsz" 48;
+}
+
+[data-tema="claro"] {
+  --bg: #F4F1EA; --superficie: #FAF8F3; --elevada: #FFFEFA; --hundida: #EDE9E0;
+  --borde: #E0D9CC; --borde-fuerte: #CFC5B4;
+  --t1: #1B1917; --t2: #565049; --t3: #6E6659;
+  --acento: #2563EB; --acento-fuerte: #1D4ED8; --acento-suave: rgba(37, 99, 235, .10);
+  --exito: #4C6A38; --advertencia: #92671C; --error: #8E3A30;
+  --exito-fondo: rgba(76, 106, 56, .10);
+  --advertencia-fondo: rgba(146, 103, 28, .11);
+  --error-fondo: rgba(142, 58, 48, .09);
+  --e-persona: #8C4A2F; --e-organizacion: #4C6A38; --e-lugar: #3B5B70; --e-cargo: #6A4A6E;
+  --e-ley: #8A6A1E; --e-evento: #2F625E; --e-obra: #7A3A52; --e-monto: #5A554D;
+  --marca-alfa: 14%;
+  color-scheme: light;
+}
+
+[data-tema="oscuro"] {
+  --bg: #1A1917; --superficie: #211F1C; --elevada: #2A2724; --hundida: #151412;
+  --borde: #37332E; --borde-fuerte: #4A453E;
+  --t1: #EDE9E2; --t2: #ADA69D; --t3: #9A938A;
+  --acento: #7BA6F7; --acento-fuerte: #9BBDFA; --acento-suave: rgba(123, 166, 247, .16);
+  --exito: #93B573; --advertencia: #D2A452; --error: #D2867B;
+  --exito-fondo: rgba(147, 181, 115, .12);
+  --advertencia-fondo: rgba(210, 164, 82, .12);
+  --error-fondo: rgba(210, 134, 123, .10);
+  --e-persona: #D08A5E; --e-organizacion: #93B573; --e-lugar: #83A8BF; --e-cargo: #B392B8;
+  --e-ley: #CBA84E; --e-evento: #6FB0A9; --e-obra: #C4869C; --e-monto: #A9A29A;
+  --marca-alfa: 20%;
+  color-scheme: dark;
+}
+
+/* ── Escala de espaciado, base 4 ───────────────────────────────────────── */
+:root {
+  --esp-1: 4px;  --esp-2: 8px;  --esp-3: 12px; --esp-4: 16px;
+  --esp-6: 24px; --esp-8: 32px; --esp-11: 44px; --esp-14: 56px; --esp-16: 64px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+a { color: var(--acento); text-decoration: none; border-bottom: 1px solid var(--acento-suave); }
+a:hover { color: var(--acento-fuerte); border-bottom-color: var(--acento); }
+::selection { background: var(--acento-suave); }
+
+button { font-family: var(--font-sans); }
+:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+
+@keyframes legajo-latido { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+@keyframes legajo-barrido { 0% { transform: translateX(-100%) } 100% { transform: translateX(300%) } }
+
+/* ── Escala tipografica ───────────────────────────────────────────────────
+   Los tamanos vienen de la especificacion del diseno, no de la escala base
+   del sistema: esta app usa serif para display y para el cuerpo del articulo. */
+.t-display   { font-family: var(--font-serif-display); font-size: 36px;   font-weight: 500; line-height: 1.14; letter-spacing: -.4px;
+               font-variation-settings: var(--fraunces-display); }
+.t-titular   { font-family: var(--font-serif-display); font-size: 38px;   font-weight: 600; line-height: 1.18; letter-spacing: -.4px;
+               font-variation-settings: var(--fraunces-titulo); }
+/* El cuerpo del artículo va en la sans, al mismo tamaño que la prosa de la
+   interfaz pero con más aire entre líneas: se lee durante horas seguidas. */
+.t-lectura   { font-family: var(--font-sans);          font-size: 18px;   font-weight: 400; line-height: 1.8; letter-spacing: 0; }
+.t-cuerpo    { font-family: var(--font-sans);          font-size: 18px;   font-weight: 400; line-height: 1.65; }
+.t-ui        { font-family: var(--font-sans);          font-size: 13.5px; font-weight: 400; line-height: 1.45; }
+.t-menor     { font-family: var(--font-sans);          font-size: 12.5px; font-weight: 400; line-height: 1.5; }
+.t-rotulo    { font-family: var(--font-sans);          font-size: 11px;   font-weight: 400; line-height: 1.4;
+               letter-spacing: 1.4px; text-transform: uppercase; color: var(--t3); }
+.t-mono      { font-family: var(--font-mono);          font-size: 12.5px; font-weight: 400; line-height: 1.6; }
+
+/* Barra de desplazamiento discreta, en el tono del papel. */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--borde); border-radius: 999px; border: 3px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--borde-fuerte); }

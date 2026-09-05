@@ -1,0 +1,36 @@
+# Entorno y credenciales
+.env
+.env.*
+!.env.example
+
+# Rust / Tauri
+# target/ está en la raíz porque el proyecto es un workspace de Cargo.
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Datos locales
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+data/
+exports/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Sidecar de Python
+.venv/
+sidecar/__pycache__/
+sidecar/dist/
+sidecar/build/
+
+# Metadatos que WSL arrastra de Windows
+*:Zone.Identifier

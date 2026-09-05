@@ -1,0 +1,6 @@
+# Torch en CPU a propósito: la Fase 0 tiene que medir el rendimiento en la
+# máquina que va a tener una redacción, no en una con GPU. La rueda de CPU pesa
+# una fracción de la de CUDA y es lo que se acabará empaquetando.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0
+gliner>=0.2.13
