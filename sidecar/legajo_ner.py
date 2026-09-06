@@ -94,7 +94,17 @@ class Motor:
         log(f"cargando spaCy {nombre_spacy}…")
         # Sin NER propio ni etiquetador: solo hace falta segmentar y tokenizar,
         # y desactivar el resto ahorra la mitad del tiempo por artículo.
-        self.nlp = spacy.load(nombre_spacy, exclude=["ner", "lemmatizer", "textcat"])
+        try:
+            self.nlp = spacy.load(nombre_spacy, exclude=["ner", "lemmatizer", "textcat"])
+        except OSError:
+            # El OSError crudo de spaCy dice «no parece un paquete de Python»,
+            # que no le sirve a nadie que no sepa qué es un paquete de Python.
+            # El modelo se instala aparte del programa y puede no estar.
+            hay = ", ".join(modelos_spacy_instalados()) or "ninguno"
+            raise RuntimeError(
+                f"falta el modelo de spaCy «{nombre_spacy}». Instalados: {hay}. "
+                f"Se descarga con: python -m spacy download {nombre_spacy}"
+            ) from None
 
         from gliner import GLiNER
 
@@ -180,6 +190,21 @@ class Motor:
         return out
 
 
+def modelos_spacy_instalados():
+    """Los modelos de spaCy presentes en este entorno.
+
+    Ofrecer en la interfaz tres modelos cuando solo hay uno instalado convierte
+    una elección en una trampa: se elige el grande, se espera, y lo que llega es
+    un error de Python en mitad de la extracción.
+    """
+    try:
+        import spacy.util
+
+        return sorted(spacy.util.get_installed_models())
+    except Exception:
+        return []
+
+
 def cargar_glirel(nombre):
     """Carga GLiREL sorteando el desajuste con huggingface_hub.
 
@@ -244,7 +269,10 @@ def main():
                 responder({"ok": True, "evento": "fin"})
                 return
 
-            if op == "cargar":
+            if op == "disponibles":
+                responder({"ok": True, "spacy": modelos_spacy_instalados()})
+
+            elif op == "cargar":
                 ms = motor.cargar(pet)
                 responder({"ok": True, "evento": "listo", "ms": ms, **motor.nombres})
 

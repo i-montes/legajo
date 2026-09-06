@@ -28,6 +28,60 @@ const GENERICAS = new Set([
   "organización", "entidad", "institución", "partido", "movimiento",
 ]);
 
+/* Palabras que sitúan una relación antes o después del artículo que la cuenta.
+   «Ex», «entonces» y «fue» son las tres que aparecen una y otra vez en prosa
+   política: «el entonces ministro», «el exgobernador», «fue director de».
+
+   Los límites van con lookarounds sobre `\p{L}` y no con `\b`, porque `\b` de
+   JavaScript no cuenta las vocales acentuadas como letra: entre la «á» de
+   «asumirá» y el espacio siguiente no ve ninguna frontera, y la palabra no
+   casaba nunca. Es el mismo fallo de tildes que ya apareció al propagar. */
+const linde = (alternativas: string) =>
+  new RegExp(`(?<!\\p{L})(?:${alternativas})(?!\\p{L})`, "iu");
+
+const PASADO = linde(
+  "ex|exministr\\p{L}*|expresident\\p{L}*|exgobernador\\p{L}*|exalcald\\p{L}*|" +
+  "exsenador\\p{L}*|exdirector\\p{L}*|entonces|otrora|fue|había sido|salient\\p{L}+"
+);
+
+const FUTURO = linde(
+  "asumirá|será|ocupará|reemplazará|entrante|electo|electa|designad\\p{L}+|" +
+  "nombrad\\p{L}+ para|próximo|próxima"
+);
+
+/** Qué vigencia sugiere el texto alrededor de una relación.
+ *
+ *  La fecha del artículo dice cuándo se **afirmó** algo, no cuándo fue
+ *  **cierto**: «Carlos Costa, ministro de Ambiente» en un artículo de 2010 y
+ *  «el exministro Costa» en uno de 2015 son la misma relación con vigencias
+ *  opuestas. Esto solo lo sugiere; quien anota lee la frase entera y decide.
+ *
+ *  Devuelve `null` cuando no hay señal, que es lo más común: el presente no
+ *  deja marcas léxicas, y por eso «vigente» es el valor por defecto.
+ */
+export function vigenciaSugerida(contexto: string): "pasada" | "futura" | null {
+  if (PASADO.test(contexto)) return "pasada";
+  if (FUTURO.test(contexto)) return "futura";
+  return null;
+}
+
+/** Un cargo o una organización sin nombre propio suele describir a alguien
+ *  concreto: «el Gobernador de Antioquia», «la cooperativa». Vale la pena
+ *  preguntarlo, porque es lo que convierte un cargo suelto en una identidad
+ *  pendiente en el grafo. */
+export function pareceDescripcion(texto: string, tipo: string): boolean {
+  if (tipo !== "cargo" && tipo !== "organizacion") return false;
+  const t = texto.trim();
+  if (t.length < 4) return false;
+  // Si lleva un nombre propio dentro, ya está nombrada: «Ministerio de
+  // Hacienda» es una organización con nombre, no una descripción de otra cosa.
+  const palabras = t.split(/\s+/).slice(1);
+  const llevaNombre = palabras.some(
+    (w) => w.length > 3 && w[0] === w[0].toUpperCase() && !/^(de|del|la|el|los|las|y|en|para)$/i.test(w)
+  );
+  return tipo === "cargo" ? !llevaNombre || /\bde\b/i.test(t) : !llevaNombre;
+}
+
 export function revisar(texto: string, tipo: string): Aviso[] {
   const avisos: Aviso[] = [];
   const t = texto.trim();

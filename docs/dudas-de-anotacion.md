@@ -22,16 +22,16 @@ que la siguiente persona no tenga que parar en el mismo sitio.
 
 ## Carencias del vocabulario detectadas
 
-Las seis salieron de artículos reales. Ninguna está resuelta.
+Las seis salieron de artículos reales. Las seis están resueltas.
 
 | Carencia | El caso que la destapó | Estado |
 |---|---|---|
-| `familiar de` | «Esteban y Luis Alfredo, **hijos del** Gobernador de Antioquia» | pendiente |
-| `aspira a` | «Andrés Felipe Arias **a la** Presidencia» — con `ocupa el cargo` sería falso | pendiente |
-| `destinado a` | «10 mil millones **para** el bicentenario» | pendiente |
-| `sanciona con` | «ARTÍCULO 346 … incurrirá en prisión de 48 a 108 meses» | pendiente |
-| Persona identificada sin nombre | «el Gobernador de Antioquia», «el Canciller», «la cooperativa». **Salió tres veces en cinco artículos.** | pendiente |
-| Vigencia temporal de una relación | «Carlos Costa ministro de Ambiente» en un artículo de 2010: la fecha del artículo dice cuándo se **afirmó**, no cuándo fue **cierto** | pendiente |
+| `familiar de` | «Esteban y Luis Alfredo, **hijos del** Gobernador de Antioquia» | **resuelto** |
+| `aspira a` | «Andrés Felipe Arias **a la** Presidencia» — con `ocupa el cargo` sería falso | **resuelto** |
+| `destinado a` | «10 mil millones **para** el bicentenario» | **resuelto** |
+| `sanciona con` | «ARTÍCULO 346 … incurrirá en prisión de 48 a 108 meses» | **resuelto** |
+| Persona identificada sin nombre | «el Gobernador de Antioquia», «el Canciller», «la cooperativa». **Salió tres veces en cinco artículos.** | **resuelto** |
+| Vigencia temporal de una relación | «Carlos Costa ministro de Ambiente» en un artículo de 2010: la fecha del artículo dice cuándo se **afirmó**, no cuándo fue **cierto** | **resuelto** |
 | `aliado de` y `opositor de` | «¿No hay nada para marcar rivales políticos?». Estaban en el plan de la fase y se perdieron al implementar la pantalla del diseño, que traía cinco predicados genéricos | **resuelto** |
 
 Anidamiento de marcas (`Antioquia` dentro de `Gobernador de Antioquia`) también
@@ -41,7 +41,31 @@ Los predicados pasaron de cinco a trece, y el menú se filtra por los tipos de l
 dos marcas elegidas: entre dos personas ofrece `aliado de`, `opositor de` y
 `familiar de`; entre persona y cargo, `ocupa el cargo` y `aspira a`. Así nunca se
 ven trece opciones a la vez ni se puede afirmar que un monto ocupa un cargo.
-Quedan pendientes solo la persona identificada sin nombre y la vigencia temporal.
+Las dos últimas resultaron ser la misma. Un cargo es una plaza que ocupa gente
+distinta en momentos distintos: saber **cuándo** es justo lo que permite ponerle
+nombre a «el Gobernador de Antioquia» y lo que impide ponerle el equivocado.
+
+**La descripción sin nombre** se marca con `D`. No cambia de tipo —sigue siendo
+un cargo— porque convertirla en persona le enseñaría al modelo que
+`Gobernador de Antioquia` es un nombre propio, que es exactamente lo que no es.
+Lo que añade es que el grafo sepa que ahí falta una identidad en vez de contar
+la descripción como si fuera la entidad. Cuando la marca parece una descripción,
+el interruptor aparece solo.
+
+**La vigencia** es `vigente`, `pasada` o `futura`, respecto a la fecha del
+artículo. Por defecto vigente, que es lo que el texto afirma cuando habla en
+presente; cuando dice «el entonces ministro» o «asumirá», se propone sola. Tres
+estados y no más: añadir «alegada» mezclaría el eje del tiempo con el de la
+certeza, que es otra pregunta —quien está siendo investigado lo está de verdad,
+aunque el delito esté por probar.
+
+Juntas se pagan en el paso 8. «El Gobernador de Antioquia» sin nombre no vale
+nada por sí solo; al lado de «Luis Alfredo Ramos ocupa el cargo Gobernador de
+Antioquia, afirmado en 2010» ya es una identidad candidata. Y sin la vigencia se
+propondría además el gobernador de 2003, que es otra persona. El grafo no funde
+nada por su cuenta: propone, ordena por cercanía en el tiempo y enseña los años
+de distancia, porque quien conoce el archivo sabe si ese cargo dura cuatro años
+o veinte.
 
 ## Fallos de la herramienta encontrados anotando
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pareceDescripcion, vigenciaSugerida } from "./revision";
 import {
   aplicarLexico, arbolDeParrafo, cabeAnidada, gruposDeAlias, ocurrencias, plegar,
   propagarEnDocumento, soltarAlias, textoDeArbol, unirAlias,
@@ -384,5 +385,51 @@ describe("avisos al marcar", () => {
   it("no avisa de las cifras, que van en minúscula por naturaleza", () => {
     expect(revisar("cuarenta y ocho (48) a ciento ocho (108) meses", "monto")
       .filter((a) => !a.texto.includes("palabras"))).toHaveLength(0);
+  });
+});
+
+describe("vigencia sugerida por el texto", () => {
+  it("reconoce el pasado en las formas que de verdad usa la prensa política", () => {
+    for (const t of [
+      "el entonces ministro de Ambiente",
+      "el exgobernador de Antioquia",
+      "Costa fue director de la CAR",
+      "el ministro saliente",
+    ]) {
+      expect(vigenciaSugerida(t)).toBe("pasada");
+    }
+  });
+
+  it("reconoce lo anunciado pero no cumplido", () => {
+    expect(vigenciaSugerida("asumirá el cargo en enero")).toBe("futura");
+    expect(vigenciaSugerida("el presidente electo")).toBe("futura");
+  });
+
+  it("calla cuando no hay señal, que es lo normal", () => {
+    // El presente no deja marca léxica. Por eso «vigente» es el valor por
+    // defecto y no algo que haya que adivinar.
+    expect(vigenciaSugerida("Carlos Costa, ministro de Ambiente")).toBeNull();
+  });
+
+  it("no confunde una palabra que empieza por «ex»", () => {
+    expect(vigenciaSugerida("el experto en presupuesto")).toBeNull();
+    expect(vigenciaSugerida("la exportación de café")).toBeNull();
+  });
+});
+
+describe("descripciones que señalan sin nombrar", () => {
+  it("reconoce el cargo que describe a alguien concreto", () => {
+    expect(pareceDescripcion("Gobernador de Antioquia", "cargo")).toBe(true);
+    expect(pareceDescripcion("ministro de Ambiente", "cargo")).toBe(true);
+  });
+
+  it("no marca una organización que ya lleva su nombre", () => {
+    expect(pareceDescripcion("Ministerio de Hacienda", "organizacion")).toBe(false);
+    expect(pareceDescripcion("Comisión Tercera", "organizacion")).toBe(false);
+  });
+
+  it("no se mete con los tipos donde la pregunta no aplica", () => {
+    expect(pareceDescripcion("Gustavo Petro", "persona")).toBe(false);
+    expect(pareceDescripcion("50 mil millones", "monto")).toBe(false);
   });
 });

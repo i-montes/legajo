@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Boton, Glifo, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
-import { grafoDuplicados, grafoEntidades, grafoRelaciones, grafoResumen } from "../lib/ipc";
-import type { AristaGrafo, Caso, NodoGrafo, ResumenGrafo } from "../types";
+import { grafoDuplicados, grafoEntidades, grafoRelaciones, grafoResumen, grafoSinNombrar } from "../lib/ipc";
+import type { AristaGrafo, Caso, NodoGrafo, ResumenGrafo, SinNombrar } from "../types";
 import type { EstadoApp } from "../App";
 
 const num = (n: number) => n.toLocaleString("es-CO");
@@ -15,6 +15,7 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   const [rels, setRels] = useState<AristaGrafo[]>([]);
   const [filtro, setFiltro] = useState<string | null>(null);
   const [dobles, setDobles] = useState<Caso[]>([]);
+  const [anonimas, setAnonimas] = useState<SinNombrar[]>([]);
 
   useEffect(() => {
     if (loteId == null) return;
@@ -22,6 +23,7 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
     grafoEntidades(loteId, 300).then(setEnts).catch(() => {});
     grafoRelaciones(loteId, 200).then(setRels).catch(() => {});
     grafoDuplicados(loteId).then(setDobles).catch(() => {});
+    grafoSinNombrar(loteId).then(setAnonimas).catch(() => {});
   }, [loteId]);
 
   if (loteId == null || !res) {
@@ -81,6 +83,56 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
             significa que por ahora esto sirve como índice de nombres más que para seguir
             trayectorias: las que sostienen el grafo son las pocas que se repiten.
           </span>
+        </div>
+      )}
+
+      {anonimas.length > 0 && (
+        <div style={{ padding: "13px 16px", background: "var(--hundida)", borderRadius: 10, marginBottom: "var(--esp-11)" }}>
+          <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>
+            <Glifo estado="neutro" size={11} />
+            <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "62ch" }}>
+              {anonimas.length === 1
+                ? "Una descripción señala a alguien que el texto nunca nombra"
+                : `${num(anonimas.length)} descripciones señalan a alguien que el texto nunca nombra`}
+              . Al lado va quién ocupaba esa plaza según el resto del lote, con los años de
+              distancia: un cargo lo ocupa gente distinta en momentos distintos, y esa
+              distancia es lo que dice si es la misma persona o no.
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9, paddingLeft: 22 }}>
+            {anonimas.slice(0, 8).map((a, i) => (
+              <div key={`${a.wp_id}-${a.texto}-${i}`}>
+                <div style={{ fontSize: 13, color: "var(--t1)", display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 2, background: colorTipo(a.tipo), display: "block" }} />
+                  {a.texto}
+                  {a.anio && <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }}>{a.anio}</span>}
+                </div>
+                {a.candidatos.length === 0 ? (
+                  <div className="t-menor" style={{ color: "var(--t3)", marginLeft: 14, fontStyle: "italic" }}>
+                    Nadie ocupa esa plaza en lo revisado todavía.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1, marginLeft: 14, marginTop: 3 }}>
+                    {a.candidatos.slice(0, 3).map((c, k) => (
+                      <div key={k} style={{ fontSize: 12.5, color: "var(--t2)", display: "flex", alignItems: "baseline", gap: 7 }}>
+                        <span style={{ color: "var(--t3)" }}>↳</span>
+                        <span style={{ color: "var(--t1)" }}>{c.nombre}</span>
+                        {c.anio && <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }}>{c.anio}</span>}
+                        {c.distancia != null && (
+                          <span className="t-mono" style={{ fontSize: 11, color: c.distancia <= 2 ? "var(--exito)" : "var(--t3)" }}>
+                            {c.distancia === 0 ? "mismo año" : `${c.distancia} ${c.distancia === 1 ? "año" : "años"}`}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {anonimas.length > 8 && (
+              <span style={{ fontSize: 12, color: "var(--t3)" }}>y {num(anonimas.length - 8)} más</span>
+            )}
+          </div>
         </div>
       )}
 

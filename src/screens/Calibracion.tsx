@@ -3,9 +3,10 @@ import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
 import {
   alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceExtraccion,
-  calibrar, cancelarExtraccion, catalogoModelos, iniciarExtraccion,
+  alProgresoModelo, calibrar, cancelarExtraccion, catalogoModelos, iniciarExtraccion,
+  modelosPendientes, prepararModelos,
 } from "../lib/ipc";
-import type { CatalogoModelos, Modelos, ProgresoExtraccion, ResultadoCalibracion } from "../types";
+import type { CatalogoModelos, Modelos, OpcionModelo, ProgresoExtraccion, ProgresoModelo, ResultadoCalibracion } from "../types";
 import type { EstadoApp } from "../App";
 
 const num = (n: number) => n.toLocaleString("es-CO");
@@ -18,6 +19,11 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
   const [fase, setFase] = useState<Fase>("elegir");
   const [catalogo, setCatalogo] = useState<CatalogoModelos | null>(null);
+  /* Lo que le falta a la combinación elegida. Se consulta antes de dejar
+     extraer: descubrirlo a mitad de la corrida, después de esperar la carga,
+     es lo que le pasó a alguien de verdad y lo que esto existe para evitar. */
+  const [faltan, setFaltan] = useState<string[]>([]);
+  const [bajando, setBajando] = useState<ProgresoModelo | null>(null);
   const [modelos, setModelos] = useState<Modelos>({
     gliner: "urchade/gliner_multi-v2.1",
     spacy: "es_core_news_sm",
@@ -30,7 +36,33 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const [error, setError] = useState<string | null>(null);
   const [aplicada, setAplicada] = useState(false);
 
-  useEffect(() => { catalogoModelos().then(setCatalogo).catch(() => {}); }, []);
+  const mirarCatalogo = useCallback(() => {
+    catalogoModelos().then(setCatalogo).catch(() => {});
+  }, []);
+  useEffect(mirarCatalogo, [mirarCatalogo]);
+
+  // Al cambiar de modelo se vuelve a mirar qué falta, no al pulsar «extraer».
+  useEffect(() => {
+    modelosPendientes(modelos).then(setFaltan).catch(() => setFaltan([]));
+  }, [modelos]);
+
+  useEffect(() => {
+    const off = alProgresoModelo(setBajando);
+    return () => { void off.then((f) => f()); };
+  }, []);
+
+  const bajarModelos = useCallback(async () => {
+    setError(null);
+    try {
+      await prepararModelos(modelos);
+      setFaltan(await modelosPendientes(modelos));
+      mirarCatalogo();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBajando(null);
+    }
+  }, [modelos, mirarCatalogo]);
 
   useEffect(() => {
     if (loteId == null) return;
@@ -140,7 +172,43 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
               </p>
             </div>
           </div>
-          <Boton onClick={extraer}>Extraer sobre los artículos de calibración</Boton>
+          {faltan.length > 0 ? (
+            <div style={{ padding: "14px 16px", background: "var(--hundida)", borderRadius: 10 }}>
+              <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>
+                <Glifo estado="advertencia" size={11} />
+                <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "60ch" }}>
+                  {faltan.length === 1
+                    ? "Falta un modelo de los que elegiste."
+                    : `Faltan ${faltan.length} de los modelos que elegiste.`}{" "}
+                  Se bajan una vez y quedan en la máquina. Es lo único que sale a la red:
+                  trae pesos de repositorios públicos, y ningún texto de tu archivo se envía
+                  a ninguna parte.
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 22, marginBottom: 13 }}>
+                {faltan.map((f) => (
+                  <span key={f} className="t-mono" style={{ fontSize: 11.5, color: "var(--t2)" }}>
+                    {f.replace(":", " · ")}
+                  </span>
+                ))}
+              </div>
+              {bajando ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 11, paddingLeft: 22 }}>
+                  <Latido />
+                  <span className="t-menor" style={{ color: "var(--t2)" }}>
+                    Bajando {bajando.modelo}
+                    {bajando.tamano && bajando.tamano !== "?" ? ` · ${bajando.tamano}` : ""}…
+                  </span>
+                </div>
+              ) : (
+                <div style={{ paddingLeft: 22 }}>
+                  <Boton onClick={bajarModelos}>Bajar lo que falta</Boton>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Boton onClick={extraer}>Extraer sobre los artículos de calibración</Boton>
+          )}
         </>
       )}
 
@@ -295,7 +363,7 @@ function Cifra({ v, pie, destacada }: { v: string; pie: string; destacada?: bool
 
 function Familia({ titulo, opciones, valor, onChange, nota }: {
   titulo: string;
-  opciones: { id: string; nombre: string; nota: string }[];
+  opciones: OpcionModelo[];
   valor: string; onChange: (v: string) => void; nota?: string;
 }) {
   return (
@@ -315,7 +383,17 @@ function Familia({ titulo, opciones, valor, onChange, nota }: {
           >
             <span style={{ width: 12, height: 12, borderRadius: 999, border: `1px solid ${valor === o.id ? "var(--acento)" : "var(--borde-fuerte)"}`, background: valor === o.id ? "var(--acento)" : "transparent", flex: "0 0 auto", marginTop: 3 }} />
             <span style={{ flex: 1 }}>
-              <span style={{ fontSize: 13.5, color: "var(--t1)", display: "block" }}>{o.nombre}</span>
+              <span style={{ fontSize: 13.5, color: "var(--t1)", display: "flex", alignItems: "baseline", gap: 7 }}>
+                {o.nombre}
+                {/* Un modelo que no está en la máquina se puede elegir igual;
+                    lo que no se puede es empezar a extraer sin avisar de que
+                    hay una descarga por delante. */}
+                {o.instalado === false && (
+                  <span className="t-mono" style={{ fontSize: 10, color: "var(--t3)", border: "1px solid var(--borde)", borderRadius: 4, padding: "1px 5px" }}>
+                    hay que bajarlo
+                  </span>
+                )}
+              </span>
               <span className="t-menor" style={{ color: "var(--t3)", lineHeight: 1.55 }}>{o.nota}</span>
             </span>
           </button>

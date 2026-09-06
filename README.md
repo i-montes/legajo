@@ -56,6 +56,7 @@ Y tres niveles de autenticación, empezando por el que no pide nada:
 ```bash
 pnpm install
 python3 -m venv .venv && ./.venv/bin/pip install -r sidecar/requirements.txt
+./.venv/bin/python sidecar/preparar.py --predeterminados
 
 cargo test -p legajo-core                            # núcleo: sin librerías gráficas
 cargo test -p legajo-core -- --ignored --nocapture   # contra sitios reales

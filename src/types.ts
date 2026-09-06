@@ -158,6 +158,12 @@ export interface Mencion {
   auto: boolean;
   /** Menciones con el mismo grupo nombran la misma entidad. */
   grupo?: string | null;
+  /** Es una descripción que señala a un individuo concreto al que el texto
+   *  nunca nombra: «el Gobernador de Antioquia», «la cooperativa». Sigue
+   *  siendo un cargo o una organización —cambiarle el tipo le enseñaría al
+   *  modelo que eso es un nombre propio—; lo que añade es que el grafo sabe
+   *  que ahí falta una identidad. */
+  designa?: boolean;
 }
 
 export interface EntradaLexico {
@@ -172,7 +178,14 @@ export interface RelacionFila {
   a_mid: string;
   b_mid: string;
   predicado: string;
+  /** Cuándo fue cierta respecto a la fecha del artículo. */
+  cuando: Vigencia;
 }
+
+/** La fecha del artículo dice cuándo se **afirmó** algo, no cuándo fue
+ *  **cierto**. Sin esta distinción, «fue ministro» y «es ministro» acaban
+ *  siendo la misma arista del grafo. */
+export type Vigencia = "vigente" | "pasada" | "futura";
 
 // ── Resolución y reporte ─────────────────────────────────────────────────
 
@@ -281,7 +294,19 @@ export interface Modelos {
   relaciones: boolean;
 }
 
-export interface OpcionModelo { id: string; nombre: string; nota: string }
+export interface OpcionModelo {
+  id: string;
+  nombre: string;
+  nota: string;
+  /** Ya está en esta máquina. Si no, hay que bajarlo antes de poder usarlo. */
+  instalado?: boolean;
+}
+
+export interface ProgresoModelo {
+  evento: string;
+  modelo: string;
+  tamano: string;
+}
 export interface CatalogoModelos {
   gliner: OpcionModelo[];
   spacy: OpcionModelo[];
@@ -327,12 +352,32 @@ export interface NodoGrafo {
   revisada: boolean;
 }
 
+export interface Ocupante {
+  nombre: string;
+  anio: number | null;
+  distancia: number | null;
+  cuando: Vigencia;
+}
+
+export interface SinNombrar {
+  texto: string;
+  tipo: string;
+  wp_id: number;
+  titulo: string | null;
+  anio: number | null;
+  candidatos: Ocupante[];
+}
+
 export interface AristaGrafo {
   a: string;
   b: string;
   predicado: string;
   articulos: number;
   revisada: boolean;
+  cuando: Vigencia;
+  /** Años del primer y último artículo que lo afirman. */
+  desde_anio: number | null;
+  hasta_anio: number | null;
 }
 
 export interface ResumenGrafo {

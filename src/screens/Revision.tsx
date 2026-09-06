@@ -12,13 +12,22 @@ import {
 } from "../lib/propagacion";
 import type { Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
-import { revisar } from "../lib/revision";
-import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila } from "../types";
+import { pareceDescripcion, revisar, vigenciaSugerida } from "../lib/revision";
+import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
 
 interface Punto { x: number; y: number }
 interface Pendiente { pi: number; ini: number; fin: number; texto: string }
 
+
+/* Tres estados y no más. Añadir «alegada» o «en disputa» mezclaría el eje
+   temporal con el de la certeza, que es otra pregunta: quien está siendo
+   investigado lo está de verdad, aunque el delito esté por probar. */
+const VIGENCIAS: Record<Vigencia, { glifo: string; ayuda: string }> = {
+  vigente: { glifo: "◷", ayuda: "Vigente a la fecha del artículo. Clic para cambiar." },
+  pasada: { glifo: "◶", ayuda: "El texto la sitúa antes del artículo: «fue», «ex». Clic para cambiar." },
+  futura: { glifo: "◵", ayuda: "Anunciada para después: «asumirá», «será». Clic para cambiar." },
+};
 
 export default function Revision({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
@@ -217,14 +226,51 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const crearRelacion = useCallback((pred: string) => {
     if (relSel.length !== 2) return;
     const [a, b] = relSel;
+    const ma = menciones.find((m) => m.mid === a);
     setRelaciones((rs) =>
       rs.some((r) => r.a_mid === a && r.b_mid === b && r.predicado === pred)
         ? rs
-        : [...rs, { rid: nuevoId(), a_mid: a, b_mid: b, predicado: pred }]
+        /* Por defecto vigente: es lo que el texto afirma cuando habla en
+           presente, que es la mayoría de las veces. Cambiarlo cuesta un clic;
+           el revés obligaría a corregir casi todas. */
+        : [...rs, {
+            rid: nuevoId(), a_mid: a, b_mid: b, predicado: pred,
+            /* Se mira el párrafo donde caen las dos marcas: «el entonces
+               ministro» y «el exgobernador» dicen por sí solos que la relación
+               ya no está vigente, y hacérselo teclear a la persona cuando el
+               texto lo grita sería trabajo regalado. Sigue siendo una
+               sugerencia: un clic la cambia. */
+            cuando: vigenciaSugerida(parrafos[ma?.pi ?? 0] ?? "") ?? "vigente",
+          }]
     );
     setRelSel([]);
     setRelPicker(false);
+  }, [relSel, menciones, parrafos]);
+
+  /* Declarar que una marca señala a alguien concreto al que el texto no
+     nombra: «el Gobernador de Antioquia», «la cooperativa». No le cambia el
+     tipo —sigue siendo un cargo— porque convertirla en persona le enseñaría al
+     modelo que esa cadena es un nombre propio, y no lo es. Lo que añade es que
+     el grafo sepa que ahí hay una identidad ausente en vez de contar la
+     descripción como si fuera la entidad. */
+  const marcarDesigna = useCallback(() => {
+    const objetivo = relSel.length === 1 ? relSel[0] : null;
+    if (!objetivo) return;
+    setMenciones((ms) =>
+      ms.map((m) => (m.mid === objetivo ? { ...m, designa: !m.designa, auto: false } : m))
+    );
   }, [relSel]);
+
+  const cambiarVigencia = useCallback((rid: string) => {
+    const orden: Vigencia[] = ["vigente", "pasada", "futura"];
+    setRelaciones((rs) =>
+      rs.map((r) =>
+        r.rid === rid
+          ? { ...r, cuando: orden[(orden.indexOf(r.cuando) + 1) % orden.length] }
+          : r
+      )
+    );
+  }, []);
 
   /* Declarar que dos menciones nombran la misma entidad.
      No es una relación: «Ómar Yepes» y «Yepes» son la misma persona, mientras
@@ -281,6 +327,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       }
       if (e.key === "r" || e.key === "R") { e.preventDefault(); return abrirRelacion(); }
       if (e.key === "=" || e.key === "+") { e.preventDefault(); return enlazarAlias(); }
+      if (e.key === "d" || e.key === "D") { e.preventDefault(); return marcarDesigna(); }
       if ((e.key === "Backspace" || e.key === "Delete") && relSel.length) {
         e.preventDefault();
         setMenciones((ms) => ms.filter((m) => !relSel.includes(m.mid)));
@@ -294,7 +341,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [pendiente, relPicker, relSel, marcar, crearRelacion, abrirRelacion, enlazarAlias,
-      irArticulo, predicadosDisponibles]);
+      marcarDesigna, irArticulo, predicadosDisponibles]);
 
   function alSoltar() {
     const sel = window.getSelection();
@@ -340,17 +387,23 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
         const items = menciones.filter((m) => m.tipo === t.k);
         if (!items.length) return null;
         const filas = sePropaga(t.k)
-          ? Array.from(new Set(items.map((m) => m.texto))).map((texto) => ({
-              texto,
-              mids: items.filter((m) => m.texto === texto).map((m) => m.mid),
-            }))
-          : items.map((m) => ({ texto: m.texto, mids: [m.mid] }));
+          ? Array.from(new Set(items.map((m) => m.texto))).map((texto) => {
+              const iguales = items.filter((m) => m.texto === texto);
+              return {
+                texto,
+                mids: iguales.map((m) => m.mid),
+                // Basta con que una lo esté: son la misma cadena y el
+                // interruptor las mueve todas a la vez.
+                designa: iguales.some((m) => m.designa),
+              };
+            })
+          : items.map((m) => ({ texto: m.texto, mids: [m.mid], designa: !!m.designa }));
         return { tipo: t, n: items.length, formas: filas.length, filas };
       }).filter(Boolean) as {
         tipo: (typeof TIPOS)[number];
         n: number;
         formas: number;
-        filas: { texto: string; mids: string[] }[];
+        filas: { texto: string; mids: string[]; designa: boolean }[];
       }[],
     [menciones]
   );
@@ -682,12 +735,33 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     {g.filas.map((f, k) => (
                       <div key={f.mids[0] ?? k} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", padding: "3px 6px" }}>
-                        <span style={{ fontSize: 12.5 }}>
-                          {f.texto}
+                        <span style={{ fontSize: 12.5, display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.texto}</span>
                           {f.mids.length > 1 && (
-                            <span className="t-mono" style={{ color: "var(--t3)", fontSize: 10.5, marginLeft: 6 }}>
+                            <span className="t-mono" style={{ color: "var(--t3)", fontSize: 10.5 }}>
                               ×{f.mids.length}
                             </span>
+                          )}
+                          {/* Un cargo o una organización sin nombre propio suele
+                              describir a alguien concreto. Marcarlo no le cambia
+                              el tipo: lo que hace es que el grafo sepa que ahí
+                              falta una identidad, en vez de contar la
+                              descripción como si fuera la entidad. */}
+                          {(f.designa || pareceDescripcion(f.texto, g.tipo.k)) && (
+                            <button
+                              onClick={() => setMenciones((ms) => ms.map((m) =>
+                                f.mids.includes(m.mid) ? { ...m, designa: !f.designa, auto: false } : m))}
+                              title={f.designa
+                                ? "Señala a alguien concreto sin nombrarlo. Clic para quitarlo."
+                                : "¿Señala a alguien concreto al que el texto no nombra? Clic para marcarlo."}
+                              style={{
+                                appearance: "none", borderRadius: 4, cursor: "pointer",
+                                padding: "0 4px", fontSize: 10, lineHeight: "15px", fontFamily: "var(--font-mono)",
+                                background: f.designa ? "var(--acento-suave)" : "transparent",
+                                color: f.designa ? "var(--acento)" : "var(--t3)",
+                                border: `1px solid ${f.designa ? "var(--acento)" : "var(--borde)"}`,
+                              }}
+                            >sin nombre</button>
                           )}
                         </span>
                         <button
@@ -773,7 +847,20 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                           {ma?.texto ?? "(marca borrada)"}{" "}
                           <span style={{ color: "var(--t3)" }}>{r.predicado}</span>{" "}
                           {mb?.texto ?? "(marca borrada)"}
+                          {/* La vigencia solo se dice cuando no es la de por
+                              defecto: marcar todas las líneas con «vigente»
+                              sería ruido en el 90 % de los casos. */}
+                          {r.cuando !== "vigente" && (
+                            <span className="t-mono" style={{ marginLeft: 6, fontSize: 10.5, color: "var(--t3)" }}>
+                              {r.cuando}
+                            </span>
+                          )}
                         </span>
+                        <button
+                          onClick={() => cambiarVigencia(r.rid)}
+                          title={VIGENCIAS[r.cuando].ayuda}
+                          style={{ appearance: "none", background: "transparent", border: 0, cursor: "pointer", fontSize: 12, padding: 0, lineHeight: 1, color: r.cuando === "vigente" ? "var(--t3)" : "var(--t1)" }}
+                        >{VIGENCIAS[r.cuando].glifo}</button>
                         <button
                           onClick={() => setRelaciones((rs) => rs.filter((x) => x.rid !== r.rid))}
                           title="Borrar esta relación"
@@ -784,7 +871,9 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                   })}
                 </div>
                 <div className="t-menor" style={{ color: "var(--t3)", marginTop: 8, lineHeight: 1.55 }}>
-                  Pasa el ratón por una para ver sus dos marcas en el texto.
+                  Pasa el ratón por una para ver sus dos marcas en el texto. El reloj cambia
+                  cuándo fue cierta: la fecha del artículo dice cuándo se afirmó, no cuándo
+                  fue verdad.
                 </div>
               </div>
             )}
@@ -795,6 +884,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                 {[["1—8", "marcar selección y todas sus repeticiones"],
                   ["J / K", "moverse sin cerrar el artículo"],
                   ["=", "las dos marcas son la misma entidad"],
+                  ["D", "la marca señala a alguien sin nombrarlo"],
                   ["R", "relacionar dos marcas"],
                   ["⌫", "borrar marca activa"], ["clic", "dar por buena una punteada"],
                   ["⌘\\", "ocultar este panel"]].map(([k, v]) => (

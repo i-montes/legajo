@@ -54,6 +54,9 @@ impl Default for Modelos {
 }
 
 /// Los modelos entre los que se puede elegir, con lo que cuesta cada uno.
+///
+/// `instalado` lo rellena `catalogo_con_estado`: aquí no se puede saber sin
+/// mirar el disco, y este catálogo también se usa donde no hay entorno.
 pub fn catalogo() -> Value {
     json!({
         "gliner": [
@@ -79,6 +82,150 @@ pub fn catalogo() -> Value {
              "nota": "Relaciones de vocabulario abierto sobre las entidades ya halladas."}
         ]
     })
+}
+
+/// Qué modelos hay ya en la máquina y cuáles habría que bajar.
+///
+/// Se pregunta antes de dejar elegir, no después: ofrecer tres tamaños de spaCy
+/// cuando solo hay uno instalado convierte una elección en una trampa. Se
+/// escogía el grande, se esperaba la carga, y lo que llegaba era un `OSError`
+/// de Python a mitad de la extracción.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct EstadoModelos {
+    /// Modelos de spaCy presentes en el entorno.
+    pub spacy: Vec<String>,
+    /// Modelos de Hugging Face ya en el caché local.
+    pub hf: Vec<String>,
+}
+
+pub async fn estado_modelos(raiz_recursos: Option<&Path>) -> Result<EstadoModelos> {
+    let (python, guion) = localizar(raiz_recursos)?;
+    let preparador = guion.with_file_name("preparar.py");
+    let salida = Command::new(&python)
+        .arg("-u")
+        .arg(&preparador)
+        .arg("--estado")
+        .output()
+        .await
+        .map_err(|e| Error::Other(format!("no se pudo consultar los modelos: {e}")))?;
+
+    let texto = String::from_utf8_lossy(&salida.stdout);
+    let mut est = EstadoModelos::default();
+    for linea in texto.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(linea.trim()) {
+            if let Some(xs) = v.get("spacy").and_then(Value::as_array) {
+                est.spacy = xs.iter().filter_map(Value::as_str).map(String::from).collect();
+            }
+        }
+    }
+    est.hf = hf_en_cache();
+    Ok(est)
+}
+
+/// Modelos de Hugging Face ya descargados.
+///
+/// Se mira el caché en disco en vez de preguntárselo a la librería porque
+/// cargarla para averiguarlo tarda quince segundos, que es justo lo que se
+/// quiere evitar.
+fn hf_en_cache() -> Vec<String> {
+    let base = std::env::var("HF_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/huggingface")
+        })
+        .join("hub");
+    let Ok(dirs) = std::fs::read_dir(&base) else { return vec![] };
+    dirs.filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        // `models--urchade--gliner_multi-v2.1` → `urchade/gliner_multi-v2.1`
+        .filter_map(|n| n.strip_prefix("models--").map(|r| r.replace("--", "/")))
+        .collect()
+}
+
+/// Lo que hay que bajar para poder correr esta combinación.
+pub fn faltan(est: &EstadoModelos, m: &Modelos) -> Vec<String> {
+    let mut f = Vec::new();
+    if !est.spacy.iter().any(|x| x == &m.spacy) {
+        f.push(format!("spacy:{}", m.spacy));
+    }
+    if !est.hf.iter().any(|x| x == &m.gliner) {
+        f.push(format!("gliner:{}", m.gliner));
+    }
+    if m.relaciones {
+        if let Some(g) = &m.glirel {
+            if !est.hf.iter().any(|x| x == g) {
+                f.push(format!("glirel:{g}"));
+            }
+        }
+    }
+    f
+}
+
+/// Baja lo que falte, avisando de cada paso.
+///
+/// Es lo único de todo el programa que sale a la red por su cuenta, y baja
+/// pesos de modelos de repositorios públicos. Ningún texto del archivo se envía
+/// a ninguna parte.
+pub async fn preparar<F>(
+    raiz_recursos: Option<&Path>,
+    pendientes: &[String],
+    mut avisar: F,
+) -> Result<()>
+where
+    F: FnMut(&str, &str, &str),
+{
+    if pendientes.is_empty() {
+        return Ok(());
+    }
+    let (python, guion) = localizar(raiz_recursos)?;
+    let preparador = guion.with_file_name("preparar.py");
+
+    let mut hijo = Command::new(&python)
+        .arg("-u")
+        .arg(&preparador)
+        .args(pendientes)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| Error::Other(format!("no se pudo lanzar la descarga: {e}")))?;
+
+    let salida = hijo.stdout.take().ok_or_else(|| Error::Other("sin stdout".into()))?;
+    let mut lineas = BufReader::new(salida).lines();
+    let mut error: Option<String> = None;
+
+    while let Ok(Some(linea)) = lineas.next_line().await {
+        let Ok(v) = serde_json::from_str::<Value>(linea.trim()) else { continue };
+        let evento = v.get("evento").and_then(Value::as_str).unwrap_or("");
+        let modelo = v.get("modelo").and_then(Value::as_str).unwrap_or("");
+        let tamano = v.get("tamano").and_then(Value::as_str).unwrap_or("");
+        if v.get("ok").and_then(Value::as_bool) == Some(false) {
+            error = Some(v.get("error").and_then(Value::as_str).unwrap_or("falló la descarga").into());
+        }
+        avisar(evento, modelo, tamano);
+    }
+    let _ = hijo.wait().await;
+
+    match error {
+        Some(e) => Err(Error::Other(e)),
+        None => Ok(()),
+    }
+}
+
+/// El catálogo con una marca por modelo diciendo si ya está en la máquina.
+pub fn catalogo_con_estado(est: &EstadoModelos) -> Value {
+    let mut cat = catalogo();
+    for (familia, presentes) in [("spacy", &est.spacy), ("gliner", &est.hf), ("glirel", &est.hf)] {
+        if let Some(xs) = cat.get_mut(familia).and_then(Value::as_array_mut) {
+            for m in xs.iter_mut() {
+                let id = m.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                if let Some(o) = m.as_object_mut() {
+                    o.insert("instalado".into(), json!(presentes.iter().any(|p| *p == id)));
+                }
+            }
+        }
+    }
+    cat
 }
 
 /// Los ocho tipos del sistema y cómo se le piden al modelo.

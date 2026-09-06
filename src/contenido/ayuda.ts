@@ -82,6 +82,16 @@ export const REGLAS: Regla[] = [
       "«Antioquia» dentro de «Gobernador de Antioquia»: las dos son entidades y las dos van. Lo único que no cabe es una marca que empiece dentro de otra y termine fuera.",
   },
   {
+    titulo: "Una descripción que señala a alguien: «sin nombre»",
+    texto:
+      "«El Gobernador de Antioquia», «la cooperativa»: el texto habla de una persona o una organización concreta y nunca la nombra. Se marca como cargo u organización —no como persona: convertirla en persona le enseñaría al modelo que esa cadena es un nombre propio— y se pulsa «sin nombre». El tipo no cambia; lo que cambia es que el grafo sabe que ahí falta una identidad, y puede proponerte quién ocupaba esa plaza por esas fechas.",
+  },
+  {
+    titulo: "Cuándo fue cierta la relación",
+    texto:
+      "La fecha del artículo dice cuándo se afirmó algo, no cuándo fue verdad. «Carlos Costa, ministro de Ambiente» en 2010 y «el exministro Costa» en 2015 son la misma relación con vigencias opuestas, y fundirlas da un grafo que miente. Por defecto queda vigente, que es lo que el texto afirma en presente; el reloj junto a cada relación la pasa a pasada o futura. Cuando el texto dice «el entonces ministro» o «asumirá», se propone sola.",
+  },
+  {
     titulo: "El reloj mide trabajo, no presencia",
     texto:
       "Se detiene solo al cambiar de ventana y tras un minuto sin actividad. Si aun así una medición quedó contaminada, descártala: una cifra falsa desplaza la mediana de toda la muestra, y esa mediana es el resultado de la fase.",

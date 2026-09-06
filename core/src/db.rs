@@ -33,6 +33,9 @@ pub struct Mencion {
     /// despues que parte del trabajo fue asistido.
     #[serde(default)]
     pub auto: bool,
+    /// Señala a un individuo concreto que el texto no nombra. Ver el esquema.
+    #[serde(default)]
+    pub designa: bool,
     /// Menciones con el mismo grupo nombran la misma entidad. Lo declara la
     /// persona; es verdad de referencia contra la que medir el paso 7.
     #[serde(default)]
@@ -56,6 +59,13 @@ pub struct RelacionFila {
     pub a_mid: String,
     pub b_mid: String,
     pub predicado: String,
+    /// `vigente`, `pasada` o `futura`, respecto a la fecha del artículo.
+    #[serde(default = "vigente")]
+    pub cuando: String,
+}
+
+fn vigente() -> String {
+    "vigente".into()
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +85,14 @@ pub struct AristaGrafo {
     pub predicado: String,
     pub articulos: i64,
     pub revisada: bool,
+    /// `vigente`, `pasada` o `futura`. No se funde con las demás vigencias: que
+    /// alguien fuera ministro y que lo sea son hechos distintos, y un grafo que
+    /// los suma en una sola arista afirma algo que nadie dijo.
+    pub cuando: String,
+    /// Años del primer y último artículo que lo afirman. Es lo único datable:
+    /// la fecha del artículo dice cuándo se dijo, no cuándo fue verdad.
+    pub desde_anio: Option<i32>,
+    pub hasta_anio: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +103,31 @@ pub struct ResumenGrafo {
     pub entidades_distintas: i64,
     pub entidades_una_vez: i64,
     pub relaciones: i64,
+}
+
+/// Una descripción que señala a alguien concreto sin nombrarlo, y quién ocupaba
+/// esa plaza por esas fechas según el resto del lote.
+#[derive(Debug, Serialize)]
+pub struct SinNombrar {
+    pub texto: String,
+    pub tipo: String,
+    pub wp_id: i64,
+    pub titulo: Option<String>,
+    pub anio: Option<i32>,
+    pub candidatos: Vec<Ocupante>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Ocupante {
+    pub nombre: String,
+    /// Año del artículo donde se afirmó, no año en que fue cierto: es lo único
+    /// que se sabe de verdad.
+    pub anio: Option<i32>,
+    /// Años de distancia respecto al artículo sin nombrar. Se muestra en vez de
+    /// filtrarse: un cargo dura lo que dura según el cargo, y ninguna ventana
+    /// fija sería defendible para todos.
+    pub distancia: Option<i32>,
+    pub cuando: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -440,6 +483,14 @@ impl Db {
                 fin        INTEGER NOT NULL,
                 texto      TEXT NOT NULL,
                 tipo       TEXT NOT NULL,
+                -- La marca es una descripción que señala a un individuo
+                -- concreto al que el texto nunca nombra: «el Gobernador de
+                -- Antioquia», «la cooperativa». Se queda en su tipo —sigue
+                -- siendo un cargo— para no enseñarle al modelo que eso es un
+                -- nombre propio; lo que cambia es que el grafo sabe que ahí
+                -- falta una identidad, en vez de contar la descripción como si
+                -- fuera la entidad.
+                designa    INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (lote_id, wp_id, mid)
             );
             CREATE INDEX IF NOT EXISTS anotaciones_art ON anotaciones(lote_id, wp_id);
@@ -451,6 +502,12 @@ impl Db {
                 a_mid      TEXT NOT NULL,
                 b_mid      TEXT NOT NULL,
                 predicado  TEXT NOT NULL,
+                -- Cuándo fue cierta, respecto a la fecha del artículo. La fecha
+                -- dice cuándo se **afirmó**, no cuándo fue **verdad**: «Carlos
+                -- Costa, ministro de Ambiente» en un artículo de 2010 y «el ex
+                -- ministro Costa» en uno de 2015 son la misma relación con
+                -- vigencias opuestas, y fundirlas da un grafo que miente.
+                cuando     TEXT NOT NULL DEFAULT 'vigente',
                 PRIMARY KEY (lote_id, wp_id, rid)
             );
 
@@ -555,6 +612,11 @@ impl Db {
         // Yepes», «Yepes» y «el politico caldense» comparten grupo. Es verdad de
         // referencia para el paso 7, no una conjetura de la maquina.
         Self::asegurar_columna(&conn, "anotaciones", "grupo", "TEXT")?;
+        Self::asegurar_columna(&conn, "anotaciones", "designa", "INTEGER NOT NULL DEFAULT 0")?;
+        // Lo anterior a esta columna se anotó sin poder decir otra cosa, y
+        // «vigente» es lo que se estaba asumiendo: es el valor honesto para el
+        // pasado, no una conjetura nueva.
+        Self::asegurar_columna(&conn, "relaciones", "cuando", "TEXT NOT NULL DEFAULT 'vigente'")?;
         // Un articulo terminado y una medicion creible son cosas distintas.
         // Borrar la medicion contaminada de un articulo lo devolvia a la cola
         // como si no se hubiera anotado, y la reanudacion mandaba al principio.
@@ -1021,18 +1083,19 @@ impl Db {
                    rusqlite::params![lote_id, wp_id])?;
         {
             let mut st = tx.prepare(
-                "INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo, auto, grupo)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
+                "INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo, auto, grupo, designa)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)")?;
             for m in menciones {
                 st.execute(rusqlite::params![
                     lote_id, wp_id, m.mid, m.pi, m.ini, m.fin, m.texto, m.tipo,
-                    m.auto as i64, m.grupo])?;
+                    m.auto as i64, m.grupo, m.designa as i64])?;
             }
             let mut st = tx.prepare(
-                "INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado)
-                 VALUES (?1,?2,?3,?4,?5,?6)")?;
+                "INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado, cuando)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
             for r in relaciones {
-                st.execute(rusqlite::params![lote_id, wp_id, r.rid, r.a_mid, r.b_mid, r.predicado])?;
+                st.execute(rusqlite::params![
+                    lote_id, wp_id, r.rid, r.a_mid, r.b_mid, r.predicado, r.cuando])?;
             }
         }
         tx.commit()?;
@@ -1042,22 +1105,24 @@ impl Db {
     pub fn anotacion(&self, lote_id: i64, wp_id: i64) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT mid, pi, ini, fin, texto, tipo, auto, grupo FROM anotaciones
+            "SELECT mid, pi, ini, fin, texto, tipo, auto, grupo, designa FROM anotaciones
              WHERE lote_id = ?1 AND wp_id = ?2 ORDER BY pi, ini")?;
         let ms: Vec<Mencion> = st
             .query_map(rusqlite::params![lote_id, wp_id], |r| Ok(Mencion {
                 mid: r.get(0)?, pi: r.get(1)?, ini: r.get(2)?, fin: r.get(3)?,
                 texto: r.get(4)?, tipo: r.get(5)?, auto: r.get::<_, i64>(6)? != 0,
-                grupo: r.get(7)?,
+                grupo: r.get(7)?, designa: r.get::<_, i64>(8)? != 0,
             }))?
             .filter_map(|r| r.ok())
             .collect();
         drop(st);
         let mut st = conn.prepare(
-            "SELECT rid, a_mid, b_mid, predicado FROM relaciones WHERE lote_id = ?1 AND wp_id = ?2")?;
+            "SELECT rid, a_mid, b_mid, predicado, cuando FROM relaciones
+             WHERE lote_id = ?1 AND wp_id = ?2")?;
         let rs: Vec<RelacionFila> = st
             .query_map(rusqlite::params![lote_id, wp_id], |r| Ok(RelacionFila {
                 rid: r.get(0)?, a_mid: r.get(1)?, b_mid: r.get(2)?, predicado: r.get(3)?,
+                cuando: r.get(4)?,
             }))?
             .filter_map(|r| r.ok())
             .collect();
@@ -1122,6 +1187,9 @@ impl Db {
                 // permite decir después cuánto puso cada uno.
                 auto: true,
                 grupo: None,
+                // El extractor no distingue una descripción definida de un
+                // nombre; eso lo pone la persona al revisar.
+                designa: false,
             });
         }
 
@@ -1147,7 +1215,12 @@ impl Db {
                 if am == bm { continue; }
                 let rid = format!("r{pi}-{am}-{bm}");
                 if relaciones.iter().any(|r: &RelacionFila| r.rid == rid) { continue; }
-                relaciones.push(RelacionFila { rid, a_mid: am, b_mid: bm, predicado });
+                // GLiREL no predice tiempo verbal. «Vigente» es lo que el
+                // texto afirma por defecto, y corregirlo es un clic; asumir lo
+                // contrario obligaría a corregir la mayoría.
+                relaciones.push(RelacionFila {
+                    rid, a_mid: am, b_mid: bm, predicado, cuando: "vigente".into(),
+                });
             }
         }
         Ok((menciones, relaciones))
@@ -1323,24 +1396,38 @@ impl Db {
     pub fn grafo_relaciones(&self, lote_id: i64, limite: i64) -> Result<Vec<AristaGrafo>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT a, b, predicado, COUNT(DISTINCT wp_id), MAX(revisada) FROM (
+            "SELECT a, b, predicado, COUNT(DISTINCT wp_id), MAX(revisada), cuando,
+                    MIN(anio), MAX(anio) FROM (
                  SELECT ma.texto AS a, mb.texto AS b, r.predicado AS predicado,
-                        r.wp_id AS wp_id, 1 AS revisada
+                        r.wp_id AS wp_id, 1 AS revisada, r.cuando AS cuando,
+                        CAST(SUBSTR(ce.date, 1, 4) AS INTEGER) AS anio
                  FROM relaciones r
                  JOIN anotaciones ma ON ma.lote_id = r.lote_id AND ma.wp_id = r.wp_id AND ma.mid = r.a_mid
                  JOIN anotaciones mb ON mb.lote_id = r.lote_id AND mb.wp_id = r.wp_id AND mb.mid = r.b_mid
+                 JOIN lotes d ON d.id = r.lote_id
+                 LEFT JOIN census ce ON ce.connection_id = d.connection_id AND ce.wp_id = r.wp_id
+                                    AND ce.date_valid = 1
                  WHERE r.lote_id = ?1
                  UNION ALL
-                 SELECT x.a, x.b, x.predicado, x.wp_id, 0
-                 FROM relaciones_extraidas x WHERE x.lote_id = ?1
+                 -- Lo que solo propuso el modelo entra como vigente: GLiREL no
+                 -- predice tiempo verbal, y decir «vigente» es repetir lo que el
+                 -- texto afirma en presente, no inventar una fecha.
+                 SELECT x.a, x.b, x.predicado, x.wp_id, 0, 'vigente',
+                        CAST(SUBSTR(ce.date, 1, 4) AS INTEGER)
+                 FROM relaciones_extraidas x
+                 JOIN lotes d ON d.id = x.lote_id
+                 LEFT JOIN census ce ON ce.connection_id = d.connection_id AND ce.wp_id = x.wp_id
+                                    AND ce.date_valid = 1
+                 WHERE x.lote_id = ?1
                    AND NOT EXISTS (SELECT 1 FROM relaciones r2
                                    WHERE r2.lote_id = x.lote_id AND r2.wp_id = x.wp_id)
              ) WHERE a <> '' AND b <> ''
-             GROUP BY a, b, predicado ORDER BY 4 DESC LIMIT ?2")?;
+             GROUP BY a, b, predicado, cuando ORDER BY 4 DESC LIMIT ?2")?;
         let v = st
             .query_map(rusqlite::params![lote_id, limite], |r| Ok(AristaGrafo {
                 a: r.get(0)?, b: r.get(1)?, predicado: r.get(2)?,
                 articulos: r.get(3)?, revisada: r.get::<_, i64>(4)? != 0,
+                cuando: r.get(5)?, desde_anio: r.get(6)?, hasta_anio: r.get(7)?,
             }))?
             .filter_map(|r| r.ok())
             .collect();
@@ -1348,6 +1435,86 @@ impl Db {
     }
 
     /// Cifras de conjunto del lote.
+    /// Las descripciones sin nombre del lote, con los ocupantes conocidos de
+    /// esa misma plaza.
+    ///
+    /// Es donde los dos huecos se pagan a la vez. «El Gobernador de Antioquia»
+    /// sin nombre no vale nada por sí solo; junto a «Luis Alfredo Ramos ocupa el
+    /// cargo Gobernador de Antioquia, afirmado en 2010» ya es una identidad
+    /// candidata. Y sin la vigencia se propondría además al gobernador de 2003,
+    /// que es otra persona: saber cuándo es lo que impide equivocarse, no un
+    /// adorno.
+    ///
+    /// No funde nada. Propone, ordena por cercanía en el tiempo y enseña la
+    /// distancia, porque quien lea el archivo sabe si ese cargo dura cuatro
+    /// años o veinte.
+    pub fn grafo_sin_nombrar(&self, lote_id: i64, limite: i64) -> Result<Vec<SinNombrar>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Ocupantes conocidos: alguien nombrado que ocupa o aspira a una plaza,
+        // con el año del artículo que lo afirma.
+        let mut st = conn.prepare(
+            "SELECT LOWER(c.texto), p.texto, r.cuando,
+                    CAST(SUBSTR(ce.date, 1, 4) AS INTEGER)
+             FROM relaciones r
+             JOIN anotaciones p ON p.lote_id = r.lote_id AND p.wp_id = r.wp_id AND p.mid = r.a_mid
+             JOIN anotaciones c ON c.lote_id = r.lote_id AND c.wp_id = r.wp_id AND c.mid = r.b_mid
+             JOIN lotes d ON d.id = r.lote_id
+             LEFT JOIN census ce ON ce.connection_id = d.connection_id AND ce.wp_id = r.wp_id
+                                AND ce.date_valid = 1
+             WHERE r.lote_id = ?1 AND r.predicado = 'ocupa el cargo'
+               AND p.tipo = 'persona' AND p.designa = 0")?;
+        let ocupantes: Vec<(String, String, String, Option<i32>)> = st
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+
+        // Las descripciones sin nombre, una fila por texto y artículo.
+        let mut st = conn.prepare(
+            "SELECT a.texto, a.tipo, a.wp_id, ce.title,
+                    CAST(SUBSTR(ce.date, 1, 4) AS INTEGER)
+             FROM anotaciones a
+             JOIN lotes d ON d.id = a.lote_id
+             LEFT JOIN census ce ON ce.connection_id = d.connection_id AND ce.wp_id = a.wp_id
+                                AND ce.date_valid = 1
+             WHERE a.lote_id = ?1 AND a.designa = 1
+             GROUP BY a.texto, a.wp_id
+             ORDER BY a.wp_id, a.texto
+             LIMIT ?2")?;
+        let filas: Vec<(String, String, i64, Option<String>, Option<i32>)> = st
+            .query_map(rusqlite::params![lote_id, limite], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+
+        let mut out = Vec::new();
+        for (texto, tipo, wp_id, titulo, anio) in filas {
+            let clave = texto.to_lowercase();
+            let mut candidatos: Vec<Ocupante> = ocupantes
+                .iter()
+                .filter(|(cargo, _, _, _)| *cargo == clave)
+                .map(|(_, nombre, cuando, a)| Ocupante {
+                    nombre: nombre.clone(),
+                    anio: *a,
+                    distancia: match (anio, a) {
+                        (Some(x), Some(y)) => Some((x - y).abs()),
+                        _ => None,
+                    },
+                    cuando: cuando.clone(),
+                })
+                .collect();
+            // Lo más cercano en el tiempo primero; lo que no tiene fecha, al
+            // final: sin fecha no se puede juzgar y no debe encabezar la lista.
+            candidatos.sort_by_key(|c| (c.distancia.is_none(), c.distancia.unwrap_or(i32::MAX), c.nombre.clone()));
+            candidatos.dedup_by(|a, b| a.nombre == b.nombre && a.anio == b.anio);
+            out.push(SinNombrar { texto, tipo, wp_id, titulo, anio, candidatos });
+        }
+        Ok(out)
+    }
+
     pub fn grafo_resumen(&self, lote_id: i64) -> Result<ResumenGrafo> {
         let conn = self.conn.lock().unwrap();
         let uno = |sql: &str| -> i64 { conn.query_row(sql, [lote_id], |r| r.get(0)).unwrap_or(0) };
@@ -1654,6 +1821,114 @@ mod tests {
         assert!(db.list_connections().unwrap().is_empty());
 
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Base con dos artículos sobre la misma plaza: uno nombra a quien la
+    /// ocupa, el otro solo la describe.
+    fn base_de_cargos(nombre: &str) -> (Db, std::path::PathBuf) {
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-{nombre}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO census (connection_id, wp_id, date, date_valid, title) VALUES
+                   (1, 10, '2010-03-15', 1, 'El gabinete'),
+                   (1, 11, '2003-06-01', 1, 'Otro tiempo'),
+                   (1, 12, '2011-08-20', 1, 'Los hijos');",
+            ).unwrap();
+        }
+        (db, path)
+    }
+
+    #[test]
+    fn una_descripcion_sin_nombre_recibe_a_quien_ocupaba_la_plaza() {
+        /* «El Gobernador de Antioquia» sin nombre no vale nada por sí solo. El
+           valor aparece al cruzarlo con quien ocupaba esa plaza por esas
+           fechas, y la fecha es justo lo que impide proponer al gobernador de
+           ocho años antes, que es otra persona. */
+        let (db, path) = base_de_cargos("sinnombre");
+
+        // 2010: alguien nombrado ocupa la plaza.
+        db.guardar_anotacion(1, 10,
+            &[m("m1", 0, 0, 17, "Luis Alfredo Ramos", "persona"),
+              m("m2", 0, 20, 44, "Gobernador de Antioquia", "cargo")],
+            &[rel("r1", "m1", "m2", "ocupa el cargo", "vigente")]).unwrap();
+
+        // 2003: otro, en el mismo cargo. Es el que no debe encabezar la lista.
+        db.guardar_anotacion(1, 11,
+            &[m("m1", 0, 0, 12, "Aníbal Gaviria", "persona"),
+              m("m2", 0, 20, 44, "Gobernador de Antioquia", "cargo")],
+            &[rel("r1", "m1", "m2", "ocupa el cargo", "vigente")]).unwrap();
+
+        // 2011: la plaza aparece descrita, sin nombre.
+        let mut sin = m("m1", 0, 0, 23, "Gobernador de Antioquia", "cargo");
+        sin.designa = true;
+        db.guardar_anotacion(1, 12, &[sin], &[]).unwrap();
+
+        let casos = db.grafo_sin_nombrar(1, 50).unwrap();
+        assert_eq!(casos.len(), 1, "solo la marcada como descripción: {casos:?}");
+        let c = &casos[0];
+        assert_eq!(c.texto, "Gobernador de Antioquia");
+        assert_eq!(c.anio, Some(2011));
+        assert_eq!(c.titulo.as_deref(), Some("Los hijos"));
+
+        assert_eq!(c.candidatos.len(), 2, "los dos ocupantes conocidos");
+        assert_eq!(c.candidatos[0].nombre, "Luis Alfredo Ramos", "primero el más cercano");
+        assert_eq!(c.candidatos[0].distancia, Some(1));
+        assert_eq!(c.candidatos[1].nombre, "Aníbal Gaviria");
+        assert_eq!(c.candidatos[1].distancia, Some(8), "ocho años: casi seguro otra persona");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn haber_sido_ministro_y_serlo_no_son_la_misma_arista() {
+        /* La fecha del artículo dice cuándo se **afirmó**, no cuándo fue
+           **cierto**. Si el grafo suma las dos vigencias en una sola arista,
+           afirma que Costa es ministro hoy, que es exactamente lo que nadie
+           dijo. */
+        let (db, path) = base_de_cargos("vigencia");
+
+        db.guardar_anotacion(1, 10,
+            &[m("m1", 0, 0, 12, "Carlos Costa", "persona"),
+              m("m2", 0, 20, 40, "ministro de Ambiente", "cargo")],
+            &[rel("r1", "m1", "m2", "ocupa el cargo", "vigente")]).unwrap();
+
+        db.guardar_anotacion(1, 12,
+            &[m("m1", 0, 0, 12, "Carlos Costa", "persona"),
+              m("m2", 0, 20, 40, "ministro de Ambiente", "cargo")],
+            &[rel("r1", "m1", "m2", "ocupa el cargo", "pasada")]).unwrap();
+
+        let aristas = db.grafo_relaciones(1, 50).unwrap();
+        assert_eq!(aristas.len(), 2, "una arista por vigencia: {aristas:?}");
+
+        let vig = aristas.iter().find(|a| a.cuando == "vigente").expect("falta la vigente");
+        assert_eq!(vig.desde_anio, Some(2010));
+        assert_eq!(vig.hasta_anio, Some(2010));
+
+        let pas = aristas.iter().find(|a| a.cuando == "pasada").expect("falta la pasada");
+        assert_eq!(pas.desde_anio, Some(2011), "se afirmó en 2011 que ya había pasado");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn m(mid: &str, pi: i64, ini: i64, fin: i64, texto: &str, tipo: &str) -> Mencion {
+        Mencion {
+            mid: mid.into(), pi, ini, fin, texto: texto.into(), tipo: tipo.into(),
+            auto: false, grupo: None, designa: false,
+        }
+    }
+
+    fn rel(rid: &str, a: &str, b: &str, pred: &str, cuando: &str) -> RelacionFila {
+        RelacionFila {
+            rid: rid.into(), a_mid: a.into(), b_mid: b.into(),
+            predicado: pred.into(), cuando: cuando.into(),
+        }
     }
 
     #[test]

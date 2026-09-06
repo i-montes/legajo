@@ -517,9 +517,62 @@ pub async fn lotes(state: State<'_, AppState>, connection_id: i64) -> Result<Vec
     en_hilo(move || db.lotes(connection_id)).await
 }
 
+/// El catálogo, con cada modelo marcado según esté ya en la máquina o no.
+///
+/// Se consulta el disco antes de dejar elegir. Ofrecer tres tamaños de spaCy
+/// cuando solo hay uno instalado convierte la elección en una trampa: se escoge
+/// el grande, se espera, y lo que llega es un error de Python a mitad de la
+/// extracción. Eso le pasó a alguien de verdad.
 #[tauri::command]
-pub fn catalogo_modelos() -> serde_json::Value {
-    extraccion::catalogo()
+pub async fn catalogo_modelos(app: AppHandle) -> Result<serde_json::Value> {
+    let recursos = app.path().resource_dir().ok();
+    let est = extraccion::estado_modelos(recursos.as_deref())
+        .await
+        .unwrap_or_default();
+    Ok(extraccion::catalogo_con_estado(&est))
+}
+
+#[derive(Clone, Serialize)]
+pub struct ProgresoModelo {
+    pub evento: String,
+    pub modelo: String,
+    pub tamano: String,
+}
+
+/// Baja lo que le falte a esta combinación de modelos.
+///
+/// Devuelve cuántos bajó. Es lo único del programa que sale a la red por su
+/// cuenta, y solo trae pesos de repositorios públicos: ningún texto del archivo
+/// se envía a ninguna parte.
+#[tauri::command]
+pub async fn preparar_modelos(
+    app: AppHandle,
+    modelos: extraccion::Modelos,
+) -> Result<usize> {
+    let recursos = app.path().resource_dir().ok();
+    let est = extraccion::estado_modelos(recursos.as_deref()).await?;
+    let pendientes = extraccion::faltan(&est, &modelos);
+    let n = pendientes.len();
+
+    let app2 = app.clone();
+    extraccion::preparar(recursos.as_deref(), &pendientes, move |evento, modelo, tamano| {
+        let _ = app2.emit("modelos:progreso", ProgresoModelo {
+            evento: evento.into(), modelo: modelo.into(), tamano: tamano.into(),
+        });
+    })
+    .await?;
+    Ok(n)
+}
+
+/// Qué le falta a esta combinación, sin bajar nada.
+#[tauri::command]
+pub async fn modelos_pendientes(
+    app: AppHandle,
+    modelos: extraccion::Modelos,
+) -> Result<Vec<String>> {
+    let recursos = app.path().resource_dir().ok();
+    let est = extraccion::estado_modelos(recursos.as_deref()).await?;
+    Ok(extraccion::faltan(&est, &modelos))
 }
 
 // ── Extracción ───────────────────────────────────────────────────────────
@@ -701,6 +754,17 @@ pub async fn grafo_entidades(
 ) -> Result<Vec<NodoGrafo>> {
     let db = state.db.clone();
     en_hilo(move || db.grafo_entidades(lote_id, limite)).await
+}
+
+/// Descripciones que señalan a alguien sin nombrarlo, con quién ocupaba esa
+/// plaza por esas fechas.
+#[tauri::command]
+pub async fn grafo_sin_nombrar(
+    state: State<'_, AppState>,
+    lote_id: i64,
+) -> Result<Vec<legajo_core::db::SinNombrar>> {
+    let db = state.db.clone();
+    en_hilo(move || db.grafo_sin_nombrar(lote_id, 100)).await
 }
 
 /// Nombres distintos que probablemente son la misma entidad.

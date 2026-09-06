@@ -4,8 +4,8 @@ import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Caso, CatalogoModelos,
   ConnectionRow, Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
   Hallazgo, LoteRow, Mencion, Modelos, NodoGrafo, PerfilArchivo, ProgresoCenso,
-  ProgresoExtraccion, RelacionFila, ResultadoCalibracion, ResumenGrafo,
-  SesionRecuperada,
+  ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
+  SesionRecuperada, SinNombrar,
 } from "../types";
 
 export const discoverSite = (input: string) =>
@@ -127,6 +127,15 @@ export const lotes = (connectionId: number) => invoke<LoteRow[]>("lotes", { conn
 
 export const catalogoModelos = () => invoke<CatalogoModelos>("catalogo_modelos");
 
+export const modelosPendientes = (modelos: Modelos) =>
+  invoke<string[]>("modelos_pendientes", { modelos });
+
+export const prepararModelos = (modelos: Modelos) =>
+  invoke<number>("preparar_modelos", { modelos });
+
+export const alProgresoModelo = (cb: (p: ProgresoModelo) => void): Promise<UnlistenFn> =>
+  listen<ProgresoModelo>("modelos:progreso", (e) => cb(e.payload));
+
 // ── Calibración ──────────────────────────────────────────────────────────
 
 export const calibrar = (loteId: number) =>
@@ -145,6 +154,9 @@ export const grafoResumen = (loteId: number) =>
 
 export const grafoEntidades = (loteId: number, limite = 200) =>
   invoke<NodoGrafo[]>("grafo_entidades", { loteId, limite });
+
+export const grafoSinNombrar = (loteId: number) =>
+  invoke<SinNombrar[]>("grafo_sin_nombrar", { loteId });
 
 export const grafoDuplicados = (loteId: number) =>
   invoke<Caso[]>("grafo_duplicados", { loteId });
