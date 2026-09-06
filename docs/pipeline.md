@@ -90,6 +90,53 @@ dejarlo escrito para que nadie vuelva a intentarlo:
 | Más hilos de torch (8 → 16) | **Peor**: 20,1 s → 24,7 s. Con 4 hilos, 28,2 s. Ocho, que son los núcleos físicos, es el óptimo. |
 | Agrupar párrafos en una sola llamada | **Sin ganancia** (17–21 s) y cambia lo que devuelve de forma imprevisible: 167 relaciones con uno por llamada, 432 con cinco, 54 con diez, donde ya se desborda la ventana del modelo. |
 | Varios procesos a la vez (4 × 2 hilos) | **Peor**: torch ya satura los ocho núcleos con una sola pasada, y cada proceso vuelve a pagar los 20 s de carga. |
+| Cuantizar a int8 (`quantize_dynamic`) | **Rompe los modelos.** 6,3× más rápido y **cero** entidades: las puntuaciones se hunden de 0,98 a 0,02 y las etiquetas salen todas iguales. Cuantizar solo el codificador —el 96 % de los parámetros— tampoco sirve: la atención desenredada de DeBERTa no sobrevive. Hay ONNX oficial de GLiNER en `onnx-community/gliner_multi-v2.1`, pero optimizar el 26 % no arregla el 73 %. |
+| Modelos de esquema fijo en español (`xlm-roberta-large-ner-spanish`, CAPITEL) | **No aplican.** Son NER, no relaciones, y cubren 3 de los 8 tipos. El de XLM-R es de 560M, más grande que lo que ya hay. |
+| mREBEL, entidades y relaciones en una pasada | **Rompería el producto**, no solo el rendimiento. Es generativo: da tripletas, no candidatos con puntuación, y toda la calibración se apoya en pedir con el umbral más bajo y guardar el *score*. Además su vocabulario es Wikidata en inglés: `ocupa el cargo` y `trabaja en` mapean, pero `aliado de`, `opositor de` e `investigado por` no existen ahí. |
+
+### Lo que sí salió, y no era velocidad
+
+Mirando *qué* devolvía GLiREL en vez de cuánto tardaba, resultó que el 63 % era
+demostrablemente imposible o repetido, y las reglas para descartarlo ya estaban
+escritas —se usaban para filtrar el menú de la persona, pero no lo que devolvía
+el modelo:
+
+| | de 397 |
+|---|---:|
+| Tipos que su propio predicado no admite | 39,3 % |
+| Espejos del mismo par | 20,9 % |
+| Un extremo que no es ninguna entidad | 3,0 % |
+| **Queda** | **36,8 %** |
+
+`Álvaro Leyva —trabaja en→ Bogotá` con 0,85: Bogotá está marcado como lugar y
+`trabaja en` está declarado persona → organización. `Santos parte de Partido
+Liberal` con 0,88 y `Partido Liberal parte de Santos` con 0,87: GLiREL no está
+determinando dirección, está midiendo cercanía, y proponía los dos sentidos de
+casi todo.
+
+Ahora el vocabulario viaja con sus restricciones, el extractor pregunta solo los
+predicados que pueden aplicar a los tipos presentes en cada párrafo, y descarta
+lo que vuelve mal unido. Medido sobre los mismos cuatro artículos: **420
+relaciones → 135**, con las 635 entidades idénticas. De paso, un 18 % más
+rápido, porque preguntar ocho predicados en vez de trece también cuesta menos.
+
+Los espejos, además, se atajan al **guardar** y no solo al extraer: el extractor
+no es la única fuente —una persona puede marcar «A aliado de B» y «B aliado de
+A» a mano, y esas marcas no pasan por el filtro del extractor—. Los extremos de
+una relación simétrica se ordenan antes de escribirlos, de modo que la clave
+primaria de la tabla impide el duplicado. Deja de ser una regla que alguien
+tiene que acordarse de aplicar.
+
+Un efecto secundario que la restricción de `parte de` destapó: hay pares de
+tipos para los que el vocabulario no tiene nada, y antes se devolvían los trece
+predicados «para no bloquear a quien anota». Trece opciones de las que ninguna
+aplica no es libertad, es ruido, y dejaba cuatro fuera del alcance de las teclas
+1—9. Ahora la lista vacía se aprovecha: casi siempre la relación existe al
+revés —no hay nada que una un lugar con una persona porque lo que hay es
+«persona *ubicado en* lugar»— y la pantalla lo dice en vez de callarse.
+
+El tiempo de máquina no tenía mucha holgura. El de la persona, que es el
+escaso, sí: **tres veces menos que revisar**.
 
 Conclusión: en CPU, esto cuesta lo que cuesta. La palanca que sí existe es
 **apagar las relaciones para una primera pasada** —de 32 s a 8 s por artículo— y

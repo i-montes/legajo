@@ -169,6 +169,34 @@ pub struct ConnectionRow {
     pub last_used_at: String,
 }
 
+
+/// Pone los dos extremos de una relación simétrica en un orden fijo.
+///
+/// Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo hecho, y
+/// guardarlos como dos filas hace que el grafo lo cuente dos veces y que quien
+/// revisa lea dos veces lo mismo. GLiREL los propone casi siempre en los dos
+/// sentidos con puntuaciones casi iguales, pero el extractor no es la única
+/// fuente: una persona también puede marcar las dos a mano. Por eso se ordena
+/// aquí, al guardar, y no en quien produce: es la única puerta por la que pasan
+/// todas.
+///
+/// Con los extremos ordenados, la clave primaria de la tabla ya impide el
+/// duplicado —deja de ser una regla que alguien tiene que recordar aplicar.
+///
+/// Las asimétricas se dejan como vienen: «A parte de B» y «B parte de A» son
+/// afirmaciones distintas, y una de las dos es falsa. Ahí no hay nada que
+/// fundir, hay algo que corregir.
+pub fn extremos_canonicos<'a>(predicado: &str, a: &'a str, b: &'a str) -> (&'a str, &'a str) {
+    let simetrico = crate::extraccion::PREDICADOS
+        .iter()
+        .any(|p| p.etiqueta == predicado && p.simetrico);
+    if simetrico && a > b {
+        (b, a)
+    } else {
+        (a, b)
+    }
+}
+
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -1091,11 +1119,22 @@ impl Db {
                     m.auto as i64, m.grupo, m.designa as i64])?;
             }
             let mut st = tx.prepare(
-                "INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado, cuando)
+                "INSERT OR IGNORE INTO relaciones
+                   (lote_id, wp_id, rid, a_mid, b_mid, predicado, cuando)
                  VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
+            // El `rid` es distinto en cada una, así que la clave primaria no
+            // ve el duplicado: hay que reconocerlo por lo que la relación dice.
+            let mut vistas = std::collections::HashSet::new();
             for r in relaciones {
+                if r.a_mid == r.b_mid {
+                    continue;
+                }
+                let (a, b) = extremos_canonicos(&r.predicado, &r.a_mid, &r.b_mid);
+                if !vistas.insert((a.to_string(), b.to_string(), r.predicado.clone())) {
+                    continue;
+                }
                 st.execute(rusqlite::params![
-                    lote_id, wp_id, r.rid, r.a_mid, r.b_mid, r.predicado, r.cuando])?;
+                    lote_id, wp_id, r.rid, a, b, r.predicado, r.cuando])?;
             }
         }
         tx.commit()?;
@@ -1607,11 +1646,22 @@ impl Db {
         let mut n = 0i64;
         {
             let mut st = tx.prepare(
-                "INSERT OR REPLACE INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
+                // Si el espejo ya entró, gana el de más confianza: es lo único
+                // que hay para desempatar cuál de los dos sentidos es el bueno.
+                "INSERT INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)
+                 ON CONFLICT(lote_id, wp_id, pi, a, b, predicado) DO UPDATE SET
+                   score = MAX(score, excluded.score)")?;
             for (pi, grupo) in por_parrafo.iter().enumerate() {
                 for r in grupo {
-                    st.execute(rusqlite::params![lote_id, wp_id, pi as i64, r.a, r.b, r.predicado, r.score])?;
+                    // Nada se relaciona consigo mismo. Pasa cuando la misma
+                    // cadena aparece dos veces en el párrafo.
+                    if r.a == r.b {
+                        continue;
+                    }
+                    let (a, b) = extremos_canonicos(&r.predicado, &r.a, &r.b);
+                    st.execute(rusqlite::params![
+                        lote_id, wp_id, pi as i64, a, b, r.predicado, r.score])?;
                     n += 1;
                 }
             }
@@ -1929,6 +1979,69 @@ mod tests {
             rid: rid.into(), a_mid: a.into(), b_mid: b.into(),
             predicado: pred.into(), cuando: cuando.into(),
         }
+    }
+
+    #[test]
+    fn el_espejo_de_una_relacion_simetrica_no_llega_a_guardarse() {
+        /* Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo
+           hecho. Filtrarlo en el extractor no bastaba, porque una persona
+           también puede marcar las dos a mano y esas no pasan por ahí. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-espejos.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');",
+            ).unwrap();
+        }
+
+        // Lo que marca la persona: las dos direcciones y un lazo sobre sí misma.
+        db.guardar_anotacion(1, 100,
+            &[m("mA", 0, 0, 1, "Santos", "persona"),
+              m("mB", 0, 5, 6, "Uribe", "persona"),
+              m("mC", 0, 9, 10, "Petro", "persona")],
+            &[rel("r1", "mA", "mB", "aliado de", "vigente"),
+              rel("r2", "mB", "mA", "aliado de", "vigente"),
+              rel("r3", "mA", "mA", "aliado de", "vigente"),
+              // Asimétrica: los dos sentidos son afirmaciones distintas y las
+              // dos se guardan; una es falsa, pero eso se corrige, no se funde.
+              rel("r4", "mA", "mC", "trabaja en", "vigente"),
+              rel("r5", "mC", "mA", "trabaja en", "vigente")]).unwrap();
+
+        let (_, rs) = db.anotacion(1, 100).unwrap();
+        let aliados: Vec<_> = rs.iter().filter(|r| r.predicado == "aliado de").collect();
+        assert_eq!(aliados.len(), 1, "el espejo y el lazo debían caer: {rs:?}");
+        assert_eq!((aliados[0].a_mid.as_str(), aliados[0].b_mid.as_str()), ("mA", "mB"),
+                   "los extremos quedan en orden fijo");
+        assert_eq!(rs.iter().filter(|r| r.predicado == "trabaja en").count(), 2,
+                   "las asimétricas conservan las dos direcciones");
+
+        // Y lo que propone el modelo: gana la de más confianza.
+        use crate::extraccion::RelacionExtraida;
+        let ex = |a: &str, b: &str, s: f64| RelacionExtraida {
+            a: a.into(), b: b.into(), predicado: "aliado de".into(), score: s,
+        };
+        db.guardar_relaciones_extraidas(1, 100,
+            &[vec![ex("Santos", "Uribe", 0.71), ex("Uribe", "Santos", 0.88),
+                   ex("Santos", "Santos", 0.62)]]).unwrap();
+
+        db.con(|c| {
+            let (a, b, sc): (String, String, f64) = c.query_row(
+                "SELECT a, b, score FROM relaciones_extraidas WHERE lote_id = 1", [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            assert_eq!((a.as_str(), b.as_str()), ("Santos", "Uribe"));
+            assert!((sc - 0.88).abs() < 1e-9, "debía quedar la de más confianza, quedó {sc}");
+            let n: i64 = c.query_row(
+                "SELECT COUNT(*) FROM relaciones_extraidas WHERE lote_id = 1", [], |r| r.get(0))?;
+            assert_eq!(n, 1, "una sola fila para el par");
+            Ok(())
+        }).unwrap();
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

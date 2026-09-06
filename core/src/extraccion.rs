@@ -244,13 +244,78 @@ pub const ETIQUETAS: &[(&str, &str)] = &[
     ("monto", "monto o cifra"),
 ];
 
-/// Los predicados tal como se le piden a GLiREL. También son instrucciones en
-/// lenguaje natural, no clases: cómo se redacten cambia lo que devuelve.
+/// El vocabulario de relaciones, con los tipos entre los que cada una tiene
+/// sentido y si es simétrica.
+///
+/// Estas restricciones ya existían para filtrar el menú de la persona —nunca se
+/// le ofrece afirmar que un monto ocupa un cargo—, pero no se aplicaban a lo que
+/// devolvía el modelo. Medido sobre un lote real, el **39 %** de las relaciones
+/// propuestas unían tipos que su propio predicado no admite: «Álvaro Leyva
+/// *trabaja en* Bogotá», con Bogotá marcado como lugar y `trabaja en` declarado
+/// persona → organización. Se estaban sirviendo a revisar sabiendo de antemano
+/// que eran imposibles.
+///
+/// El campo `simetrico` distingue las que valen en los dos sentidos —ser aliado
+/// es mutuo— de las que no. GLiREL propone las dos direcciones de casi todo con
+/// puntuaciones casi iguales (`Santos parte de Partido Liberal` 0,88 y su
+/// espejo 0,87): no está determinando dirección, está midiendo cercanía. Otro
+/// **21 %** del total eran espejos del mismo hecho.
+pub struct Predicado {
+    pub etiqueta: &'static str,
+    /// Tipos válidos para el origen. Vacío = cualquiera.
+    pub desde: &'static [&'static str],
+    pub hasta: &'static [&'static str],
+    pub simetrico: bool,
+}
+
+const P: &str = "persona";
+const O: &str = "organizacion";
+const C: &str = "cargo";
+const L: &str = "lugar";
+const N: &str = "ley";
+const M: &str = "monto";
+const B: &str = "obra";
+const E: &str = "evento";
+
+/// Tiene que coincidir con `PREDICADOS` en `src/contenido/tipos.ts`, que es lo
+/// que ve la persona al relacionar dos marcas a mano. Hay una prueba que lo
+/// comprueba leyendo el otro fichero.
+pub const PREDICADOS: &[Predicado] = &[
+    Predicado { etiqueta: "ocupa el cargo",  desde: &[P],    hasta: &[C],             simetrico: false },
+    Predicado { etiqueta: "aspira a",        desde: &[P, O], hasta: &[C],             simetrico: false },
+    Predicado { etiqueta: "aliado de",       desde: &[P, O], hasta: &[P, O],          simetrico: true  },
+    Predicado { etiqueta: "opositor de",     desde: &[P, O], hasta: &[P, O],          simetrico: true  },
+    Predicado { etiqueta: "familiar de",     desde: &[P],    hasta: &[P],             simetrico: true  },
+    Predicado { etiqueta: "investigado por", desde: &[P, O], hasta: &[O, N],          simetrico: false },
+    Predicado { etiqueta: "financia a",      desde: &[P, O], hasta: &[P, O],          simetrico: false },
+    Predicado { etiqueta: "trabaja en",      desde: &[P],    hasta: &[O],             simetrico: false },
+    // Pertenencia, no identidad. Va de la parte al todo, y por eso no admite
+    // como destino los tipos que nunca son un todo que contenga a otra cosa.
+    Predicado { etiqueta: "parte de",        desde: &[],     hasta: &[O, L, N, E],    simetrico: false },
+    Predicado { etiqueta: "citado en",       desde: &[P, O], hasta: &[O, B],          simetrico: false },
+    Predicado { etiqueta: "ubicado en",      desde: &[],     hasta: &[L],             simetrico: false },
+    Predicado { etiqueta: "destinado a",     desde: &[M],    hasta: &[O, C, E, L, N], simetrico: false },
+    Predicado { etiqueta: "sanciona con",    desde: &[N],    hasta: &[M],             simetrico: false },
+];
+
 pub fn predicados_modelo() -> Vec<String> {
-    ["ocupa el cargo", "aspira a", "aliado de", "opositor de", "familiar de",
-     "investigado por", "financia a", "trabaja en", "parte de", "citado en",
-     "ubicado en", "destinado a", "sanciona con"]
-        .iter().map(|s| s.to_string()).collect()
+    PREDICADOS.iter().map(|p| p.etiqueta.to_string()).collect()
+}
+
+/// El vocabulario en la forma que el extractor entiende, para que pueda
+/// preguntar solo lo que aplica y descartar lo que no.
+pub fn predicados_con_tipos() -> Value {
+    Value::Array(
+        PREDICADOS
+            .iter()
+            .map(|p| json!({
+                "etiqueta": p.etiqueta,
+                "desde": p.desde,
+                "hasta": p.hasta,
+                "simetrico": p.simetrico,
+            }))
+            .collect(),
+    )
 }
 
 pub fn etiquetas_modelo() -> Vec<String> {
@@ -404,7 +469,21 @@ impl Sidecar {
         let r = self
             .pedir(json!({
                 "op": "procesar", "id": id, "parrafos": parrafos,
-                "etiquetas": etiquetas_modelo(), "predicados": predicados,
+                "etiquetas": etiquetas_modelo(),
+                // Cómo vuelve cada etiqueta del modelo a la clave interna. El
+                // extractor la necesita para comparar tipos contra el
+                // vocabulario; hasta ahora esa conversión solo pasaba aquí.
+                "claves": ETIQUETAS.iter()
+                    .map(|(k, v)| (v.to_string(), k.to_string()))
+                    .collect::<std::collections::HashMap<_, _>>(),
+                // El vocabulario viaja con sus restricciones de tipo, no como
+                // una lista de nombres: es lo que permite no preguntar lo
+                // imposible y descartar lo que llega mal unido.
+                "predicados": if predicados.is_empty() {
+                    Value::Array(vec![])
+                } else {
+                    predicados_con_tipos()
+                },
                 "umbral": piso, "umbral_rel": umbral_rel,
             }))
             .await?;
@@ -431,6 +510,62 @@ impl Sidecar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El vocabulario está escrito dos veces —aquí y en `tipos.ts`, que es lo
+    /// que ve la persona— porque el menú de la interfaz no puede esperar a una
+    /// llamada al backend para pintarse. Escribirlo dos veces es aceptable;
+    /// que se separen sin que nadie se entere, no: el modelo propondría
+    /// relaciones que la persona no puede afirmar a mano, o al revés.
+    #[test]
+    fn el_vocabulario_de_rust_y_el_de_la_interfaz_dicen_lo_mismo() {
+        let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/contenido/tipos.ts");
+        let Ok(ts) = std::fs::read_to_string(&ruta) else {
+            // En un paquete sin el frontend al lado no hay nada que comparar.
+            return;
+        };
+
+        let en_ts: Vec<String> = ts
+            .lines()
+            .filter_map(|l| l.split_once("{ etiqueta: \""))
+            .filter_map(|(_, r)| r.split_once('"'))
+            .map(|(n, _)| n.to_string())
+            .collect();
+        assert!(!en_ts.is_empty(), "no encontré predicados en tipos.ts");
+
+        let en_rust: Vec<String> = predicados_modelo();
+        assert_eq!(
+            en_rust, en_ts,
+            "los dos vocabularios se separaron:\n  rust: {en_rust:?}\n  ts:   {en_ts:?}"
+        );
+    }
+
+    #[test]
+    fn ningun_predicado_admite_un_destino_que_no_puede_contener_nada() {
+        // «parte de» era el único sin restricciones y absorbía el 38 % de todo
+        // lo que devolvía el modelo, incluida la dirección imposible: un
+        // partido no es parte de una persona.
+        for p in PREDICADOS {
+            assert!(
+                !p.hasta.is_empty(),
+                "«{}» acepta cualquier destino: será el cajón de sastre del modelo",
+                p.etiqueta
+            );
+        }
+    }
+
+    #[test]
+    fn lo_simetrico_va_entre_tipos_simetricos() {
+        // Si «aliado de» aceptara origen y destino distintos, el espejo no
+        // sería el mismo hecho y descartarlo perdería información.
+        for p in PREDICADOS.iter().filter(|p| p.simetrico) {
+            assert_eq!(
+                p.desde, p.hasta,
+                "«{}» se declara simétrica pero sus dos extremos no admiten lo mismo",
+                p.etiqueta
+            );
+        }
+    }
 
     #[test]
     fn las_etiquetas_van_y_vuelven() {

@@ -658,6 +658,9 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             const a = menciones.find((m) => m.mid === relSel[0]);
             const b = menciones.find((m) => m.mid === relSel[1]);
             const opciones = predicadosDisponibles();
+            const alReves = opciones.length === 0 && a && b
+              ? predicadosPara(b.tipo, a.tipo)
+              : [];
             return (
               <Flotante
                 x={punto.x}
@@ -673,6 +676,22 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                     {p.etiqueta}
                   </Opcion>
                 ))}
+                {/* Que no haya nada no siempre es un hueco del vocabulario:
+                    casi siempre es que la relación existe al revés. No hay nada
+                    que una un lugar con una persona porque lo que hay es
+                    «persona ubicado en lugar». */}
+                {opciones.length === 0 && a && b && (
+                  <div style={{ padding: "5px 8px 8px" }}>
+                    <div style={{ display: "flex", gap: 7, alignItems: "baseline" }}>
+                      <Glifo estado="neutro" size={10} />
+                      <span className="t-menor" style={{ color: "var(--t2)", lineHeight: 1.55 }}>
+                        {alReves.length > 0
+                          ? `Nada une ${a.tipo} con ${b.tipo}, pero al revés sí: ${alReves.map((p) => `«${p.etiqueta}»`).join(", ")}.`
+                          : `El vocabulario no tiene ninguna relación entre ${a.tipo} y ${b.tipo}, en ningún sentido.`}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {a && b && (
                   <button
                     onClick={invertirRelacion}

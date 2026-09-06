@@ -334,9 +334,21 @@ describe("predicados", () => {
     expect(e).not.toContain("ocupa el cargo");
   });
 
-  it("nunca deja al anotador sin opciones", () => {
-    // El vocabulario está incompleto por definición: bloquear sería peor.
-    expect(predicadosPara("obra", "monto").length).toBeGreaterThan(0);
+  it("no ofrece nada cuando de verdad no hay nada que ofrecer", () => {
+    /* Antes se devolvían los trece predicados cuando ninguno encajaba, para no
+       bloquear a quien anota. Pero trece opciones de las que ninguna aplica no
+       es libertad: es ruido, y además dejaba cuatro fuera del alcance de las
+       teclas 1—9. La lista vacía es la respuesta honesta, y la pantalla la
+       aprovecha para sugerir invertir el orden. */
+    expect(predicadosPara("obra", "monto")).toEqual([]);
+    expect(predicadosPara("lugar", "persona")).toEqual([]);
+  });
+
+  it("cuando el par no encaja, suele encajar al revés", () => {
+    // «lugar → persona» no existe porque lo que existe es «persona ubicado en
+    // lugar». Saberlo permite proponer el intercambio en vez de rendirse.
+    expect(predicadosPara("lugar", "persona")).toEqual([]);
+    expect(predicadosPara("persona", "lugar").map((p) => p.etiqueta)).toContain("ubicado en");
   });
 
   it("la lista filtrada cabe en las teclas 1—9", () => {

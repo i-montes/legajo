@@ -85,6 +85,9 @@ class Motor:
         self.gliner = None
         self.glirel = None
         self.nombres = {}
+        # Etiqueta del modelo → clave interna. La manda el programa, que es
+        # donde vive el vocabulario.
+        self.claves = {}
 
     def cargar(self, cfg):
         import spacy
@@ -140,6 +143,9 @@ class Motor:
                 })
         return deduplicar(salida)
 
+    def clave(self, etiqueta):
+        return self.claves.get(etiqueta, etiqueta)
+
     def relaciones(self, doc, ents, predicados, umbral):
         """Relaciones entre las entidades ya encontradas.
 
@@ -152,6 +158,13 @@ class Motor:
         """
         if not self.glirel or len(ents) < 2 or not predicados:
             return []
+
+        # Solo lo que puede aplicar a los tipos que hay en este párrafo.
+        tipos = {self.clave(e["etiqueta"]) for e in ents}
+        utiles = predicados_del_parrafo(predicados, tipos)
+        if not utiles:
+            return []
+        etiquetas_utiles = [p["etiqueta"] for p in utiles]
 
         tokens = [t.text for t in doc]
         spans = []
@@ -168,11 +181,16 @@ class Motor:
 
         try:
             crudas = self.glirel.predict_relations(
-                tokens, predicados, threshold=umbral, ner=ner, top_k=1
+                tokens, etiquetas_utiles, threshold=umbral, ner=ner, top_k=1
             )
         except Exception as e:  # noqa: BLE001
             log(f"GLiREL falló: {type(e).__name__}: {e}")
             return []
+
+        # El tipo de cada mención, para poder descartar lo que su propio
+        # predicado no admite. Se toma del span alineado y no de la entidad
+        # original porque es lo que GLiREL vio.
+        tipo_de = {s.text: self.clave(s.label_) for s in spans}
 
         out = []
         for r in crudas or []:
@@ -181,13 +199,26 @@ class Motor:
                 continue
             cabeza = r.get("head_text")
             cola = r.get("tail_text")
-            out.append({
-                "a": " ".join(cabeza) if isinstance(cabeza, list) else str(cabeza or ""),
-                "b": " ".join(cola) if isinstance(cola, list) else str(cola or ""),
-                "predicado": r.get("label", ""),
-                "score": round(score, 4),
-            })
-        return out
+            a = " ".join(cabeza) if isinstance(cabeza, list) else str(cabeza or "")
+            b = " ".join(cola) if isinstance(cola, list) else str(cola or "")
+            etiqueta = r.get("label", "")
+
+            # Nada se relaciona consigo mismo. Sale cuando la misma cadena
+            # aparece dos veces en el párrafo y el modelo empareja las dos
+            # apariciones: «Corte Suprema investigado por Corte Suprema».
+            if a == b:
+                continue
+
+            # Lo que une tipos que el predicado no admite es imposible, y
+            # servirlo a revisar es gastar atención humana en descartarlo.
+            ta, tb = tipo_de.get(a), tipo_de.get(b)
+            if ta is None or tb is None:
+                continue
+            if not any(p["etiqueta"] == etiqueta for p in aplicables(utiles, ta, tb)):
+                continue
+
+            out.append({"a": a, "b": b, "predicado": etiqueta, "score": round(score, 4)})
+        return sin_espejos(out, utiles)
 
 
 def modelos_spacy_instalados():
@@ -203,6 +234,60 @@ def modelos_spacy_instalados():
         return sorted(spacy.util.get_installed_models())
     except Exception:
         return []
+
+
+def aplicables(predicados, tipo_a, tipo_b):
+    """Los predicados que pueden unir estos dos tipos.
+
+    `desde` o `hasta` vacíos significan «cualquier tipo».
+    """
+    return [
+        p for p in predicados
+        if (not p.get("desde") or tipo_a in p["desde"])
+        and (not p.get("hasta") or tipo_b in p["hasta"])
+    ]
+
+
+def predicados_del_parrafo(predicados, tipos):
+    """Lo único que tiene sentido preguntar de este párrafo.
+
+    Pedirle a GLiREL los trece predicados cuando en el párrafo solo hay montos y
+    leyes es pagar por respuestas que se van a descartar: medido sobre un lote
+    real, de trece solo ocho aplicaban de media.
+    """
+    utiles = []
+    for p in predicados:
+        desde = set(p.get("desde") or tipos)
+        hasta = set(p.get("hasta") or tipos)
+        if tipos & desde and tipos & hasta:
+            utiles.append(p)
+    return utiles
+
+
+def sin_espejos(relaciones, predicados):
+    """Se queda con una sola dirección de cada par.
+
+    GLiREL propone casi siempre los dos sentidos con puntuaciones casi iguales
+    —«Santos parte de Partido Liberal» 0,88 y su espejo 0,87—, porque no está
+    determinando dirección sino midiendo cercanía. Servir las dos a revisar es
+    hacer que la persona lea dos veces el mismo hecho.
+
+    En las simétricas —aliado, opositor, familiar— da igual cuál se conserve. En
+    las demás gana la de más confianza, que es lo único que hay para elegir.
+    """
+    # Se aplica a todos los predicados, no solo a los simétricos: para los
+    # asimétricos, la restricción de tipos ya habrá matado la dirección
+    # imposible, así que lo que llegue aquí en dos sentidos es genuinamente
+    # ambiguo y la puntuación es lo único que hay para desempatar.
+    mejor = {}
+    for r in relaciones:
+        clave = (r["predicado"], *sorted((r["a"], r["b"])))
+        previa = mejor.get(clave)
+        if previa is None or r["score"] > previa["score"]:
+            mejor[clave] = r
+    # Se devuelve en el orden en que llegaron, que es el de lectura.
+    conservadas = {id(r) for r in mejor.values()}
+    return [r for r in relaciones if id(r) in conservadas]
 
 
 def cargar_glirel(nombre):
@@ -282,6 +367,7 @@ def main():
                     continue
                 t0 = time.time()
                 etiquetas = pet.get("etiquetas") or []
+                motor.claves = pet.get("claves") or {}
                 predicados = pet.get("predicados") or []
                 umbral = float(pet.get("umbral", 0.35))
                 umbral_rel = float(pet.get("umbral_rel", 0.5))
