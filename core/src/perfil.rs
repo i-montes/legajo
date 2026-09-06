@@ -47,6 +47,17 @@ pub struct PerfilArchivo {
     pub taxonomias_usables: Vec<(String, i64)>,
     pub sondeo: Option<Sondeo>,
     pub sin_fecha: i64,
+    /// Tramos mensuales ya recorridos y cuántos hay en total.
+    ///
+    /// Antes se daba el censo por terminado comparándolo con el total que
+    /// anuncia el sitio, y eso no podía cumplirse nunca: el archivo crece
+    /// mientras se lee —La Silla publica unas 25 piezas al día— y además ese
+    /// total incluye las piezas con fecha dañada, que ninguna ventana de fecha
+    /// puede alcanzar. El botón de «seguir leyendo» no desaparecía por muchas
+    /// veces que se pulsara. Terminado es haber recorrido todos los tramos,
+    /// que es un hecho propio y no una carrera contra un blanco móvil.
+    pub tramos_hechos: i64,
+    pub tramos_totales: i64,
 }
 
 /// Un hallazgo de calidad con su decisión pendiente. Alimenta el paso 3.
@@ -139,6 +150,14 @@ pub fn perfil(db: &Db, conn_id: i64, taxonomia: Option<&str>) -> Result<PerfilAr
             secciones, anomalias, taxonomias_usables,
             sondeo: sondeo(c, conn_id),
             sin_fecha,
+            tramos_hechos: escalar(
+                c, "SELECT COUNT(*) FROM census_windows WHERE connection_id = ?1", conn_id),
+            // Un tramo por mes entre el primero y el último artículo, más la
+            // cola inicial donde caen las fechas dañadas.
+            tramos_totales: match (anio_min, anio_max) {
+                (Some(a), Some(b)) if b >= a => ((b - a + 1) * 12 + 1) as i64,
+                _ => 0,
+            },
         })
     })
 }
@@ -318,4 +337,60 @@ pub fn hallazgos(db: &Db, conn_id: i64) -> Result<Vec<Hallazgo>> {
 
         Ok(out)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_censo_se_da_por_terminado_por_tramos_y_no_por_el_total_del_sitio() {
+        /* El botón de «seguir leyendo» no se iba por muchas veces que se
+           pulsara. La causa no era el botón: se comparaba lo censado contra el
+           total que anuncia el sitio, y ese número sube mientras se lee —el
+           medio publica todos los días— y además cuenta las piezas con fecha
+           dañada, que ninguna ventana de fecha alcanza. La condición no podía
+           cumplirse nunca. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-tramos.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = crate::Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json, total_posts)
+                 VALUES (1,'x','https://x','{}','d','{}', 500);
+                 INSERT INTO census (connection_id, wp_id, date, date_valid) VALUES
+                   (1, 1, '2020-01-05T00:00:00', 1),
+                   (1, 2, '2021-06-05T00:00:00', 1),
+                   (1, 3, '-0001-11-30T00:00:00', 0);",
+            )?;
+            // Dos años completos: 24 meses más la cola inicial.
+            for anio in 2020..=2021 {
+                for mes in 1..=12 {
+                    c.execute(
+                        "INSERT INTO census_windows (connection_id, label, rows) VALUES (1, ?1, 1)",
+                        [format!("{anio}-{mes:02}")])?;
+                }
+            }
+            c.execute(
+                "INSERT INTO census_windows (connection_id, label, rows) VALUES (1,'anterior a 2020',0)",
+                [])?;
+            Ok(())
+        }).unwrap();
+
+        let p = perfil(&db, 1, None).unwrap();
+        assert_eq!(p.tramos_totales, 25, "24 meses más la cola inicial");
+        assert_eq!(p.tramos_hechos, 25, "se recorrieron todos");
+        assert!(
+            p.tramos_hechos >= p.tramos_totales,
+            "con todos los tramos hechos el censo está terminado, aunque el sitio \
+             anuncie 500 piezas y solo haya 3 censadas: las demás son posteriores \
+             o inalcanzables por fecha"
+        );
+        // Y el criterio viejo, para dejar constancia de por qué no servía.
+        assert!(p.censado < 500, "contra el total del sitio nunca habría terminado");
+
+        let _ = std::fs::remove_file(path);
+    }
 }

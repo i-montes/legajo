@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Barra, Boton, Glifo, Lienzo, Rotulo } from "../ui";
+import { Barra, Boton, Cargando, Glifo, Lienzo, Rotulo } from "../ui";
 import { hallazgosArchivo } from "../lib/ipc";
 import type { Hallazgo } from "../types";
 import type { EstadoApp } from "../App";
@@ -20,8 +20,17 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
   if (hallazgos === null) {
     return (
       <Lienzo>
-        <Rotulo>Paso 3 · Sanidad del archivo</Rotulo>
-        <p className="t-cuerpo" style={{ color: "var(--t3)", marginTop: 20 }}>Revisando el censo…</p>
+        <Rotulo style={{ marginBottom: 12 }}>Paso 3 · Sanidad del archivo</Rotulo>
+        <Cargando
+          titulo="Revisando lo que se leyó"
+          pasos={[
+            { texto: "Buscar fechas imposibles" },
+            { texto: "Buscar titulares repetidos" },
+            { texto: "Buscar artículos sin sección" },
+          ]}
+          actual={0}
+          nota="Se calcula sobre el censo que ya está en este computador: no vuelve a preguntarle a tu sitio."
+        />
       </Lienzo>
     );
   }

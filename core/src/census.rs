@@ -50,6 +50,14 @@ pub struct ProgresoCenso {
     pub ventana: String,
     pub hechos: u64,
     pub total: u64,
+    /// Demora que el sitio nos ha impuesto, en milisegundos. Sin este dato «va
+    /// lento» es un misterio; con él es un hecho con su causa, y se distingue
+    /// «tu servidor nos está frenando» de «el programa se colgó».
+    #[serde(default)]
+    pub cortesia_ms: u64,
+    /// Peticiones en vuelo que el recorrido encontró que este sitio admite.
+    #[serde(default)]
+    pub carriles: u64,
 }
 
 fn anio_plausible(s: &str) -> bool {

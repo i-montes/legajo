@@ -9,6 +9,10 @@ import {
 import type { CatalogoModelos, Modelos, OpcionModelo, ProgresoExtraccion, ProgresoModelo, ResultadoCalibracion } from "../types";
 import type { EstadoApp } from "../App";
 
+/** Los gigas se leen; los cuatro dígitos de megas, no. */
+const peso = (mb?: number) =>
+  mb == null ? "descargar" : mb >= 1000 ? `${(mb / 1000).toFixed(1).replace(".", ",")} GB` : `${mb} MB`;
+
 const num = (n: number) => n.toLocaleString("es-CO");
 const dec = (n: number, d = 2) => n.toFixed(d).replace(".", ",");
 const etiquetaTipo = (k: string) => TIPOS.find((t) => t.k === k)?.etiqueta ?? k;
@@ -50,6 +54,19 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
     const off = alProgresoModelo(setBajando);
     return () => { void off.then((f) => f()); };
   }, []);
+
+  /* `faltan` llega como «spacy:es_core_news_lg»; el tamaño está en el catálogo,
+     que es donde vive el dato. */
+  const megasDe = useCallback((clave: string) => {
+    const id = clave.slice(clave.indexOf(":") + 1);
+    for (const familia of [catalogo?.gliner, catalogo?.spacy, catalogo?.glirel]) {
+      const o = familia?.find((x) => x.id === id);
+      if (o?.mb) return o.mb;
+    }
+    return 0;
+  }, [catalogo]);
+
+  const totalFalta = faltan.reduce((n, f) => n + megasDe(f), 0);
 
   const bajarModelos = useCallback(async () => {
     setError(null);
@@ -181,17 +198,19 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
                 <Glifo estado="advertencia" size={11} />
                 <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "60ch" }}>
                   {faltan.length === 1
-                    ? "Falta un modelo de los que elegiste."
-                    : `Faltan ${faltan.length} de los modelos que elegiste.`}{" "}
-                  Se bajan una vez y quedan en la máquina. Es lo único que sale a la red:
-                  trae pesos de repositorios públicos, y ningún texto de tu archivo se envía
-                  a ninguna parte.
+                    ? "Falta un modelo de los que elegiste"
+                    : `Faltan ${faltan.length} de los modelos que elegiste`}
+                  {totalFalta > 0 ? `: ${peso(totalFalta)} de descarga` : ""}. Se bajan una vez
+                  y quedan en este computador. Es lo único de la app que sale a la red: trae los
+                  pesos desde el repositorio público de cada modelo, y ningún texto de tu archivo
+                  se envía a ninguna parte.
                 </span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 22, marginBottom: 13 }}>
                 {faltan.map((f) => (
                   <span key={f} className="t-mono" style={{ fontSize: 11.5, color: "var(--t2)" }}>
                     {f.replace(":", " · ")}
+                    {megasDe(f) ? `  ${peso(megasDe(f))}` : ""}
                   </span>
                 ))}
               </div>
@@ -389,12 +408,20 @@ function Familia({ titulo, opciones, valor, onChange, nota }: {
               <span style={{ fontSize: 13.5, color: "var(--t1)", display: "flex", alignItems: "baseline", gap: 7 }}>
                 {o.nombre}
                 {/* Un modelo que no está en la máquina se puede elegir igual;
-                    lo que no se puede es empezar a extraer sin avisar de que
-                    hay una descarga por delante. */}
+                    lo que no se puede es empezar a extraer sin avisar. El
+                    tamaño va en la etiqueta porque es lo que decide: bajar 892
+                    MB y bajar 2,3 GB no son la misma respuesta. */}
                 {o.instalado === false && (
-                  <span className="t-mono" style={{ fontSize: 10, color: "var(--t3)", border: "1px solid var(--borde)", borderRadius: 4, padding: "1px 5px" }}>
-                    hay que bajarlo
+                  <span
+                    className="t-mono"
+                    title="No está en este computador. Se baja una vez, desde el repositorio público del modelo, y queda guardado."
+                    style={{ fontSize: 10, color: "var(--t3)", border: "1px solid var(--borde)", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}
+                  >
+                    ↓ {peso(o.mb)}
                   </span>
+                )}
+                {o.instalado === true && (
+                  <span title="Ya está en este computador" style={{ fontSize: 10, color: "var(--exito)" }}>✓</span>
                 )}
               </span>
               <span className="t-menor" style={{ color: "var(--t3)", lineHeight: 1.55 }}>{o.nota}</span>

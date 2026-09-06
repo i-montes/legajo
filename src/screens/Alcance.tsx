@@ -182,6 +182,7 @@ export default function Alcance({ estado }: { estado: EstadoApp }) {
               <span className="t-menor" style={{ color: "var(--t3)" }}>de {est ? num(est.articulos) : "—"}</span>
             </div>
             <input type="range" min={5} max={40} step={1} value={nCalibrar}
+              aria-label="Cuántos artículos revisar para calibrar"
               onChange={(e) => setNCalibrar(+e.target.value)}
               style={{ width: "100%", accentColor: "var(--acento)" }} />
             <p className="t-menor" style={{ color: "var(--t3)", margin: "10px 0 0", lineHeight: 1.65 }}>

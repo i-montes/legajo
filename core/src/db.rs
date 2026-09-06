@@ -170,6 +170,33 @@ pub struct ConnectionRow {
 }
 
 
+/// Deja el fichero legible solo por quien lo creó.
+///
+/// Aquí dentro está el archivo entero del medio y, desde que se pide, la
+/// contraseña de aplicación con la que se probó la pertenencia al sitio. En un
+/// equipo compartido, el modo por defecto la dejaría al alcance de cualquier
+/// otra cuenta. En Windows no hay equivalente y no se hace nada: los permisos
+/// del directorio de datos del usuario ya cumplen ese papel.
+#[cfg(unix)]
+fn solo_para_su_dueno(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    for sufijo in ["", "-wal", "-shm"] {
+        let p = if sufijo.is_empty() {
+            path.to_path_buf()
+        } else {
+            path.with_extension(format!(
+                "{}{sufijo}",
+                path.extension().and_then(|e| e.to_str()).unwrap_or("")
+            ))
+        };
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(not(unix))]
+fn solo_para_su_dueno(_path: &Path) {}
+
+
 /// Pone los dos extremos de una relación simétrica en un orden fijo.
 ///
 /// Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo hecho, y
@@ -207,6 +234,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let db = Self { conn: Mutex::new(conn) };
         db.migrate()?;
+        solo_para_su_dueno(path);
         Ok(db)
     }
 
@@ -247,6 +275,11 @@ impl Db {
         for tabla in [
             "lote_articulos", "anotaciones", "relaciones", "extraidas",
             "relaciones_extraidas", "tiempos",
+            // `sesion` faltaba en esta lista, y como es la tabla que recuerda
+            // por dónde iba el usuario, el síntoma no fue un error sino algo
+            // peor: cada guardado fallaba en silencio y la app volvía siempre
+            // al paso 1, como si nunca se hubiera usado.
+            "sesion",
         ] {
             let existe: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -627,6 +660,15 @@ impl Db {
 
         // Columnas incorporadas después de la primera versión del esquema.
         Self::asegurar_columna(&conn, "census", "title_key", "TEXT")?;
+        // La credencial con la que se probó la pertenencia al sitio. Se guarda
+        // porque el censo son horas y volver a pedirla en cada arranque sería
+        // insufrible; el fichero queda en 0600 y la contraseña de aplicación se
+        // revoca desde el propio WordPress sin tocar nada más.
+        for col in ["auth_user TEXT", "auth_secret TEXT", "auth_nombre TEXT",
+                    "auth_roles TEXT", "auth_at TEXT"] {
+            let (c, t) = col.split_once(' ').unwrap();
+            Self::asegurar_columna(&conn, "connections", c, t)?;
+        }
         // El tiempo se guarda mientras se anota, no solo al cerrar: si la
         // ventana se cierra a mitad de un articulo, los minutos ya invertidos
         // son parte del coste real y perderlos falsearia la unica cifra que
@@ -673,6 +715,66 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS census_title_key ON census(connection_id, title_key);
              CREATE INDEX IF NOT EXISTS lote_art_cal ON lote_articulos(lote_id, calibra);",
         )?;
+        Ok(())
+    }
+
+    /// Guarda la credencial con la que se probó la pertenencia al sitio.
+    pub fn guardar_credencial(
+        &self, conn_id: i64, usuario: &str, secreto: &str,
+        identidad: &crate::auth::Identidad,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE connections SET auth_method = 'application-password',
+               auth_user = ?2, auth_secret = ?3, auth_nombre = ?4, auth_roles = ?5,
+               auth_at = datetime('now')
+             WHERE id = ?1",
+            rusqlite::params![
+                conn_id, usuario, secreto, identidad.nombre, identidad.roles.join(",")],
+        )?;
+        Ok(())
+    }
+
+    /// Con qué credencial hablar con este sitio.
+    ///
+    /// Devuelve `Auth::None` si no hay ninguna, para que quien llame no tenga
+    /// que decidir: pedir sin credencial sigue funcionando en un archivo
+    /// público, y lo que cambia es lo que se puede ver.
+    pub fn credencial(&self, conn_id: i64) -> Result<crate::http::Auth> {
+        let conn = self.conn.lock().unwrap();
+        let r: (Option<String>, Option<String>) = conn.query_row(
+            "SELECT auth_user, auth_secret FROM connections WHERE id = ?1",
+            [conn_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(match r {
+            (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => {
+                crate::http::Auth::Basic { user: u, password: p }
+            }
+            _ => crate::http::Auth::None,
+        })
+    }
+
+    /// Quién quedó registrado como dueño de esta conexión, si alguien.
+    pub fn duenio(&self, conn_id: i64) -> Result<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let r: (Option<String>, Option<String>) = conn.query_row(
+            "SELECT auth_nombre, auth_user FROM connections WHERE id = ?1",
+            [conn_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(match r {
+            (Some(n), Some(u)) if !u.is_empty() => Some((n, u)),
+            _ => None,
+        })
+    }
+
+    /// Olvida la credencial sin tocar el archivo censado.
+    pub fn olvidar_credencial(&self, conn_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE connections SET auth_method = 'anonymous', auth_user = NULL,
+               auth_secret = NULL, auth_nombre = NULL, auth_roles = NULL, auth_at = NULL
+             WHERE id = ?1",
+            [conn_id])?;
         Ok(())
     }
 
@@ -747,6 +849,25 @@ impl Db {
 
 
     /// Recupera el transporte guardado de una conexión.
+    /// Guarda el sondeo hecho ya con credencial.
+    pub fn actualizar_sondeo(&self, id: i64, d: &crate::Discovery) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE connections SET discovery_json = ?2, total_posts = ?3 WHERE id = ?1",
+            rusqlite::params![id, serde_json::to_string(d)?, d.capabilities.total_posts],
+        )?;
+        Ok(())
+    }
+
+    /// El sondeo guardado al conectar: transporte, capacidades y qué anuncia el
+    /// sitio sobre su autenticación.
+    pub fn discovery(&self, id: i64) -> Result<crate::Discovery> {
+        let conn = self.conn.lock().unwrap();
+        let j: String = conn.query_row(
+            "SELECT discovery_json FROM connections WHERE id = ?1", [id], |r| r.get(0))?;
+        serde_json::from_str(&j).map_err(Into::into)
+    }
+
     pub fn transporte(&self, id: i64) -> Result<crate::Transport> {
         let conn = self.conn.lock().unwrap();
         let json: String = conn.query_row(
@@ -1979,6 +2100,151 @@ mod tests {
             rid: rid.into(), a_mid: a.into(), b_mid: b.into(),
             predicado: pred.into(), cuando: cuando.into(),
         }
+    }
+
+    #[test]
+    fn olvidar_un_sitio_se_lleva_todo_lo_suyo_y_nada_de_los_demas() {
+        /* Borrar una conexión arrastra en cascada su censo, sus lotes y las
+           correcciones hechas sobre ellos: son horas de trabajo, y por eso la
+           pantalla dice qué se va antes de preguntar. Lo que no puede pasar es
+           que se lleve por delante el trabajo de otro sitio. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-olvidar.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES
+                   (1,'uno','https://uno','{}','d','{}'),
+                   (2,'dos','https://dos','{}','d','{}');
+                 INSERT INTO census (connection_id, wp_id, date, date_valid) VALUES
+                   (1, 10, '2020-01-01', 1), (1, 11, '2020-01-02', 1),
+                   (2, 20, '2020-01-01', 1);
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1,1,'l1'), (2,2,'l2');
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1,10), (2,20);
+                 INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo)
+                   VALUES (1,10,'m1',0,0,5,'Petro','persona'),
+                          (2,20,'m1',0,0,5,'Uribe','persona');",
+            )?;
+            Ok(())
+        }).unwrap();
+
+        db.delete_connection(1).unwrap();
+
+        db.con(|c| {
+            let cuenta = |t: &str| -> i64 {
+                c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()
+            };
+            assert_eq!(cuenta("connections"), 1, "queda el otro sitio");
+            assert_eq!(cuenta("census"), 1, "su censo se fue, el del otro no");
+            assert_eq!(cuenta("lotes"), 1);
+            assert_eq!(cuenta("lote_articulos"), 1);
+            assert_eq!(cuenta("anotaciones"), 1, "las correcciones del otro siguen ahí");
+            let queda: i64 = c.query_row("SELECT connection_id FROM census", [], |r| r.get(0))?;
+            assert_eq!(queda, 2);
+            Ok(())
+        }).unwrap();
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn la_credencial_va_y_vuelve_y_se_puede_olvidar_sin_perder_el_censo() {
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-credencial.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO census (connection_id, wp_id, date, date_valid)
+                   VALUES (1, 10, '2020-01-01', 1);",
+            )?;
+            Ok(())
+        }).unwrap();
+
+        // Sin credencial no hay con qué leer, y eso ahora significa que no se lee.
+        assert!(matches!(db.credencial(1).unwrap(), crate::http::Auth::None));
+
+        let ident = crate::auth::Identidad {
+            id: 3, login: "imontes".into(), nombre: "Iván".into(),
+            roles: vec!["editor".into()], edita: true,
+        };
+        db.guardar_credencial(1, "imontes", "abcd efgh", &ident).unwrap();
+
+        match db.credencial(1).unwrap() {
+            crate::http::Auth::Basic { user, password } => {
+                assert_eq!(user, "imontes");
+                assert_eq!(password, "abcd efgh");
+            }
+            _ => panic!("no volvió la credencial guardada"),
+        }
+        assert_eq!(db.duenio(1).unwrap(), Some(("Iván".into(), "imontes".into())));
+
+        // Olvidarla no toca el archivo: son cosas distintas.
+        db.olvidar_credencial(1).unwrap();
+        assert!(matches!(db.credencial(1).unwrap(), crate::http::Auth::None));
+        assert_eq!(db.duenio(1).unwrap(), None);
+        db.con(|c| {
+            let n: i64 = c.query_row("SELECT COUNT(*) FROM census", [], |r| r.get(0))?;
+            assert_eq!(n, 1, "el censo sigue donde estaba");
+            Ok(())
+        }).unwrap();
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn la_sesion_sobrevive_al_renombrado_de_la_columna() {
+        /* La tabla `sesion` se quedó fuera de la lista de renombrado, y como es
+           la que recuerda por dónde iba el usuario, el síntoma no fue un error:
+           cada guardado fallaba en silencio y la app volvía siempre al paso 1,
+           como si nunca se hubiera usado. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-sesionvieja.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Sqlite::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE connections (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL,
+                   resolved_origin TEXT NOT NULL UNIQUE, transport_json TEXT NOT NULL,
+                   transport_label TEXT NOT NULL, site_name TEXT,
+                   auth_method TEXT NOT NULL DEFAULT 'anonymous', discovery_json TEXT NOT NULL,
+                   total_posts INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                   last_used_at TEXT NOT NULL DEFAULT (datetime('now')));
+                 CREATE TABLE sesion (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   connection_id INTEGER REFERENCES connections(id) ON DELETE CASCADE,
+                   paso TEXT NOT NULL DEFAULT 'conexion',
+                   progreso INTEGER NOT NULL DEFAULT 0,
+                   taxonomia TEXT, design_id INTEGER,
+                   guardado_at TEXT NOT NULL DEFAULT (datetime('now')));
+                 INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json)
+                   VALUES (1,'La Silla','https://lasillavacia.com','{}','directo','{}');
+                 INSERT INTO sesion (id, connection_id, paso, progreso, taxonomia, design_id)
+                   VALUES (1, 1, 'revision', 5, 'categories', 7);",
+            ).unwrap();
+        }
+
+        let db = Db::open(&path).unwrap();
+
+        // Lo que ya estaba guardado no se pierde al migrar.
+        let s = db.cargar_sesion().unwrap().expect("se perdió la sesión al migrar");
+        assert_eq!(s.paso, "revision");
+        assert_eq!(s.lote_id, Some(7));
+        assert_eq!(s.progreso, 5);
+
+        // Y guardar vuelve a funcionar, que es lo que estaba roto.
+        db.guardar_sesion(Some(1), "grafo", 7, Some("categories"), Some(7))
+            .expect("no se pudo guardar la sesión tras migrar");
+        let s = db.cargar_sesion().unwrap().unwrap();
+        assert_eq!(s.paso, "grafo");
+        assert_eq!(s.progreso, 7);
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

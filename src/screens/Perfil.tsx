@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
+import { Barra, Boton, Cargando, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import {
   alFinCenso, alProgresoCenso, cancelarCenso, censoCorriendo,
-  iniciarCenso, perfilArchivo,
+  iniciarCenso, perfilArchivo, sondearArchivo,
 } from "../lib/ipc";
 import type { PerfilArchivo, ProgresoCenso } from "../types";
 import type { EstadoApp } from "../App";
 
 const num = (n: number) => n.toLocaleString("es-CO");
+/** «2 min», «1 h 12 min». Los segundos sueltos no ayudan a nadie a decidir si
+ *  esperar o irse a por un café. */
+const duracion = (s: number) => {
+  if (!Number.isFinite(s) || s < 0) return "—";
+  if (s < 90) return `${Math.round(s)} s`;
+  const min = Math.round(s / 60);
+  if (min < 90) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${min % 60} min`;
+};
+
 const pct1 = (n: number) => n.toFixed(n < 10 ? 1 : 0).replace(".", ",");
 
 export default function Perfil({ estado }: { estado: EstadoApp }) {
@@ -16,13 +26,41 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   const [progreso, setProgreso] = useState<ProgresoCenso | null>(null);
   const [corriendo, setCorriendo] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sondeando, setSondeando] = useState(false);
+  /* Muestras de (instante, artículos censados) para estimar cuánto falta.
+     Se mide sobre artículos y no sobre tramos porque los tramos no son
+     comparables entre sí: un mes de 2013 trae 120 piezas y uno de 2020 trae
+     800, así que «142 de 217 tramos» no dice nada sobre el tiempo. */
+  const muestras = useRef<[number, number][]>([]);
+  const [sinPermiso, setSinPermiso] = useState<string | null>(null);
   const desmontado = useRef(false);
+  /* El sondeo se intenta una sola vez por visita: el efecto se vuelve a correr
+     cuando cambia la taxonomía elegida, y sin esto pediría el sondeo otra vez
+     por cada cambio. */
+  const sondeoIntentado = useRef(false);
+  const censoArrancado = useRef(false);
+  /* Solo se atraviesa este paso la primera vez. Quien vuelva luego desde la
+     barra lateral —a mirar el reparto por años, o a releer el archivo— se queda
+     aquí: pasar de largo le quitaría la pantalla que vino a ver. */
+  const deVuelta = useRef(estado.progreso >= 2);
 
   const cargar = useCallback(() => {
     if (conexionId == null) return;
     perfilArchivo(conexionId, taxonomia)
       .then((p) => {
         setPerfil(p);
+        // Solo se guardan las que avanzan: repetir la misma cifra al reanudar
+        // metería un tramo de velocidad cero y hundiría la estimación.
+        const ultima = muestras.current[muestras.current.length - 1];
+        if (!ultima || p.censado > ultima[1]) {
+          muestras.current.push([Date.now(), p.censado]);
+          // Un minuto de ventana: suficiente para no dar tumbos con cada 429,
+          // corto para reaccionar cuando el sitio afloja.
+          const desde = Date.now() - 60_000;
+          while (muestras.current.length > 2 && muestras.current[0][0] < desde) {
+            muestras.current.shift();
+          }
+        }
         // El eje de secciones tiene que ser una taxonomía con nombres bajados.
         // Las que tienen miles de términos se omiten a propósito, y elegir una
         // de esas dejaría el reparto vacío sin decir por qué.
@@ -39,7 +77,40 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
     desmontado.current = false;
     cargar();
     censoCorriendo().then(setCorriendo);
-    const un1 = alProgresoCenso((p) => !desmontado.current && setProgreso(p));
+
+    /* Si se llega aquí sin haber sondeado el archivo —al volver a una sesión
+       guardada de antes de que el sondeo pidiera credencial—, se sondea ahora.
+       Sin esto la pantalla enseñaba ceros y el censo salía sin taxonomías. */
+    if (!sondeoIntentado.current && estado.sitio
+        && estado.sitio.capabilities.total_posts == null && conexionId != null) {
+      sondeoIntentado.current = true;
+      setSondeando(true);
+      sondearArchivo(conexionId)
+        .then((caps) => {
+          if (desmontado.current || !estado.sitio) return;
+          estado.setSitio({ ...estado.sitio, capabilities: caps });
+        })
+        .catch((e) => !desmontado.current && setSinPermiso(String(e).replace(/^Error:\s*/, "")))
+        .finally(() => !desmontado.current && setSondeando(false));
+    }
+    /* El reparto por años se recalcula mientras el censo avanza, no solo al
+       terminar. Ver crecer las barras año por año es lo que convierte una
+       espera de cinco minutos en algo que se puede mirar; y de paso enseña algo
+       cierto del archivo antes de que acabe.
+
+       Se refresca como mucho cada dos segundos: la consulta del perfil recorre
+       el censo entero y lanzarla en cada ventana la pondría a competir con las
+       escrituras del propio censo. */
+    let ultimoRefresco = 0;
+    const un1 = alProgresoCenso((p) => {
+      if (desmontado.current) return;
+      setProgreso(p);
+      const ahora = Date.now();
+      if (p.fase === "censo" && ahora - ultimoRefresco > 2000) {
+        ultimoRefresco = ahora;
+        cargar();
+      }
+    });
     const un2 = alFinCenso((f) => {
       if (desmontado.current) return;
       setCorriendo(false);
@@ -54,25 +125,112 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
     };
   }, [cargar]);
 
-  if (!sitio || conexionId == null) return null;
-
-  const cap = sitio.capabilities;
-  const totalRemoto = cap.total_posts ?? 0;
+  const cap = sitio?.capabilities;
+  /* Se sabe cuántas piezas hay solo después de sondear el archivo, y sondear
+     exige credencial. Al volver a una sesión guardada de antes de ese cambio,
+     aquí no había nada y la pantalla afirmaba «recorre las 0 piezas», que no es
+     un cero: es un dato que todavía no tenemos. */
+  const totalRemoto = cap?.total_posts ?? null;
   const censado = perfil?.censado ?? 0;
-  const completo = censado > 0 && totalRemoto > 0 && censado >= totalRemoto * 0.995;
+  /* Terminado es haber recorrido todos los tramos, no alcanzar el total que
+     anuncia el sitio. Ese total es un blanco móvil —La Silla publica unas 25
+     piezas al día— y además incluye las de fecha dañada, que ninguna ventana de
+     fecha alcanza. Comparado contra él, el censo nunca se daba por terminado y
+     el botón de «seguir leyendo» no se iba por muchas veces que se pulsara. */
+  const completo = censado > 0 && (perfil?.tramos_totales ?? 0) > 0
+    && (perfil?.tramos_hechos ?? 0) >= (perfil?.tramos_totales ?? 0);
+  /* Lo que el archivo creció desde que se leyó. No es trabajo pendiente: es una
+     noticia sobre el archivo, y merece otra palabra. */
+  const nuevos = completo && totalRemoto != null ? Math.max(0, totalRemoto - censado) : 0;
+
+  /* Cuánto falta, en tiempo. Se calcula sobre el ritmo del último minuto y no
+     sobre el promedio desde el principio: si el sitio empieza a frenar, un
+     promedio global tardaría lo que dura el censo en enterarse. */
+  const estimacion = (() => {
+    const m = muestras.current;
+    if (m.length < 2 || totalRemoto == null) return null;
+    const [t0, c0] = m[0];
+    const [t1, c1] = m[m.length - 1];
+    const seg = (t1 - t0) / 1000;
+    if (seg < 5 || c1 <= c0) return null;
+    const ritmo = (c1 - c0) / seg;
+    const faltan = Math.max(0, totalRemoto - c1);
+    return { ritmo, seg: faltan / ritmo };
+  })();
 
   async function censar(reiniciar: boolean) {
     if (conexionId == null) return;
     setError(null);
     setCorriendo(true);
-    setProgreso({ fase: "terminos", ventana: "", hechos: 0, total: 0 });
-    const taxs = cap.taxonomies.map((t) => t.rest_base);
+    setProgreso({ fase: "terminos", ventana: "", hechos: 0, total: 0, cortesia_ms: 0, carriles: 0 });
+    const taxs = (cap?.taxonomies ?? []).map((t) => t.rest_base);
     try {
       await iniciarCenso(conexionId, taxs, reiniciar);
     } catch (e) {
       setError(String(e));
       setCorriendo(false);
     }
+  }
+
+
+  /* Leer el archivo no es una decisión que valga la pena poner a votación: se
+     acaba de dar permiso para ello, y no hay nada que elegir. Arranca solo. */
+  useEffect(() => {
+    if (deVuelta.current || censoArrancado.current) return;
+    if (sondeando || sinPermiso || corriendo) return;
+    if (!perfil || totalRemoto == null) return;
+    const listo = perfil.tramos_totales > 0 && perfil.tramos_hechos >= perfil.tramos_totales;
+    if (listo) return; // ya está leído: el otro efecto se encarga de pasar
+    censoArrancado.current = true;
+    void censar(perfil.censado === 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil, sondeando, sinPermiso, corriendo, totalRemoto]);
+
+  /* Y cuando termina, lleva a los hallazgos sin pedir un clic más: es el
+     siguiente paso y no hay otra cosa que hacer aquí. */
+  useEffect(() => {
+    if (deVuelta.current || corriendo || !perfil) return;
+    const listo = perfil.censado > 0 && perfil.tramos_totales > 0
+      && perfil.tramos_hechos >= perfil.tramos_totales;
+    if (listo) estado.avanzar(2, "sanidad");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil, corriendo]);
+
+  if (!sitio || conexionId == null) return null;
+
+  if (sondeando) {
+    return (
+      <Lienzo>
+        <Rotulo style={{ marginBottom: 12 }}>
+          Paso 2 · {sitio.resolved_origin.replace(/^https?:\/\//, "")}
+        </Rotulo>
+        <Cargando
+          titulo="Preguntándole a tu WordPress qué hay dentro"
+          pasos={[
+            { texto: "Cuántas piezas hay publicadas" },
+            { texto: "Cuál es la más vieja y cuál la más nueva" },
+            { texto: "Qué filtros respeta la instalación", detalle: "fechas, campos, categorías" },
+          ]}
+          actual={1}
+          nota="Son unas pocas peticiones a tu sitio, con pausas de cortesía entre ellas."
+        />
+      </Lienzo>
+    );
+  }
+
+  if (sinPermiso && totalRemoto == null) {
+    return (
+      <Lienzo>
+        <Rotulo style={{ marginBottom: 12 }}>
+          Paso 2 · {sitio.resolved_origin.replace(/^https?:\/\//, "")}
+        </Rotulo>
+        <h1 className="t-display" style={{ margin: "0 0 14px" }}>Falta el permiso del sitio</h1>
+        <p className="t-cuerpo" style={{ margin: "0 0 var(--esp-8)", color: "var(--t2)", maxWidth: "52ch" }}>
+          {sinPermiso}
+        </p>
+        <Boton onClick={estado.retroceder}>Volver a la conexión</Boton>
+      </Lienzo>
+    );
   }
 
   return (
@@ -86,7 +244,9 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
       <p className="t-cuerpo" style={{ margin: "0 0 var(--esp-11)", color: "var(--t2)", maxWidth: "54ch" }}>
         {completo
           ? "Legajo lo leyó preguntándole a tu propio WordPress. Nada de esto salió de tu computador."
-          : `Legajo recorre las ${num(totalRemoto)} piezas leyendo solo sus metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que hace posible muestrear con criterio.`}
+          : totalRemoto != null
+            ? `Legajo recorre las ${num(totalRemoto)} piezas leyendo solo sus metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que hace posible muestrear con criterio.`
+            : "Legajo recorre el archivo leyendo solo metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que hace posible elegir después qué procesar con criterio."}
       </p>
 
       {error && (
@@ -111,6 +271,36 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
             </span>
           </div>
           <Barra pct={progreso.total > 0 ? (progreso.hechos / progreso.total) * 100 : 0} alto={4} />
+
+          {/* Lo que de verdad calma: cuánto falta, a qué ritmo, y por qué ese
+              ritmo y no otro. Una barra sin tiempo obliga a adivinar si son dos
+              minutos o media hora. */}
+          <div style={{ display: "flex", gap: 20, alignItems: "baseline", marginTop: 12, flexWrap: "wrap" }}>
+            {estimacion ? (
+              <>
+                <span style={{ fontSize: 15, color: "var(--t1)", fontVariantNumeric: "tabular-nums" }}>
+                  faltan {duracion(estimacion.seg)}
+                </span>
+                <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11.5 }}>
+                  {Math.round(estimacion.ritmo)} artículos/s
+                </span>
+              </>
+            ) : (
+              <span className="t-menor" style={{ color: "var(--t3)" }}>midiendo el ritmo…</span>
+            )}
+            {/* El ritmo que el recorrido encontró para *este* sitio. No es una
+                constante nuestra: sube sola mientras el servidor aguanta y baja
+                a la mitad en cuanto se queja. */}
+            {progreso.carriles > 0 && (
+              <span className="t-menor" style={{ color: "var(--t3)" }}>
+                · {progreso.carriles} {progreso.carriles === 1 ? "petición" : "peticiones"} a la vez
+                {progreso.cortesia_ms > 400
+                  ? `, y tu sitio nos pide esperar ${(progreso.cortesia_ms / 1000).toFixed(1).replace(".", ",")} s entre ellas`
+                  : ""}
+              </span>
+            )}
+          </div>
+
           <div style={{ display: "flex", gap: 18, alignItems: "center", marginTop: 14 }}>
             <Boton variante="secundario" onClick={() => cancelarCenso()}>Detener</Boton>
             <span className="t-menor" style={{ color: "var(--t3)" }}>
@@ -120,15 +310,37 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
         </div>
       )}
 
-      {!corriendo && !completo && (
+      {/* Ya no hay botón para empezar a leer: el censo arranca solo al llegar,
+          porque el permiso se acaba de dar y no queda nada que decidir. Lo que
+          sí hace falta es poder pararlo, y eso vive en el bloque de progreso. */}
+      {!corriendo && !completo && censado === 0 && (
         <div style={{ marginBottom: "var(--esp-11)" }}>
-          <Boton onClick={() => censar(censado === 0)}>
-            {censado > 0 ? `Continuar (${num(censado)} de ${num(totalRemoto)})` : "Leer el archivo"}
-          </Boton>
-          <p className="t-menor" style={{ color: "var(--t3)", margin: "14px 0 0", maxWidth: "54ch", lineHeight: 1.7 }}>
-            Va por tramos mensuales y con pausas de cortesía entre peticiones, así que tarda unos
-            minutos. Puedes detenerlo y retomarlo donde iba.
-          </p>
+          <Cargando
+            titulo="Empezando a leer el archivo"
+            pasos={[
+              { texto: "Traer los nombres de las secciones" },
+              { texto: "Averiguar desde cuándo hay publicaciones" },
+              { texto: "Recorrer el archivo mes a mes" },
+            ]}
+            actual={0}
+          />
+        </div>
+      )}
+
+      {/* Terminado, pero el archivo siguió creciendo. Eso no es trabajo a
+          medias y no debe leerse como tal: quien quiera lo nuevo lo pide, y
+          quien no, sigue adelante sin que nada le insista. */}
+      {!corriendo && completo && nuevos > 0 && (
+        <div style={{ marginBottom: "var(--esp-11)", display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span className="t-menor" style={{ color: "var(--t3)", lineHeight: 1.7, maxWidth: "48ch" }}>
+            Tu archivo publicó {num(nuevos)} piezas más desde que lo leíste.
+          </span>
+          <button
+            onClick={() => censar(false)}
+            style={{ appearance: "none", background: "transparent", border: 0, padding: 0, color: "var(--acento)", cursor: "pointer", fontSize: 12.5, fontFamily: "var(--font-sans)" }}
+          >
+            traer lo nuevo
+          </button>
         </div>
       )}
 
@@ -141,8 +353,8 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
                 : "artículos censados"
             }>
               {completo
-                ? "Es el universo del que saldrá la muestra."
-                : `Todavía faltan ${num(Math.max(0, totalRemoto - censado))} por recorrer.`}
+                ? "Es el universo del que saldrá el lote."
+                : `Van ${num(perfil.tramos_hechos)} de ${num(perfil.tramos_totales)} tramos. Puedes seguir al paso siguiente sin esperar.`}
               {perfil.sin_fecha > 0 &&
                 ` ${num(perfil.sin_fecha)} llevan una fecha imposible y quedan fuera del eje temporal hasta que lo decidas.`}
             </Acto>
@@ -193,14 +405,18 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
             </p>
           )}
 
-          <div style={{ marginTop: "var(--esp-11)", paddingTop: "var(--esp-6)", borderTop: "1px solid var(--borde)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <Boton onClick={() => estado.avanzar(2, "sanidad")} disabled={corriendo}>
-              Continuar a la sanidad del archivo
-            </Boton>
-            {!corriendo && (
+          {/* Mientras se lee no hay nada que continuar: los hallazgos se
+              calculan sobre el censo terminado. Un botón apagado ocupa el sitio
+              de una acción y no es ninguna —invita a pulsarlo y no explica por
+              qué no responde—, así que no se enseña hasta que sirve. */}
+          {!corriendo && (
+            <div style={{ marginTop: "var(--esp-11)", paddingTop: "var(--esp-6)", borderTop: "1px solid var(--borde)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              <Boton onClick={() => estado.avanzar(2, "sanidad")}>
+                Continuar a la sanidad del archivo
+              </Boton>
               <Boton variante="enlace" onClick={() => censar(true)}>volver a leer el archivo desde cero</Boton>
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
     </Lienzo>

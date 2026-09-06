@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  Alcance, ArbolCategorias, AristaGrafo, Calibracion, Caso, CatalogoModelos,
+  Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
   ConnectionRow, Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
-  Hallazgo, LoteRow, Mencion, Modelos, NodoGrafo, PerfilArchivo, ProgresoCenso,
+  Hallazgo, Identidad, LoteRow, Mencion, Modelos, NodoGrafo, PasoAutorizacion,
+  PerfilArchivo, ProgresoCenso,
   ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
   SesionRecuperada, SinNombrar,
 } from "../types";
@@ -15,6 +16,23 @@ export const saveConnection = (resolvedOrigin: string, label: string) =>
   invoke<number>("save_connection", { resolvedOrigin, label });
 
 export const listConnections = () => invoke<ConnectionRow[]>("list_connections");
+
+// ── Pertenencia al sitio ─────────────────────────────────────────────────
+
+export const pasoAutorizacion = (resolvedOrigin: string) =>
+  invoke<PasoAutorizacion>("paso_autorizacion", { resolvedOrigin });
+
+export const probarCredencial = (resolvedOrigin: string, usuario: string, secreto: string) =>
+  invoke<Identidad>("probar_credencial", { resolvedOrigin, usuario, secreto });
+
+export const duenio = (connectionId: number) =>
+  invoke<[string, string] | null>("duenio", { connectionId });
+
+export const olvidarCredencial = (connectionId: number) =>
+  invoke<void>("olvidar_credencial", { connectionId });
+
+export const sondearArchivo = (connectionId: number) =>
+  invoke<Capabilities>("sondear_archivo", { connectionId });
 
 export const deleteConnection = (id: number) =>
   invoke<void>("delete_connection", { id });
@@ -35,6 +53,10 @@ export const hallazgosArchivo = (connectionId: number) =>
   invoke<Hallazgo[]>("hallazgos_archivo", { connectionId });
 
 /** El censo dura minutos; el avance llega por eventos, no por el retorno. */
+/** Fases del descubrimiento, según se van intentando. */
+export const alFaseConexion = (cb: (f: string) => void): Promise<UnlistenFn> =>
+  listen<string>("conexion:fase", (e) => cb(e.payload));
+
 export const alProgresoCenso = (cb: (p: ProgresoCenso) => void): Promise<UnlistenFn> =>
   listen<ProgresoCenso>("censo:progreso", (e) => cb(e.payload));
 

@@ -56,6 +56,24 @@ export interface Discovery {
   attempts: Attempt[];
 }
 
+/** Quién resultó ser quien conectó, según el propio sitio. */
+export interface Identidad {
+  id: number;
+  login: string;
+  nombre: string;
+  roles: string[];
+  edita: boolean;
+}
+
+export interface PasoAutorizacion {
+  /** La dirección, en el sitio de la persona, donde WordPress crea la
+   *  contraseña. Sale del índice REST del propio sitio. */
+  url: string | null;
+  /** El sitio anuncia el mecanismo aunque no diga la dirección. */
+  anunciado: boolean;
+  origen: string;
+}
+
 export interface ConnectionRow {
   id: number;
   label: string;
@@ -101,6 +119,10 @@ export interface PerfilArchivo {
   taxonomias_usables: [string, number][];
   sondeo: Sondeo | null;
   sin_fecha: number;
+  /** Tramos mensuales recorridos y cuántos hay. Es lo que decide si el censo
+   *  está terminado: el total que anuncia el sitio crece mientras se lee. */
+  tramos_hechos: number;
+  tramos_totales: number;
 }
 
 export interface Hallazgo {
@@ -120,6 +142,10 @@ export interface ProgresoCenso {
   ventana: string;
   hechos: number;
   total: number;
+  /** Demora impuesta por el sitio, en milisegundos. */
+  cortesia_ms: number;
+  /** Peticiones en vuelo que el recorrido encontró que el sitio admite. */
+  carriles: number;
 }
 
 export interface FinCenso {
@@ -300,6 +326,8 @@ export interface OpcionModelo {
   nota: string;
   /** Ya está en esta máquina. Si no, hay que bajarlo antes de poder usarlo. */
   instalado?: boolean;
+  /** Lo que ocupa la descarga, en megabytes. */
+  mb?: number;
 }
 
 export interface ProgresoModelo {

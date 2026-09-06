@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<script>window.OM_SCENES = '[{"name":"Suelo","dur":0.8,"desc":"Las ocho piezas del logo están tumbadas en el suelo, dispersas y con su sombra"},{"name":"Levantan","dur":1.6,"desc":"Una a una se levantan, giran y encajan en su sitio hasta armar las tres sillas"},{"name":"Cierre","dur":0.6,"desc":"El logo se asienta y queda fijo"}]';</script>
+<script>window.OM_PLAYBACK = '{"mode":"times","count":1}';</script>
+<script>window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "spread": 90,
+  "shadow": true,
+  "accent": "#338BFD",
+  "motionEditor": true
+}/*EDITMODE-END*/;</script>
+<style>
+  html, body { margin: 0; background: #f4f5f7; }
+  a { color: #338BFD; }
+  a:hover { color: #0B1F3A; }
+</style>
+</helmet>
+<x-import component-from-global-scope="LogoVideo" from="./animations-v3.jsx ./tweaks-panel.jsx ./logo-scene.jsx" hint-size="100%,100%"></x-import>
+</x-dc>
+</body>
+</html>

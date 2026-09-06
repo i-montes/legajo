@@ -122,6 +122,8 @@ export function Boton({
 export function Campo({
   value,
   onChange,
+  etiqueta,
+  ayuda,
   placeholder,
   onEnter,
   type = "text",
@@ -130,19 +132,29 @@ export function Campo({
 }: {
   value: string;
   onChange: (v: string) => void;
+  /** Qué se pide. Va dentro del `<label>` que envuelve al campo, así que
+   *  pulsarla enfoca el campo y un lector de pantalla los une sin que haya que
+   *  acordarse de poner identificadores. */
+  etiqueta?: string;
+  /** Una línea debajo, para lo que no cabe en la etiqueta. */
+  ayuda?: string;
   placeholder?: string;
   onEnter?: () => void;
   type?: string;
   autoFocus?: boolean;
   mono?: boolean;
 }) {
-  return (
+  /* El campo va envuelto en su etiqueta y no al lado: un `placeholder` se borra
+     en cuanto se escribe la primera letra, que es justo cuando hace falta saber
+     qué se estaba rellenando. La etiqueta se queda. */
+  const entrada = (
     <input
       type={type}
       value={value}
       autoFocus={autoFocus}
       spellCheck={false}
       placeholder={placeholder}
+      aria-label={etiqueta ? undefined : placeholder}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
       style={{
@@ -160,6 +172,24 @@ export function Campo({
       onFocus={(e) => (e.currentTarget.style.borderColor = "var(--acento)")}
       onBlur={(e) => (e.currentTarget.style.borderColor = "var(--borde)")}
     />
+  );
+
+  if (!etiqueta && !ayuda) return entrada;
+
+  return (
+    <label style={{ display: "block" }}>
+      {etiqueta && (
+        <span style={{ display: "block", fontSize: 12.5, color: "var(--t3)", marginBottom: 7 }}>
+          {etiqueta}
+        </span>
+      )}
+      {entrada}
+      {ayuda && (
+        <span style={{ display: "block", fontSize: 11.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.55 }}>
+          {ayuda}
+        </span>
+      )}
+    </label>
   );
 }
 
@@ -250,3 +280,6 @@ export function VistaPrevia({ falta }: { falta: string }) {
     </div>
   );
 }
+
+export { default as Cargando } from "./Cargando";
+export type { PasoCarga } from "./Cargando";

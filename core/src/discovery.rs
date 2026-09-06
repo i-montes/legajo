@@ -120,16 +120,32 @@ fn date_is_plausible(s: &str) -> bool {
 }
 
 pub async fn discover(http: &Http, input: &str) -> Result<Discovery> {
+    discover_con_aviso(http, input, |_| {}).await
+}
+
+/// Igual, pero avisando de cada transporte antes de probarlo.
+///
+/// Existe para que la pantalla de espera pueda decir en qué va. Buscar la REST
+/// API son hasta tres intentos contra servidores ajenos, cada uno con su tiempo
+/// de espera: callar durante ese rato hace que una conexion lenta y una rota se
+/// vean igual.
+pub async fn discover_con_aviso<F>(http: &Http, input: &str, mut avisar: F) -> Result<Discovery>
+where
+    F: FnMut(&str),
+{
     let base = normalize_input(input)?;
     let mut attempts = Vec::new();
+    avisar("normalizando");
 
     // --- Paso 1: REST directo con permalinks bonitos ---------------------------
+    avisar("directo");
     let pretty = Transport::DirectPretty { origin: origin_of(&base) };
     if let Some(d) = try_transport(http, pretty, input, &mut attempts).await? {
         return Ok(d);
     }
 
     // --- Paso 2: REST directo por rest_route (permalinks feos) ------------------
+    avisar("rest_route");
     let plain = Transport::DirectPlain { origin: origin_of(&base) };
     if let Some(d) = try_transport(http, plain, input, &mut attempts).await? {
         return Ok(d);
@@ -138,6 +154,7 @@ pub async fn discover(http: &Http, input: &str) -> Result<Discovery> {
     // --- Paso 3: proxy de WordPress.com ----------------------------------------
     // Los sitios alojados en WordPress.com devuelven 404 en su propio /wp-json.
     if let Some(host) = base.host_str() {
+        avisar("wpcom");
         let site = host.trim_start_matches("www.").to_string();
         let wpcom = Transport::WpCom { site };
         if let Some(d) = try_transport(http, wpcom, input, &mut attempts).await? {
@@ -258,7 +275,9 @@ async fn try_transport(
         .and_then(Value::as_str)
         .map(String::from);
 
-    let capabilities = probe_capabilities(http, &transport).await?;
+    // Identificar no es leer. El sondeo del archivo espera a que haya
+    // credencial: lo lanza el paso siguiente, no este.
+    let capabilities = Capabilities::default();
 
     Ok(Some(Discovery {
         input: input.to_string(),
@@ -285,12 +304,27 @@ async fn try_transport(
 /// Sondea lo que el sitio permite de verdad. Nada se da por supuesto: hay plugins
 /// de seguridad que bloquean partes de la REST API, y descubrirlo a mitad de una
 /// extraccion de 50.000 articulos es demasiado tarde.
-async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> {
+/// Sondea lo que el sitio permite de verdad, ya con credencial.
+///
+/// Se separó de la identificación a propósito. Antes esto corría nada más pegar
+/// una dirección, y hacía seis lecturas del archivo sin que nadie hubiera dado
+/// permiso: cuántos artículos hay, cuál es el más viejo, si respeta los filtros.
+/// Nada de eso era secreto, pero tampoco era asunto de Legajo antes de que el
+/// dueño del archivo dijera que sí.
+///
+/// Identificar un sitio —leer su índice REST para saber cómo se llama y dónde se
+/// crean sus contraseñas— no toca el archivo. Leerlo empieza aquí, y aquí ya hay
+/// credencial.
+pub async fn sondear(http: &Http, t: &Transport, auth: &Auth) -> Result<Capabilities> {
+    probe_capabilities(http, t, auth).await
+}
+
+async fn probe_capabilities(http: &Http, t: &Transport, auth: &Auth) -> Result<Capabilities> {
     let mut c = Capabilities::default();
 
     // ¿Se puede leer sin credenciales, y cuantos posts hay?
     let base = http
-        .get(&t.url("wp/v2/posts", &[("per_page", "1".into())])?, &Auth::None)
+        .get(&t.url("wp/v2/posts", &[("per_page", "1".into())])?, auth)
         .await?;
     c.read_status = base.status;
     c.anonymous_read = base.ok();
@@ -299,7 +333,8 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
 
     if !c.anonymous_read {
         c.notes.push(format!(
-            "La lectura anonima devuelve HTTP {}. Hara falta autenticarse.",
+            "El sitio devuelve HTTP {} al leer con esta cuenta. Comprueba que la \
+             contrasena de aplicacion sigue vigente en tu perfil de WordPress.",
             base.status
         ));
         return Ok(c);
@@ -313,7 +348,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
     if let Ok(r) = http
         .get(
             &t.url("wp/v2/posts", &[("per_page", "1".into()), ("_fields", "id,date".into())])?,
-            &Auth::None,
+            auth,
         )
         .await
     {
@@ -335,7 +370,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
                 "wp/v2/posts",
                 &[("per_page", "1".into()), ("after", "2099-01-01T00:00:00".into())],
             )?,
-            &Auth::None,
+            auth,
         )
         .await
     {
@@ -360,7 +395,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
                     ("_fields", "id,count".into()),
                 ],
             )?,
-            &Auth::None,
+            auth,
         )
         .await
     {
@@ -372,7 +407,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
                             "wp/v2/posts",
                             &[("per_page", "1".into()), ("categories_exclude", id.to_string())],
                         )?,
-                        &Auth::None,
+                        auth,
                     )
                     .await
                 {
@@ -396,7 +431,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
                         ("_fields", "id,date".into()),
                     ],
                 )?,
-                &Auth::None,
+                auth,
             )
             .await
         {
@@ -424,7 +459,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
     }
 
     // Tipos de contenido y taxonomias: no asumimos `post` ni `category`.
-    if let Ok(r) = http.get(&t.url("wp/v2/types", &[])?, &Auth::None).await {
+    if let Ok(r) = http.get(&t.url("wp/v2/types", &[])?, auth).await {
         if let Ok(Value::Object(map)) = r.json::<Value>() {
             for (slug, v) in map {
                 if v.get("rest_base").and_then(Value::as_str).is_none() {
@@ -440,7 +475,7 @@ async fn probe_capabilities(http: &Http, t: &Transport) -> Result<Capabilities> 
         }
     }
 
-    if let Ok(r) = http.get(&t.url("wp/v2/taxonomies", &[])?, &Auth::None).await {
+    if let Ok(r) = http.get(&t.url("wp/v2/taxonomies", &[])?, auth).await {
         if let Ok(Value::Object(map)) = r.json::<Value>() {
             for (slug, v) in map {
                 let types = str_vec(&v, "types");

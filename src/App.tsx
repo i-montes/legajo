@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AYUDA, type Paso } from "./contenido/ayuda";
+import Splash from "./ui/Splash";
 import Conexion from "./screens/Conexion";
 import Perfil from "./screens/Perfil";
 import Sanidad from "./screens/Sanidad";
@@ -25,7 +26,12 @@ const PASOS: [Paso, string, string][] = [
 
 /* Durante los tres primeros pasos la app se presenta sin cromo: son pantallas
    de entrada, y una barra de navegación con seis pasos bloqueados desanima
-   antes de empezar. El cromo aparece cuando ya hay un archivo conectado. */
+   antes de empezar.
+
+   Pero solo la primera vez. Quien ya llegó al alcance y vuelve a la conexión a
+   mirar algo se quedaba encerrado: la barra desaparecía y con ella la única
+   forma de regresar al paso 5. Un adorno de bienvenida no puede convertirse en
+   una trampa en cuanto la app se usa de verdad. */
 const SIN_CROMO: Paso[] = ["conexion", "perfil", "sanidad"];
 
 export interface EstadoApp {
@@ -36,6 +42,11 @@ export interface EstadoApp {
   loteId: number | null;
   progreso: number;
   avanzar: (hasta: number, siguiente: Paso) => void;
+  /** Vuelve al paso anterior sin deshacer nada de lo hecho. */
+  retroceder: () => void;
+  /** Refresca lo que se sabe del sitio. Lo usa el paso 2 cuando llega sin
+   *  sondeo, que pasa al volver a una sesión guardada de antes. */
+  setSitio: (d: Discovery) => void;
   setTaxonomia: (t: string) => void;
   setLoteId: (id: number) => void;
 }
@@ -51,6 +62,10 @@ export default function App() {
   const [ayudaAbierta, setAyudaAbierta] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const [restaurando, setRestaurando] = useState(true);
+  /* La marca armándose, una vez por arranque. Corre en paralelo a recuperar la
+     sesión, así que no cuesta tiempo: para cuando termina, lo que había que
+     leer de la base ya está leído. */
+  const [splash, setSplash] = useState(true);
   const [sesionPrevia, setSesionPrevia] = useState<SesionRecuperada | null>(null);
 
   /* Se recupera dónde quedó la sesión anterior. El trabajo ya estaba a salvo en
@@ -73,26 +88,25 @@ export default function App() {
       .finally(() => setRestaurando(false));
   }, []);
 
-  // Cada movimiento se anota. Es una fila; no hace falta esperar a nada.
+  /* Cada movimiento se anota. Es una fila; no hace falta esperar a nada.
+
+     Si falla, se dice. Un `catch` mudo aquí escondió durante toda una versión
+     que la tabla se había quedado con el nombre viejo de una columna: no había
+     ningún error a la vista, solo una app que volvía siempre al paso 1 como si
+     nunca se hubiera usado. Se avisa una sola vez, no en cada tecla. */
+  const falloSesion = useRef(false);
   useEffect(() => {
     if (restaurando) return;
-    guardarSesion(conexionId, paso, progreso, taxonomia, loteId).catch(() => {});
+    guardarSesion(conexionId, paso, progreso, taxonomia, loteId).catch((e) => {
+      if (falloSesion.current) return;
+      falloSesion.current = true;
+      setAviso(`No se pudo guardar por dónde vas, así que al reabrir empezarás de nuevo: ${e}`);
+    });
   }, [restaurando, conexionId, paso, progreso, taxonomia, loteId]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-tema", tema);
   }, [tema]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setAyudaAbierta(false);
-      if (e.key === "?" && !(e.target as HTMLElement)?.closest("input,textarea")) {
-        setAyudaAbierta((v) => !v);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
 
   const avanzar = useCallback((hasta: number, siguiente: Paso) => {
     setProgreso((p) => Math.max(p, hasta));
@@ -100,12 +114,43 @@ export default function App() {
     setAviso(null);
   }, []);
 
+  /* Volver al paso anterior. `progreso` no se toca: retroceder a revisar el
+     alcance no deshace la calibración ni la extracción, solo mueve la vista.
+     Faltaba por completo, y en los tres primeros pasos —que se dibujan sin
+     barra lateral— dejaba a la persona sin ninguna salida hacia atrás. */
+  const retroceder = useCallback(() => {
+    setPaso((actual) => {
+      const i = PASOS.findIndex(([k]) => k === actual);
+      return i > 0 ? PASOS[i - 1][0] : actual;
+    });
+    setAviso(null);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAyudaAbierta(false);
+      /* ⌥← para volver, como en un navegador. Se ignora dentro de un campo de
+         texto, donde esa combinación mueve el cursor por palabras. */
+      if (e.altKey && e.key === "ArrowLeft" &&
+          !(e.target as HTMLElement)?.closest("input,textarea")) {
+        e.preventDefault();
+        retroceder();
+      }
+      if (e.key === "?" && !(e.target as HTMLElement)?.closest("input,textarea")) {
+        setAyudaAbierta((v) => !v);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [retroceder]);
+
   const estado: EstadoApp = useMemo(
-    () => ({ sitio, conexionId, taxonomia, loteId, progreso, avanzar, setTaxonomia, setLoteId }),
-    [sitio, conexionId, taxonomia, loteId, progreso, avanzar]
+    () => ({ sitio, conexionId, taxonomia, loteId, progreso, avanzar, retroceder,
+             setSitio, setTaxonomia, setLoteId }),
+    [sitio, conexionId, taxonomia, loteId, progreso, avanzar, retroceder]
   );
 
-  const conCromo = !SIN_CROMO.includes(paso);
+  const conCromo = !SIN_CROMO.includes(paso) || progreso >= 3;
   const ayuda = paso === "fundamentos" ? null : AYUDA[paso];
 
   const nombreSitio = sitio
@@ -114,9 +159,11 @@ export default function App() {
 
   return (
     <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)", overflow: "hidden" }}>
+      {splash && <Splash onFin={() => setSplash(false)} />}
       {conCromo && (
         <header style={{ flex: "0 0 auto", height: 38, display: "flex", alignItems: "center", gap: 16, padding: "0 14px", background: "var(--superficie)", borderBottom: "1px solid var(--borde)", userSelect: "none" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <BotonVolver paso={paso} onClick={retroceder} />
             <span style={{ fontFamily: "var(--font-serif-display)", fontSize: 16, letterSpacing: ".2px" }}>Legajo</span>
             <span style={{ fontSize: 12, color: "var(--t3)" }}>{nombreSitio}</span>
           </div>
@@ -210,6 +257,11 @@ export default function App() {
         )}
 
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
+          {!conCromo && paso !== "conexion" && (
+            <div style={{ position: "absolute", top: 16, left: 20, zIndex: 30 }}>
+              <BotonVolver paso={paso} onClick={retroceder} />
+            </div>
+          )}
           {!conCromo && (
             <div style={{ position: "absolute", top: 16, right: 20, zIndex: 30, display: "flex", gap: 8, alignItems: "center" }}>
               <BotonTema tema={tema} onClick={() => setTema(tema === "claro" ? "oscuro" : "claro")} />
@@ -311,6 +363,35 @@ function Seccion({ titulo, children }: { titulo: string; children: React.ReactNo
       <div className="t-rotulo" style={{ letterSpacing: "1.2px", marginBottom: 9 }}>{titulo}</div>
       {children}
     </div>
+  );
+}
+
+
+/** Vuelve al paso anterior. No aparece en el primero, donde no hay atrás.
+ *
+ *  Va en la cabecera y no dentro de cada pantalla: así existe en las ocho sin
+ *  depender de que cada una se acuerde de ponerlo, que es justo como se perdió.
+ */
+function BotonVolver({ paso, onClick }: { paso: Paso; onClick: () => void }) {
+  const i = PASOS.findIndex(([k]) => k === paso);
+  if (i <= 0) return null;
+  const anterior = PASOS[i - 1][2];
+  return (
+    <button
+      onClick={onClick}
+      title={`Volver a «${anterior}» (⌥←). No deshace nada de lo hecho.`}
+      aria-label={`Volver a ${anterior}`}
+      style={{
+        appearance: "none", background: "transparent", border: "1px solid var(--borde)",
+        borderRadius: 999, width: 24, height: 24, lineHeight: 1, fontSize: 13,
+        color: "var(--t2)", cursor: "pointer", display: "grid", placeItems: "center",
+        flex: "0 0 auto",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--t1)"; e.currentTarget.style.borderColor = "var(--borde-fuerte)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--t2)"; e.currentTarget.style.borderColor = "var(--borde)"; }}
+    >
+      ←
+    </button>
   );
 }
 

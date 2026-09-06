@@ -60,25 +60,25 @@ impl Default for Modelos {
 pub fn catalogo() -> Value {
     json!({
         "gliner": [
-            {"id": "urchade/gliner_multi-v2.1", "nombre": "GLiNER multilingüe v2.1",
+            {"id": "urchade/gliner_multi-v2.1", "nombre": "GLiNER multilingüe v2.1", "mb": 1156,
              "nota": "El caballo de batalla. Multilingüe, 209M, equilibrado."},
-            {"id": "urchade/gliner_multi_pii-v1", "nombre": "GLiNER multilingüe PII",
+            {"id": "urchade/gliner_multi_pii-v1", "nombre": "GLiNER multilingüe PII", "mb": 1156,
              "nota": "Afinado para datos personales; útil si el foco son personas."},
-            {"id": "knowledgator/gliner-bi-large-v1.0", "nombre": "GLiNER bi-encoder grande",
+            {"id": "knowledgator/gliner-bi-large-v1.0", "nombre": "GLiNER bi-encoder grande", "mb": 2288,
              "nota": "Codifica etiquetas aparte: más rápido con muchas etiquetas, y más pesado de cargar."},
-            {"id": "knowledgator/gliner-multitask-large-v0.5", "nombre": "GLiNER multitarea grande",
+            {"id": "knowledgator/gliner-multitask-large-v0.5", "nombre": "GLiNER multitarea grande", "mb": 892,
              "nota": "El más preciso de la familia y el más lento. Sirve para saber cuánto techo se deja."}
         ],
         "spacy": [
-            {"id": "es_core_news_sm", "nombre": "spaCy español pequeño",
-             "nota": "15 MB. Segmenta y tokeniza de sobra para lo que hace falta."},
-            {"id": "es_core_news_md", "nombre": "spaCy español mediano",
-             "nota": "40 MB, con vectores. Mejor segmentación en prosa difícil."},
-            {"id": "es_core_news_lg", "nombre": "spaCy español grande",
-             "nota": "560 MB. Solo si la segmentación resulta ser el cuello de botella."}
+            {"id": "es_core_news_sm", "nombre": "spaCy español pequeño", "mb": 13,
+             "nota": "Segmenta y tokeniza de sobra para lo que hace falta."},
+            {"id": "es_core_news_md", "nombre": "spaCy español mediano", "mb": 42,
+             "nota": "Con vectores. Mejor segmentación en prosa difícil."},
+            {"id": "es_core_news_lg", "nombre": "spaCy español grande", "mb": 545,
+             "nota": "Solo si la segmentación resulta ser el cuello de botella."}
         ],
         "glirel": [
-            {"id": "jackboyla/glirel-large-v0", "nombre": "GLiREL grande",
+            {"id": "jackboyla/glirel-large-v0", "nombre": "GLiREL grande", "mb": 1867,
              "nota": "Relaciones de vocabulario abierto sobre las entidades ya halladas."}
         ]
     })

@@ -5,6 +5,7 @@
 //! sin webkit2gtk ni ninguna dependencia grafica.
 
 pub mod alcance;
+pub mod auth;
 pub mod calibracion;
 pub mod census;
 pub mod contenido;

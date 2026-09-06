@@ -5,7 +5,7 @@ use legajo_core::db::{
 };
 use legajo_core::{alcance, calibracion, extraccion};
 use legajo_core::perfil::{self, Hallazgo, PerfilArchivo};
-use legajo_core::{contenido, discover, Auth, Db, Discovery, Error, Http, Result};
+use legajo_core::{contenido, Auth, Db, Discovery, Error, Http, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,8 +44,18 @@ where
 // ── Conexión ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn discover_site(state: State<'_, AppState>, input: String) -> Result<Discovery> {
-    let found = discover(&state.http, &input).await?;
+pub async fn discover_site(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: String,
+) -> Result<Discovery> {
+    // Cada intento se anuncia antes de hacerlo: son hasta tres conexiones a un
+    // servidor ajeno, cada una con su tiempo de espera, y callar mientras tanto
+    // hace que una conexión lenta y una rota se vean igual.
+    let found = legajo_core::discovery::discover_con_aviso(&state.http, &input, |fase| {
+        let _ = app.emit("conexion:fase", fase.to_string());
+    })
+    .await?;
     {
         let mut cache = state.discoveries.lock().unwrap();
         cache.insert(found.resolved_origin.clone(), found.clone());
@@ -152,6 +162,131 @@ pub async fn reanudar_anotacion(state: State<'_, AppState>, lote_id: i64) -> Res
     en_hilo(move || db.siguiente_sin_cerrar(lote_id)).await
 }
 
+// ── Pertenencia al sitio ─────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct PasoAutorizacion {
+    /// La dirección en el sitio de la persona donde WordPress crea la
+    /// contraseña. Sale del índice REST del propio sitio, no se construye.
+    pub url: Option<String>,
+    /// Anuncia el mecanismo pero no la dirección: pasa en instalaciones que
+    /// filtran el índice. Se puede seguir a mano desde el perfil.
+    pub anunciado: bool,
+    pub origen: String,
+}
+
+/// Dónde tiene que ir esta persona a crear su contraseña de aplicación.
+#[tauri::command]
+pub async fn paso_autorizacion(
+    state: State<'_, AppState>,
+    resolved_origin: String,
+) -> Result<PasoAutorizacion> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        let id = db.id_por_origen(&resolved_origin)?;
+        let d = db.discovery(id)?;
+        Ok(PasoAutorizacion {
+            url: d.app_password_endpoint.as_deref().map(legajo_core::auth::url_autorizacion),
+            anunciado: d.auth_methods.iter().any(|m| m == "application-passwords"),
+            origen: resolved_origin,
+        })
+    })
+    .await
+}
+
+/// Comprueba la credencial contra el sitio y, si vale, la guarda.
+///
+/// Verificar antes de guardar no es una formalidad: una contraseña mal copiada
+/// se descubriría a las tres horas de censo, cuando la primera petición que
+/// necesita permisos falle.
+#[tauri::command]
+pub async fn probar_credencial(
+    state: State<'_, AppState>,
+    resolved_origin: String,
+    usuario: String,
+    secreto: String,
+) -> Result<legajo_core::auth::Identidad> {
+    let db = state.db.clone();
+    let http = state.http.clone();
+    let (id, transporte) = {
+        let db = db.clone();
+        en_hilo(move || {
+            let id = db.id_por_origen(&resolved_origin)?;
+            Ok((id, db.transporte(id)?))
+        })
+        .await?
+    };
+
+    // WordPress entrega la contraseña en grupos separados por espacios y los
+    // acepta con o sin ellos; quitarlos evita el fallo más común al copiarla.
+    let limpio = secreto.replace(char::is_whitespace, "");
+
+    // Aquí puede llegar un correo en vez de un nombre de usuario, y está bien:
+    // `wp_authenticate_application_password` busca primero por `user_login` y,
+    // si no lo encuentra y lo recibido parece un correo, busca por correo. Casi
+    // nadie sabe cuál es su nombre de usuario; su correo lo sabe todo el mundo.
+    let auth = Auth::Basic { user: usuario.trim().to_string(), password: limpio.clone() };
+    let identidad = legajo_core::auth::verificar(&http, &transporte, &auth).await?;
+
+    // Se guarda el `user_login` que devolvió el sitio, no lo que se tecleó: es
+    // igual de válido para autenticarse y no se rompe si la persona cambia de
+    // correo más adelante.
+    let a_guardar = if identidad.login.is_empty() {
+        usuario.trim().to_string()
+    } else {
+        identidad.login.clone()
+    };
+    let ident = identidad.clone();
+    en_hilo(move || db.guardar_credencial(id, &a_guardar, &limpio, &ident)).await?;
+    Ok(identidad)
+}
+
+/// Sondea el archivo, ya con credencial, y guarda lo aprendido.
+///
+/// Este es el primer momento en que Legajo lee algo del archivo. Antes solo ha
+/// leído el índice REST del sitio, que es cómo se llama y dónde se crean sus
+/// contraseñas — no su contenido.
+#[tauri::command]
+pub async fn sondear_archivo(
+    state: State<'_, AppState>,
+    connection_id: i64,
+) -> Result<legajo_core::discovery::Capabilities> {
+    let db = state.db.clone();
+    let http = state.http.clone();
+
+    let (transporte, auth, mut d) = {
+        let db = db.clone();
+        en_hilo(move || {
+            Ok((db.transporte(connection_id)?, db.credencial(connection_id)?,
+                db.discovery(connection_id)?))
+        })
+        .await?
+    };
+    if matches!(auth, Auth::None) {
+        return Err(Error::Other(
+            "Falta la contraseña de aplicación: el archivo no se lee sin ella.".into(),
+        ));
+    }
+
+    let caps = legajo_core::discovery::sondear(&http, &transporte, &auth).await?;
+    d.capabilities = caps.clone();
+    en_hilo(move || db.actualizar_sondeo(connection_id, &d)).await?;
+    Ok(caps)
+}
+
+/// Quién quedó registrado como dueño, si alguien.
+#[tauri::command]
+pub async fn duenio(state: State<'_, AppState>, connection_id: i64) -> Result<Option<(String, String)>> {
+    let db = state.db.clone();
+    en_hilo(move || db.duenio(connection_id)).await
+}
+
+#[tauri::command]
+pub async fn olvidar_credencial(state: State<'_, AppState>, connection_id: i64) -> Result<()> {
+    let db = state.db.clone();
+    en_hilo(move || db.olvidar_credencial(connection_id)).await
+}
+
 // ── Censo ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -219,7 +354,18 @@ async fn censar(
     cancelar: &AtomicBool,
 ) -> Result<i64> {
     let transporte = db.transporte(conn_id)?;
-    let auth = Auth::None;
+    // Sin credencial no se lee. Leer un archivo público sin pedir permiso es
+    // técnicamente posible y era lo que hacía Legajo, pero quien va a confiarle
+    // su archivo entero a un programa merece que el programa no empiece a
+    // recorrerlo por su cuenta.
+    let auth = db.credencial(conn_id)?;
+    if matches!(auth, Auth::None) {
+        return Err(Error::Other(
+            "Falta la contraseña de aplicación del sitio. Vuelve al paso 1 y \
+             demuestra que el archivo es tuyo antes de leerlo."
+                .into(),
+        ));
+    }
 
     if reiniciar {
         db.limpiar_censo(conn_id)?;
@@ -228,7 +374,13 @@ async fn censar(
     let avisar = |fase: &str, ventana: &str, hechos: u64, total: u64| {
         let _ = app.emit(
             "censo:progreso",
-            ProgresoCenso { fase: fase.into(), ventana: ventana.into(), hechos, total },
+            ProgresoCenso {
+                fase: fase.into(), ventana: ventana.into(), hechos, total,
+                // La demora que el sitio nos ha impuesto. Sin esto, «va lento»
+                // es un misterio; con esto es un hecho con su causa.
+                cortesia_ms: http.cortesia_ms(),
+                carriles: http.carriles() as u64,
+            },
         );
     };
 
@@ -254,33 +406,78 @@ async fn censar(
     let mut filas_totales = 0i64;
     let mut fallidas: Vec<String> = Vec::new();
 
-    for (i, v) in ventanas.iter().enumerate() {
-        if cancelar.load(Ordering::SeqCst) {
-            return Ok(filas_totales);
-        }
-        if hechas.contains(&v.etiqueta) {
-            avisar("censo", &v.etiqueta, i as u64 + 1, total);
-            continue;
-        }
+    /* Varias ventanas a la vez, y cuántas lo decide el propio recorrido.
+     *
+     * El cuello de botella no es nuestro: el sitio tarda ~1,4 s en devolver una
+     * página de cien piezas. En fila india, un archivo de 84.000 son veinte
+     * minutos de espera pura con el programa cruzado de brazos.
+     *
+     * Pero cuántas caben no se puede saber de antemano, y ahí estaba el error
+     * de las versiones anteriores de esto: un número fijo va lento contra un
+     * servidor holgado y atropella a uno estrecho. Lo decide `http.carriles()`,
+     * que sube de a uno tras una racha limpia y baja a la mitad al primer
+     * rechazo. Cada archivo encuentra su propio ritmo, y si el sitio cambia de
+     * humor a media tarde, el recorrido cambia con él. */
 
-        // Un tramo que falla no puede tumbar el recorrido entero: se anota y se
-        // sigue. La ventana no se marca como hecha, así que reanudar la reintenta.
-        match census::censar_ventana(http, &transporte, &auth, v, taxonomias).await {
+    let pendientes: Vec<(usize, census::Ventana)> = ventanas
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| !hechas.contains(&v.etiqueta))
+        .map(|(i, v)| (i, v.clone()))
+        .collect();
+
+    // Las ya hechas se cuentan de una vez, para que la barra no arranque en cero
+    // al reanudar un censo a medias.
+    let mut hechos = (total as usize - pendientes.len()) as u64;
+    avisar("censo", "", hechos, total);
+
+    let mut cola = pendientes.into_iter();
+    let mut vuelo: tokio::task::JoinSet<(usize, String, Result<census::Lote>)> =
+        tokio::task::JoinSet::new();
+
+    loop {
+        // Se rellenan los carriles libres.
+        while vuelo.len() < http.carriles() && !cancelar.load(Ordering::SeqCst) {
+            let Some((i, v)) = cola.next() else { break };
+            let (http, transporte, auth) = (http.clone(), transporte.clone(), auth.clone());
+            let taxonomias = taxonomias.to_vec();
+            vuelo.spawn(async move {
+                let r = census::censar_ventana(&http, &transporte, &auth, &v, &taxonomias).await;
+                (i, v.etiqueta, r)
+            });
+        }
+        let Some(acabada) = vuelo.join_next().await else { break };
+        let (_, etiqueta, resultado) = match acabada {
+            Ok(v) => v,
+            Err(_) => continue, // la tarea se canceló; la ventana queda sin marcar
+        };
+
+        match resultado {
             Ok(lote) => {
                 filas_totales += lote.filas.len() as i64;
+                // Las escrituras se hacen aquí, en un solo hilo: son rápidas y
+                // así no compiten entre ellas por la base.
                 db.guardar_censo(conn_id, &lote.filas)?;
                 db.guardar_anomalias(conn_id, &lote.anomalias)?;
-                db.marcar_ventana(conn_id, &v.etiqueta, lote.filas.len())?;
+                db.marcar_ventana(conn_id, &etiqueta, lote.filas.len())?;
             }
             Err(e) => {
-                fallidas.push(v.etiqueta.clone());
+                // Un tramo que falla no tumba el recorrido: se anota y se sigue.
+                // No se marca como hecho, así que reanudar lo reintenta.
+                fallidas.push(etiqueta.clone());
                 let _ = app.emit(
                     "censo:aviso",
-                    format!("El tramo {} no se pudo leer ({e}). Se reintentará al reanudar.", v.etiqueta),
+                    format!("El tramo {etiqueta} no se pudo leer ({e}). Se reintentará al reanudar."),
                 );
             }
         }
-        avisar("censo", &v.etiqueta, i as u64 + 1, total);
+        hechos += 1;
+        avisar("censo", &etiqueta, hechos, total);
+
+        if cancelar.load(Ordering::SeqCst) {
+            vuelo.abort_all();
+            return Ok(filas_totales);
+        }
     }
 
     if !fallidas.is_empty() {
@@ -673,12 +870,13 @@ async fn extraer(
     let faltan = db.lote_sin_contenido(lote_id, solo_calibracion)?;
     if !faltan.is_empty() {
         let transporte = db.transporte(conn_id)?;
+        let auth = db.credencial(conn_id)?;
         let total = faltan.len() as u64;
         let mut hechos = 0u64;
         avisar("descargando", 0, total, 0, 0, 0, 0, "");
         for trozo in faltan.chunks(50) {
             if cancelar.load(Ordering::SeqCst) { return Ok(0); }
-            let cuerpos = census::traer_contenido(http, &transporte, &Auth::None, trozo).await?;
+            let cuerpos = census::traer_contenido(http, &transporte, &auth, trozo).await?;
             let filas: Vec<(i64, String, contenido::Limpio)> = cuerpos
                 .into_iter()
                 .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })

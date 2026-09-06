@@ -158,13 +158,19 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
         <Metrica k="Modelo" v="GLiNER multilingüe · CPU" />
       </div>
 
+      {/* Reanudar un trabajo se nombra por el trabajo y por lo que queda, no
+          con un «continuar» que se confunde con avanzar de paso. */}
       <div style={{ display: "flex", gap: 18, alignItems: "center", marginTop: "var(--esp-8)", flexWrap: "wrap" }}>
         {listo ? (
           <Boton onClick={() => estado.avanzar(6, "grafo")}>Resolver entidades duplicadas</Boton>
         ) : corriendo ? (
           <Boton variante="secundario" onClick={() => cancelarExtraccion()}>Detener</Boton>
         ) : (
-          <Boton onClick={arrancar}>{hechos > 0 ? "Continuar la extracción" : "Extraer entidades"}</Boton>
+          <Boton onClick={arrancar}>
+            {hechos > 0
+              ? `Seguir extrayendo — faltan ${num(Math.max(0, total - hechos))}`
+              : "Extraer entidades"}
+          </Boton>
         )}
         {!corriendo && hechos > 0 && !listo && (
           <span className="t-menor" style={{ color: "var(--t3)" }}>

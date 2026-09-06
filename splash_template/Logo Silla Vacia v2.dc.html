@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<script>window.OM_SCENES = '[{"name":"Primera","dur":1.0,"desc":"La silla grande se arma de abajo hacia arriba: patas, asiento que aterriza y respaldo"},{"name":"Otras","dur":1.2,"desc":"Las otras dos sillas se arman igual y las tres se acercan hasta su sitio"},{"name":"Silencio","dur":0.8,"desc":"Las tres sillas quedan quietas en su lugar, vacías"}]';</script>
+<script>window.OM_PLAYBACK = '{"mode":"times","count":1}';</script>
+<script>window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "spread": 100,
+  "shadow": true,
+  "accent": "#338BFD",
+  "motionEditor": true
+}/*EDITMODE-END*/;</script>
+<style>
+  html, body { margin: 0; background: #f4f5f7; }
+  a { color: #338BFD; }
+  a:hover { color: #0B1F3A; }
+</style>
+</helmet>
+<x-import component-from-global-scope="LogoVideo2" from="./animations-v3.jsx ./tweaks-panel.jsx ./logo-scene-v2.jsx" hint-size="100%,100%"></x-import>
+</x-dc>
+</body>
+</html>
