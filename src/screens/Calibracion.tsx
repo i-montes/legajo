@@ -167,8 +167,11 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
                 <span style={{ fontSize: 14, fontWeight: 500 }}>Extraer también relaciones · GLiREL</span>
               </button>
               <p className="t-menor" style={{ color: "var(--t3)", margin: "8px 0 0 25px", lineHeight: 1.65, maxWidth: "56ch" }}>
-                Casi duplica el tiempo por artículo. Sin esto tendrás entidades pero no un grafo:
-                solo un índice de nombres.
+                <strong style={{ fontWeight: 600 }}>Casi cuadruplica</strong> el tiempo por
+                artículo: medido sobre un perfil de 39 párrafos, 8 s sin relaciones y 32 s con
+                ellas. Es el 73 % del cómputo de toda la extracción. Sin esto tendrás entidades
+                pero no un grafo: solo un índice de nombres. Se puede dejar para una segunda
+                pasada, que retoma sin repetir lo hecho.
               </p>
             </div>
           </div>

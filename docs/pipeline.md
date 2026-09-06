@@ -30,8 +30,8 @@ la de bi-encoder, que codifica las etiquetas aparte y sale a cuenta cuando hay
 muchas.
 
 **GLiREL** extrae relaciones sobre las entidades ya encontradas, también de
-vocabulario abierto. Casi duplica el tiempo por artículo. Sin él hay entidades
-pero no grafo: solo un índice de nombres.
+vocabulario abierto. Cuesta el 73 % del cómputo de toda la extracción —ver
+abajo—. Sin él hay entidades pero no grafo: solo un índice de nombres.
 
 ## Por qué se pide con el umbral más bajo
 
@@ -62,6 +62,40 @@ si los hay.
 Si llega a hacer falta, harían falta unos 80–100 artículos revisados para
 entrenar más 30 apartados que nunca entren: entrenar con todo dejaría sin vara
 para medir. Corrigiendo pre-anotado son unas dos horas.
+
+## Dónde se va el tiempo
+
+Medido sobre un perfil real de 39 párrafos y 12.348 tokens, en un Ryzen 7 5700X
+de 8 núcleos, torch en CPU:
+
+| | segundos | del total |
+|---|---:|---:|
+| spaCy, segmentar y tokenizar | 0,27 | 0,8 % |
+| GLiNER, entidades | 8,11 | 25,6 % |
+| **GLiREL, relaciones** | **23,27** | **73,5 %** |
+| | **31,66** | |
+
+Más 16–20 s de carga de los modelos, una vez por corrida.
+
+El coste de GLiREL es **fijo por llamada**, no proporcional al trabajo que hace:
+una pasada del transformador por párrafo, medio segundo, independientemente de
+cuántas entidades haya dentro. Eso se comprobó por eliminación, y conviene
+dejarlo escrito para que nadie vuelva a intentarlo:
+
+| Lo que se probó | Resultado |
+|---|---|
+| Procesar por lotes (`batch_predict_*`, ambos modelos) | **Peor.** En CPU se rellena hasta la secuencia más larga del lote, y ese relleno cuesta más de lo que se gana. GLiNER: 8,1 s → 11,1 s. GLiREL: 20,8 s → 34,9 s con lotes de 16. |
+| Pasarle a GLiREL menos entidades (subir el corte de 0,30 a 0,70) | **Casi nada.** De 2.156 pares a 918 —el 57 % menos— y de 21,0 s a 19,8 s: un 6 %. Los pares no son lo que cuesta. |
+| Pedirle menos predicados (13 → 4) | **13 % más rápido y la recuperación se hunde**: de 77 relaciones a 1. No compensa. |
+| Más hilos de torch (8 → 16) | **Peor**: 20,1 s → 24,7 s. Con 4 hilos, 28,2 s. Ocho, que son los núcleos físicos, es el óptimo. |
+| Agrupar párrafos en una sola llamada | **Sin ganancia** (17–21 s) y cambia lo que devuelve de forma imprevisible: 167 relaciones con uno por llamada, 432 con cinco, 54 con diez, donde ya se desborda la ventana del modelo. |
+| Varios procesos a la vez (4 × 2 hilos) | **Peor**: torch ya satura los ocho núcleos con una sola pasada, y cada proceso vuelve a pagar los 20 s de carga. |
+
+Conclusión: en CPU, esto cuesta lo que cuesta. La palanca que sí existe es
+**apagar las relaciones para una primera pasada** —de 32 s a 8 s por artículo— y
+volver después, que retoma sin repetir. La otra es tener paciencia con un número
+a la vista: la pantalla de extracción dice cuánto falta en minutos, no solo un
+porcentaje.
 
 ## Fallos de terceros que hubo que sortear
 

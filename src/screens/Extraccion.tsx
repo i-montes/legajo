@@ -10,6 +10,14 @@ import type { EstadoApp } from "../App";
 const num = (n: number) => n.toLocaleString("es-CO");
 const seg = (ms: number) => (ms / 1000).toFixed(1).replace(".", ",");
 
+const duracion = (s: number) => {
+  if (s < 90) return `${Math.round(s)} s`;
+  const min = Math.round(s / 60);
+  if (min < 90) return `${min} min`;
+  const h = Math.floor(min / 60);
+  return `${h} h ${min % 60} min`;
+};
+
 interface Linea { hora: string; texto: string }
 
 export default function Extraccion({ estado }: { estado: EstadoApp }) {
@@ -77,6 +85,13 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
   const universo = total;
   const horasArchivo = medio > 0 && universo > 0 ? (universo * medio) / 1000 / 3600 : null;
 
+  /* Lo que falta, en tiempo y no en porcentaje. Mirar una barra sin saber si
+     son dos minutos o dos horas es lo que hace que la gente cierre la ventana
+     a medias, y esto se guarda artículo a artículo justo para que no pase. */
+  const restante = corriendo && medio > 0 && total > hechos
+    ? ((total - hechos) * medio) / 1000
+    : null;
+
   if (total === 0 && hechos === 0) {
     return (
       <Lienzo>
@@ -135,6 +150,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
 
       <div style={{ display: "flex", gap: "var(--esp-11)", marginTop: "var(--esp-8)", flexWrap: "wrap" }}>
         <Metrica k="Velocidad medida" v={medio > 0 ? `${seg(medio)} s por artículo` : "—"} />
+        {restante != null && <Metrica k="Falta" v={duracion(restante)} />}
         <Metrica
           k="Archivo completo, a este ritmo"
           v={horasArchivo != null ? `${horasArchivo.toFixed(horasArchivo < 10 ? 1 : 0)} h de cómputo` : "—"}
