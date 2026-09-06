@@ -146,7 +146,6 @@ pub struct LoteRow {
 #[derive(Debug, Serialize)]
 pub struct FilaAnotable {
     pub wp_id: i64,
-    pub epoca: Option<String>,
     pub seccion: Option<String>,
     pub titulo: Option<String>,
     pub fecha: Option<String>,
@@ -1148,24 +1147,35 @@ impl Db {
 
     // ── Los artículos del lote ───────────────────────────────────────────
 
+    /// Los artículos que hay que revisar: el conjunto de calibración.
+    ///
+    /// No el lote entero. Un lote son miles de artículos y solo se descarga el
+    /// cuerpo de la docena que se revisa a mano; recorrerlos todos hacía que del
+    /// decimotercero en adelante la pantalla dijera «este artículo no tiene
+    /// cuerpo descargado», que era verdad y no tenía arreglo, porque nunca debió
+    /// haber pedido ese artículo.
     pub fn muestra(&self, lote_id: i64) -> Result<Vec<crate::db::FilaAnotable>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT s.wp_id, s.epoch, s.section, c.title, c.date, c.link,
+            // `epoch` y `section` eran del muestreo por estratos, que ya no
+            // existe: solo quedan en bases creadas por versiones anteriores, y
+            // en una instalación nueva esta consulta fallaba entera. La sección
+            // vive ahora en `seccion`, que sí está en el esquema declarado.
+            "SELECT s.wp_id, s.seccion, c.title, c.date, c.link,
                     a.text_plain, a.html_raw, a.word_count
              FROM lote_articulos s
              JOIN census c ON c.connection_id = (SELECT connection_id FROM lotes WHERE id = ?1)
                           AND c.wp_id = s.wp_id
              LEFT JOIN articles a ON a.connection_id = c.connection_id AND a.wp_id = s.wp_id
-             WHERE s.lote_id = ?1
+             WHERE s.lote_id = ?1 AND s.calibra = 1
              ORDER BY c.date, s.wp_id",
         )?;
         let v = st
             .query_map([lote_id], |r| {
                 Ok(FilaAnotable {
-                    wp_id: r.get(0)?, epoca: r.get(1)?, seccion: r.get(2)?,
-                    titulo: r.get(3)?, fecha: r.get(4)?, link: r.get(5)?,
-                    texto: r.get(6)?, html: r.get(7)?, palabras: r.get(8)?,
+                    wp_id: r.get(0)?, seccion: r.get(1)?,
+                    titulo: r.get(2)?, fecha: r.get(3)?, link: r.get(4)?,
+                    texto: r.get(5)?, html: r.get(6)?, palabras: r.get(7)?,
                 })
             })?
             .filter_map(|r| r.ok())
@@ -1507,7 +1517,8 @@ impl Db {
             "SELECT COUNT(*) FROM tiempos WHERE lote_id = ?1 AND cerrado = 1",
             [lote_id], |r| r.get(0))?;
         let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM lote_articulos WHERE lote_id = ?1", [lote_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM lote_articulos WHERE lote_id = ?1 AND calibra = 1",
+            [lote_id], |r| r.get(0))?;
         Ok((hechos, total))
     }
 
@@ -1853,15 +1864,30 @@ impl Db {
         Ok(v)
     }
 
-    pub fn avance_extraccion(&self, lote_id: i64) -> Result<(i64, i64)> {
+    /// Cuántos artículos lleva extraídos y cuántos son en total.
+    ///
+    /// `solo_calibracion` tiene que ser el mismo con el que corre la
+    /// extracción. Cuando no lo era, la barra se quedaba clavada: el
+    /// denominador contaba todos los artículos que tuvieran cuerpo descargado
+    /// —y el caché de cuerpos es del sitio, no del lote, así que arrastraba los
+    /// de lotes anteriores— mientras que la corrida procesaba solo los doce de
+    /// calibración. «12 de 21» y ahí se quedaba para siempre, sin nada roto que
+    /// arreglar porque nunca hubo un artículo 13 que procesar.
+    ///
+    /// El total tampoco puede exigir cuerpo descargado: la extracción los
+    /// descarga sobre la marcha, así que contar solo los que ya están haría que
+    /// la barra creciera y menguara al mismo tiempo.
+    pub fn avance_extraccion(&self, lote_id: i64, solo_calibracion: bool) -> Result<(i64, i64)> {
         let conn = self.conn.lock().unwrap();
+        let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
         let hechos: i64 = conn.query_row(
-            "SELECT COUNT(DISTINCT wp_id) FROM extraidas WHERE lote_id = ?1",
+            &format!(
+                "SELECT COUNT(DISTINCT e.wp_id) FROM extraidas e
+                 JOIN lote_articulos s ON s.lote_id = e.lote_id AND s.wp_id = e.wp_id
+                 WHERE e.lote_id = ?1 {filtro}"),
             [lote_id], |r| r.get(0))?;
         let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM lote_articulos s JOIN lotes d ON d.id = s.lote_id
-             JOIN articles a ON a.connection_id = d.connection_id AND a.wp_id = s.wp_id
-             WHERE s.lote_id = ?1 AND a.text_plain IS NOT NULL AND a.text_plain <> ''",
+            &format!("SELECT COUNT(*) FROM lote_articulos s WHERE s.lote_id = ?1 {filtro}"),
             [lote_id], |r| r.get(0))?;
         Ok((hechos, total))
     }
@@ -1931,7 +1957,7 @@ impl Db {
             "SELECT s.wp_id FROM lote_articulos s
              JOIN lotes d ON d.id = s.lote_id
              JOIN census c ON c.connection_id = d.connection_id AND c.wp_id = s.wp_id
-             WHERE s.lote_id = ?1
+             WHERE s.lote_id = ?1 AND s.calibra = 1
                AND NOT EXISTS (SELECT 1 FROM tiempos t
                                WHERE t.lote_id = s.lote_id AND t.wp_id = s.wp_id
                                  AND t.cerrado = 1)
@@ -2248,6 +2274,106 @@ mod tests {
     }
 
     #[test]
+    fn la_barra_de_extraccion_cuenta_lo_mismo_que_la_corrida() {
+        /* Se quedaba clavada en «12 de 21». El denominador contaba todos los
+           artículos con cuerpo descargado —y el caché de cuerpos es del sitio,
+           no del lote, así que arrastraba los de lotes anteriores— mientras que
+           la corrida de calibración procesaba solo los doce marcados. Nunca hubo
+           un artículo 13 que procesar: la barra no podía llegar al final. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-avance.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');",
+            )?;
+            for wp in 1..=50 {
+                c.execute(
+                    "INSERT INTO lote_articulos (lote_id, wp_id, calibra) VALUES (1, ?1, ?2)",
+                    rusqlite::params![wp, i64::from(wp <= 4)])?;
+                // Cuerpos de sobra, tambien de articulos que no son del lote:
+                // es lo que despistaba a la cuenta vieja.
+                c.execute(
+                    "INSERT INTO articles (connection_id, wp_id, html_raw, text_plain, word_count)
+                     VALUES (1, ?1, '<p>x</p>', 'x', 1)", [wp])?;
+            }
+            // Extraidos: los cuatro de calibracion y uno mas del resto.
+            for wp in [1, 2, 3, 4, 30] {
+                c.execute(
+                    "INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
+                     VALUES (1, ?1, 0, 0, 1, 'x', 'persona', 0.9)", [wp])?;
+            }
+            Ok(())
+        }).unwrap();
+
+        // En calibración: los cuatro marcados, y los cuatro hechos.
+        assert_eq!(db.avance_extraccion(1, true).unwrap(), (4, 4),
+                   "la calibración tiene que poder llegar al 100 %");
+
+        // En el lote entero: los cincuenta, con cinco hechos.
+        assert_eq!(db.avance_extraccion(1, false).unwrap(), (5, 50),
+                   "el total es el lote, no los cuerpos que haya en caché");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn la_revision_solo_recorre_lo_que_se_descargo() {
+        /* Un lote son miles de artículos y solo se baja el cuerpo de la docena
+           que se revisa a mano. La revisión recorría el lote entero, así que
+           del decimotercero en adelante enseñaba «este artículo no tiene cuerpo
+           descargado»: cierto, sin arreglo posible, y culpa de haber pedido un
+           artículo que nunca debió pedirse. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-revision.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');",
+            )?;
+            // Cien en el lote, tres para calibrar y con cuerpo.
+            for wp in 1..=100 {
+                c.execute(
+                    "INSERT INTO census (connection_id, wp_id, date, date_valid, title)
+                     VALUES (1, ?1, '2020-01-01', 1, 'titulo')", [wp])?;
+                c.execute(
+                    "INSERT INTO lote_articulos (lote_id, wp_id, calibra) VALUES (1, ?1, ?2)",
+                    rusqlite::params![wp, i64::from(wp <= 3)])?;
+                if wp <= 3 {
+                    c.execute(
+                        "INSERT INTO articles (connection_id, wp_id, html_raw, text_plain, word_count)
+                         VALUES (1, ?1, '<p>x</p>', 'x', 1)", [wp])?;
+                }
+            }
+            Ok(())
+        }).unwrap();
+
+        let filas = db.muestra(1).unwrap();
+        assert_eq!(filas.len(), 3, "solo los de calibración, no los cien del lote");
+        assert!(
+            filas.iter().all(|f| f.texto.as_deref().unwrap_or("").is_empty() == false),
+            "todos los que se ofrecen a revisar tienen cuerpo"
+        );
+
+        // Y el avance cuenta sobre lo mismo: «1 de 100» daría una barra que
+        // nunca llega y un trabajo que parece cien veces mayor de lo que es.
+        let (hechos, total) = db.avance_anotacion(1).unwrap();
+        assert_eq!((hechos, total), (0, 3));
+
+        // La reanudación tampoco puede mandar a un artículo sin cuerpo.
+        let siguiente = db.siguiente_sin_cerrar(1).unwrap().unwrap();
+        assert!(siguiente <= 3, "reanudó en el artículo {siguiente}, que no está descargado");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn el_espejo_de_una_relacion_simetrica_no_llega_a_guardarse() {
         /* Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo
            hecho. Filtrarlo en el extractor no bastaba, porque una persona
@@ -2559,7 +2685,9 @@ mod tests {
                 "INSERT INTO lotes (connection_id, label) VALUES (?1,'d')",
                 [conn_id]).unwrap();
             for wp in [10, 11, 12] {
-                c.execute("INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, ?1)", [wp]).unwrap();
+                // Con `calibra = 1`: la revisión recorre el conjunto de
+                // calibración, que es lo único que se descarga.
+                c.execute("INSERT INTO lote_articulos (lote_id, wp_id, calibra) VALUES (1, ?1, 1)", [wp]).unwrap();
             }
         }
 

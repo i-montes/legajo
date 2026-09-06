@@ -83,7 +83,7 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
 
   useEffect(() => {
     if (loteId == null) return;
-    avanceExtraccion(loteId).then(([h]) => {
+    avanceExtraccion(loteId, true).then(([h]) => {
       setHechos(h);
       if (h > 0) setFase("revisar");
     }).catch(() => {});

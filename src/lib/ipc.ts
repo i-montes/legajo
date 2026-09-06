@@ -92,8 +92,8 @@ export const iniciarExtraccion = (
 export const cancelarExtraccion = () => invoke<void>("cancelar_extraccion");
 export const extrayendo = () => invoke<boolean>("extrayendo");
 
-export const avanceExtraccion = (loteId: number) =>
-  invoke<[number, number]>("avance_extraccion", { loteId });
+export const avanceExtraccion = (loteId: number, soloCalibracion: boolean) =>
+  invoke<[number, number]>("avance_extraccion", { loteId, soloCalibracion });
 
 export const alProgresoExtraccion = (cb: (p: ProgresoExtraccion) => void): Promise<UnlistenFn> =>
   listen<ProgresoExtraccion>("extraccion:progreso", (e) => cb(e.payload));

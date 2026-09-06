@@ -36,7 +36,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
 
   useEffect(() => {
     if (loteId == null) return;
-    avanceExtraccion(loteId).then(([h, t]) => { setHechos(h); setTotal(t); });
+    avanceExtraccion(loteId, false).then(([h, t]) => { setHechos(h); setTotal(t); });
     consultarExtrayendo().then(setCorriendo);
   }, [loteId]);
 
@@ -59,7 +59,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
       setProg(null);
       setError(f.error);
       anotar(f.cancelado ? "detenido por el usuario" : f.error ? `error: ${f.error}` : "extracción terminada");
-      if (loteId != null) avanceExtraccion(loteId).then(([h, t]) => { setHechos(h); setTotal(t); });
+      if (loteId != null) avanceExtraccion(loteId, false).then(([h, t]) => { setHechos(h); setTotal(t); });
     });
     return () => { un1.then((u) => u()); un2.then((u) => u()); };
   }, [loteId]);
@@ -95,10 +95,10 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
   if (total === 0 && hechos === 0) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 6 · Extracción automática</Rotulo>
+        <Rotulo style={{ marginBottom: 12 }}>Paso 7 · Extracción</Rotulo>
         <h1 className="t-display" style={{ margin: "0 0 14px" }}>No hay nada que extraer todavía</h1>
         <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-8)", maxWidth: "52ch" }}>
-          La extracción corre sobre los artículos de la muestra que ya tienen el cuerpo descargado.
+          La extracción recorre el lote entero. Los cuerpos se descargan sobre la marcha.
           Vuelve al muestreo y termina la descarga.
         </p>
         <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al muestreo</Boton>
@@ -108,14 +108,14 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo>
-      <Rotulo style={{ marginBottom: 12 }}>Paso 6 · Extracción automática</Rotulo>
+      <Rotulo style={{ marginBottom: 12 }}>Paso 7 · Extracción</Rotulo>
       <h1 className="t-display" style={{ margin: "0 0 14px" }}>
-        {listo ? "Extracción terminada" : corriendo ? "Extrayendo entidades" : "Pasar el modelo por la muestra"}
+        {listo ? "Extracción terminada" : corriendo ? "Extrayendo entidades" : "Soltar el modelo sobre el lote"}
       </h1>
       <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-11)", maxWidth: "58ch" }}>
-        El modelo recorre los {num(total)} artículos de la muestra y propone entidades. Corre sobre la
-        muestra y no sobre el archivo entero a propósito: lo que hay que medir es cómo se porta frente
-        a lo que anotaste tú, y eso solo puede medirse donde hay anotación.
+        El modelo recorre los {num(total)} artículos del lote con los umbrales que salieron de tu
+        revisión. Ya no hay nada que decidir: esto corre solo y se puede dejar. Cada artículo se
+        guarda al terminarlo, así que detener no pierde lo hecho y reanudar no lo repite.
       </p>
 
       {error && (
@@ -143,7 +143,12 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
           {pct.toFixed(0)} %
         </span>
         <span className="t-menor" style={{ color: "var(--t3)" }}>
-          {num(hechos)} de {num(total)} artículos · {num(entidades)} entidades propuestas
+          {/* Las entidades se cuentan desde que se abrió la pantalla, no desde
+              el principio del lote: decir «0 propuestas» sobre una extracción
+              que ya guardó miles, solo porque la ventana se acaba de abrir,
+              parece que no hubiera funcionado. */}
+          {num(hechos)} de {num(total)} artículos
+          {entidades > 0 ? ` · ${num(entidades)} entidades en esta sesión` : ""}
         </span>
       </div>
       <Barra pct={pct} alto={4} />

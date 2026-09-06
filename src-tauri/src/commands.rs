@@ -824,9 +824,13 @@ pub fn extrayendo(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
-pub async fn avance_extraccion(state: State<'_, AppState>, lote_id: i64) -> Result<(i64, i64)> {
+pub async fn avance_extraccion(
+    state: State<'_, AppState>,
+    lote_id: i64,
+    solo_calibracion: bool,
+) -> Result<(i64, i64)> {
     let db = state.db.clone();
-    en_hilo(move || db.avance_extraccion(lote_id)).await
+    en_hilo(move || db.avance_extraccion(lote_id, solo_calibracion)).await
 }
 
 #[derive(Clone, Serialize)]

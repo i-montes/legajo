@@ -585,11 +585,24 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             </h1>
 
             {sinCuerpo ? (
-              <div style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "12px 15px", background: "var(--advertencia-fondo)", borderRadius: 8 }}>
-                <Glifo estado="advertencia" size={11} />
-                <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.65 }}>
-                  Este artículo no tiene cuerpo descargado. Vuelve al muestreo y termina la descarga.
-                </span>
+              /* Ya no debería pasar: la revisión solo recorre el conjunto de
+                 calibración, y la extracción descarga su cuerpo antes de
+                 empezar. Si pasa, es que la descarga de este artículo falló, y
+                 lo que hay que hacer es repetir la extracción — no volver a un
+                 paso que ya no existe, que es lo que decía este aviso. */
+              <div style={{ padding: "12px 15px", background: "var(--advertencia-fondo)", borderRadius: 8 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline", marginBottom: 10 }}>
+                  <Glifo estado="advertencia" size={11} />
+                  <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.65 }}>
+                    El cuerpo de este artículo no llegó a descargarse. Vuelve a la calibración
+                    y lanza la extracción otra vez: recoge lo que faltó sin repetir lo hecho.
+                  </span>
+                </div>
+                <div style={{ paddingLeft: 21 }}>
+                  <Boton variante="secundario" onClick={() => estado.avanzar(4, "calibracion")}>
+                    Ir a la calibración
+                  </Boton>
+                </div>
               </div>
             ) : crudo ? (
               <pre className="t-mono" style={{ whiteSpace: "pre-wrap", background: "var(--hundida)", padding: "var(--esp-4)", borderRadius: 8, color: "var(--t2)", overflowX: "auto" }}>

@@ -163,7 +163,6 @@ export interface Sesgo { etiqueta: string; archivo_pct: number; muestra_pct: num
 
 export interface FilaAnotable {
   wp_id: number;
-  epoca: string | null;
   seccion: string | null;
   titulo: string | null;
   fecha: string | null;
