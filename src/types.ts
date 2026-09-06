@@ -131,36 +131,9 @@ export interface FinCenso {
 
 // ── Muestreo (core/src/muestreo.rs) ─────────────────────────────────────
 
-export interface Epoca { etiqueta: string; desde: number; hasta: number }
-
-export interface Diseno {
-  n: number;
-  semilla: string;
-  epocas: Epoca[];
-  excluir_terminos: number[];
-  excluir_sin_fecha: boolean;
-  taxonomia: string | null;
-  equilibrar_epocas: boolean;
-}
-
-export interface Celda {
-  epoca: string;
-  seccion: string;
-  seccion_id: number;
-  universo: number;
-  asignado: number;
-}
 
 export interface Sesgo { etiqueta: string; archivo_pct: number; muestra_pct: number }
 
-export interface Plan {
-  celdas: Celda[];
-  universo: number;
-  asignado: number;
-  avisos: string[];
-  sesgo_epoca: Sesgo[];
-  sesgo_seccion: Sesgo[];
-}
 
 export interface FilaAnotable {
   wp_id: number;
@@ -214,95 +187,159 @@ export interface Caso {
   b: Candidata;
 }
 
-export interface Tiempos {
-  articulos: number;
-  mediana_seg: number;
-  p90_seg: number;
-  primeros_seg: number | null;
-  ultimos_seg: number | null;
-}
 
-export interface Proyeccion {
-  min_por_100: number;
-  min_por_100_maduro: number | null;
-  universo: number;
-  horas_totales: number;
-  horas_totales_maduro: number | null;
-}
 
 export interface DensidadTipo { tipo: string; menciones: number; por_articulo: number }
 export interface TramoFrecuencia { etiqueta: string; entidades: number; pct: number }
 
-export interface Reporte {
-  anotados: number;
-  muestra: number;
-  universo: number;
-  tiempos: Tiempos | null;
-  proyeccion: Proyeccion | null;
-  entidades_por_articulo: number;
-  densidad: DensidadTipo[];
-  curva: TramoFrecuencia[];
-  entidades_distintas: number;
-  resueltos: number;
-  pospuestos: number;
-}
 
-export interface Puerta {
-  horas_necesarias: number;
-  horas_disponibles: number;
-  cabe: boolean;
-  alcance_viable: number;
-  pct_archivo: number;
-}
 
 // ── Extracción y evaluación ──────────────────────────────────────────────
 
 export interface ProgresoExtraccion {
-  fase: "arrancando" | "cargando" | "cargado" | "extrayendo";
+  fase: "descargando" | "arrancando" | "cargando" | "cargado" | "extrayendo";
   hechos: number;
   total: number;
   wp_id: number;
   entidades: number;
+  relaciones: number;
   ms: number;
   detalle: string;
 }
 
-export interface Marcador {
-  aciertos: number;
-  falsos_positivos: number;
-  falsos_negativos: number;
-  precision: number;
-  cobertura: number;
-  f1: number;
-}
 
-export interface MarcadorTipo {
-  tipo: string;
-  estricto: Marcador;
-  laxo: Marcador;
-  anotadas: number;
-  extraidas: number;
-}
 
-export interface Evaluacion {
-  articulos: number;
-  global_estricto: Marcador;
-  global_laxo: Marcador;
-  por_tipo: MarcadorTipo[];
-  ejemplos_fp: [string, string][];
-  ejemplos_fn: [string, string][];
-}
 
 export interface SesionRecuperada {
   connection_id: number | null;
   paso: string;
   progreso: number;
   taxonomia: string | null;
-  design_id: number | null;
+  lote_id: number | null;
   etiqueta: string | null;
   sitio: Discovery | null;
 }
 
 export type Paso =
-  | "conexion" | "perfil" | "sanidad" | "muestreo"
-  | "anotacion" | "extraccion" | "resolucion" | "reporte" | "fundamentos";
+  | "conexion" | "perfil" | "sanidad" | "alcance"
+  | "calibracion" | "revision" | "extraccion" | "grafo" | "fundamentos";
+
+
+// ── Alcance y lotes (core/src/alcance.rs) ────────────────────────────────
+
+export interface NodoCategoria {
+  term_id: number;
+  nombre: string;
+  slug: string;
+  parent: number;
+  /** Artículos con este término exacto. */
+  propios: number;
+  /** Distintos en todo el subárbol: lo que se procesaría al elegirlo. */
+  total: number;
+  hijos: NodoCategoria[];
+}
+
+export interface ArbolCategorias {
+  taxonomia: string;
+  raices: NodoCategoria[];
+  censado: number;
+  sin_fecha: number;
+  anio_min: number | null;
+  anio_max: number | null;
+}
+
+export interface Alcance {
+  taxonomia: string;
+  terminos: number[];
+  desde_anio: number | null;
+  hasta_anio: number | null;
+  incluir_sin_fecha: boolean;
+}
+
+export interface Estimacion {
+  articulos: number;
+  terminos_expandidos: number[];
+  segundos_cpu: number;
+  por_descargar: number;
+}
+
+export interface LoteRow {
+  id: number;
+  etiqueta: string;
+  taxonomia: string | null;
+  creado: string;
+  articulos: number;
+  calibrar: number;
+  extraidos: number;
+  calibrado: boolean;
+}
+
+export interface Modelos {
+  gliner: string;
+  spacy: string;
+  glirel: string | null;
+  relaciones: boolean;
+}
+
+export interface OpcionModelo { id: string; nombre: string; nota: string }
+export interface CatalogoModelos {
+  gliner: OpcionModelo[];
+  spacy: OpcionModelo[];
+  glirel: OpcionModelo[];
+}
+
+// ── Calibración (core/src/calibracion.rs) ────────────────────────────────
+
+export interface Calibracion {
+  umbrales: Record<string, number>;
+  bloqueadas: string[];
+  diccionario: [string, string][];
+}
+
+export interface MarcadorCalibracion {
+  tipo: string;
+  umbral: number;
+  antes_f1: number;
+  despues_f1: number;
+  propuestas: number;
+  aceptadas: number;
+  rechazadas: number;
+  anadidas: number;
+}
+
+export interface ResultadoCalibracion {
+  articulos: number;
+  calibracion: Calibracion;
+  por_tipo: MarcadorCalibracion[];
+  antes_f1: number;
+  despues_f1: number;
+  rechazos_frecuentes: [string, string, number][];
+}
+
+// ── Grafo ────────────────────────────────────────────────────────────────
+
+export interface NodoGrafo {
+  tipo: string;
+  texto: string;
+  menciones: number;
+  articulos: number;
+  /** La confirmó una persona; el resto lo propuso el modelo. */
+  revisada: boolean;
+}
+
+export interface AristaGrafo {
+  a: string;
+  b: string;
+  predicado: string;
+  articulos: number;
+  revisada: boolean;
+}
+
+export interface ResumenGrafo {
+  articulos: number;
+  procesados: number;
+  revisados: number;
+  entidades_distintas: number;
+  entidades_una_vez: number;
+  relaciones: number;
+}

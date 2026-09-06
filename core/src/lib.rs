@@ -4,17 +4,16 @@
 //! de sistema de ventanas, asi que `cargo test -p legajo-core` compila y corre
 //! sin webkit2gtk ni ninguna dependencia grafica.
 
+pub mod alcance;
+pub mod calibracion;
 pub mod census;
 pub mod contenido;
 pub mod db;
 pub mod discovery;
 pub mod error;
-pub mod evaluacion;
 pub mod extraccion;
 pub mod http;
-pub mod muestreo;
 pub mod perfil;
-pub mod reporte;
 pub mod resolucion;
 pub mod transport;
 

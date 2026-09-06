@@ -123,26 +123,26 @@ pub fn parecido(a: &str, b: &str) -> (f64, &'static str) {
 pub const UMBRAL: f64 = 0.4;
 
 /// Construye la cola de casos a partir de las menciones anotadas.
-pub fn casos(db: &Db, design_id: i64) -> Result<Vec<Caso>> {
+pub fn casos(db: &Db, lote_id: i64) -> Result<Vec<Caso>> {
     let filas: Vec<(String, String, i64, i64)> = db.con(|c| {
         let mut st = c.prepare(
             "SELECT texto, tipo, COUNT(*) AS menciones, COUNT(DISTINCT wp_id) AS arts
-             FROM anotaciones WHERE design_id = ?1
+             FROM anotaciones WHERE lote_id = ?1
              GROUP BY tipo, texto ORDER BY menciones DESC",
         )?;
         let v = st
-            .query_map([design_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)
     })?;
 
-    let decididas = decisiones(db, design_id)?;
+    let decididas = decisiones(db, lote_id)?;
     // Lo que la persona ya declaró igual mientras anotaba no vuelve a la cola:
     // preguntarle dos veces lo mismo es la forma más rápida de que deje de
     // mirar la cola.
     let ya_unidas: HashSet<String> = db
-        .alias_declarados(design_id)?
+        .alias_declarados(lote_id)?
         .into_iter()
         .map(|(_, a, b)| clave_par(&a, &b))
         .collect();
@@ -195,12 +195,12 @@ pub fn clave_par(a: &str, b: &str) -> String {
     if x <= y { format!("{x}|{y}") } else { format!("{y}|{x}") }
 }
 
-fn decisiones(db: &Db, design_id: i64) -> Result<HashSet<String>> {
+fn decisiones(db: &Db, lote_id: i64) -> Result<HashSet<String>> {
     db.con(|c| {
         let mut st = c.prepare(
-            "SELECT clave FROM resoluciones WHERE design_id = ?1 AND decision <> 'posponer'")?;
+            "SELECT clave FROM resoluciones WHERE lote_id = ?1 AND decision <> 'posponer'")?;
         let v = st
-            .query_map([design_id], |r| r.get::<_, String>(0))?
+            .query_map([lote_id], |r| r.get::<_, String>(0))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)

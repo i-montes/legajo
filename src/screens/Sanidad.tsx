@@ -40,7 +40,7 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
           El censo no encontró fechas dañadas, titulares repetidos ni artículos sin sección. Es un
           archivo inusualmente limpio: la muestra puede construirse sin reglas de exclusión.
         </p>
-        <Boton onClick={() => estado.avanzar(3, "muestreo")}>Configurar la muestra</Boton>
+        <Boton onClick={() => estado.avanzar(3, "alcance")}>Elegir el alcance</Boton>
       </Lienzo>
     );
   }
@@ -137,8 +137,8 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
       </div>
 
       <div style={{ marginTop: "var(--esp-11)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <Boton onClick={() => estado.avanzar(3, "muestreo")} disabled={!bloqueantesResueltos}>
-          Configurar la muestra
+        <Boton onClick={() => estado.avanzar(3, "alcance")} disabled={!bloqueantesResueltos}>
+          Elegir el alcance
         </Boton>
         <span className="t-menor" style={{ color: "var(--t3)", maxWidth: "44ch", lineHeight: 1.6 }}>
           {!bloqueantesResueltos

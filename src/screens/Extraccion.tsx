@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import {
   alFinExtraccion, alProgresoExtraccion, avanceExtraccion, cancelarExtraccion,
-  extrayendo as consultarExtrayendo, iniciarExtraccion, muestraActual,
+  extrayendo as consultarExtrayendo, iniciarExtraccion,
 } from "../lib/ipc";
 import type { ProgresoExtraccion } from "../types";
 import type { EstadoApp } from "../App";
@@ -13,8 +13,7 @@ const seg = (ms: number) => (ms / 1000).toFixed(1).replace(".", ",");
 interface Linea { hora: string; texto: string }
 
 export default function Extraccion({ estado }: { estado: EstadoApp }) {
-  const { conexionId, sitio } = estado;
-  const [designId, setDesignId] = useState<number | null>(null);
+  const { loteId } = estado;
   const [hechos, setHechos] = useState(0);
   const [total, setTotal] = useState(0);
   const [prog, setProg] = useState<ProgresoExtraccion | null>(null);
@@ -28,14 +27,10 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
     setLog((l) => [{ hora: new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }), texto }, ...l].slice(0, 12));
 
   useEffect(() => {
-    if (conexionId == null) return;
-    muestraActual(conexionId).then((m) => {
-      if (!m) return;
-      setDesignId(m[0]);
-      avanceExtraccion(m[0]).then(([h, t]) => { setHechos(h); setTotal(t); });
-    });
+    if (loteId == null) return;
+    avanceExtraccion(loteId).then(([h, t]) => { setHechos(h); setTotal(t); });
     consultarExtrayendo().then(setCorriendo);
-  }, [conexionId]);
+  }, [loteId]);
 
   useEffect(() => {
     const un1 = alProgresoExtraccion((p) => {
@@ -56,18 +51,18 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
       setProg(null);
       setError(f.error);
       anotar(f.cancelado ? "detenido por el usuario" : f.error ? `error: ${f.error}` : "extracción terminada");
-      if (designId != null) avanceExtraccion(designId).then(([h, t]) => { setHechos(h); setTotal(t); });
+      if (loteId != null) avanceExtraccion(loteId).then(([h, t]) => { setHechos(h); setTotal(t); });
     });
     return () => { un1.then((u) => u()); un2.then((u) => u()); };
-  }, [designId]);
+  }, [loteId]);
 
   async function arrancar() {
-    if (designId == null) return;
+    if (loteId == null) return;
     setError(null);
     setCorriendo(true);
     tiempos.current = [];
     try {
-      await iniciarExtraccion(designId, null, 0.5);
+      await iniciarExtraccion(loteId, null, false);
     } catch (e) {
       setError(String(e));
       setCorriendo(false);
@@ -79,7 +74,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
   const medio = tiempos.current.length
     ? tiempos.current.reduce((a, b) => a + b, 0) / tiempos.current.length
     : 0;
-  const universo = sitio?.capabilities.total_posts ?? 0;
+  const universo = total;
   const horasArchivo = medio > 0 && universo > 0 ? (universo * medio) / 1000 / 3600 : null;
 
   if (total === 0 && hechos === 0) {
@@ -91,7 +86,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
           La extracción corre sobre los artículos de la muestra que ya tienen el cuerpo descargado.
           Vuelve al muestreo y termina la descarga.
         </p>
-        <Boton onClick={() => estado.avanzar(3, "muestreo")}>Ir al muestreo</Boton>
+        <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al muestreo</Boton>
       </Lienzo>
     );
   }
@@ -149,7 +144,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
 
       <div style={{ display: "flex", gap: 18, alignItems: "center", marginTop: "var(--esp-8)", flexWrap: "wrap" }}>
         {listo ? (
-          <Boton onClick={() => estado.avanzar(6, "resolucion")}>Resolver entidades duplicadas</Boton>
+          <Boton onClick={() => estado.avanzar(6, "grafo")}>Resolver entidades duplicadas</Boton>
         ) : corriendo ? (
           <Boton variante="secundario" onClick={() => cancelarExtraccion()}>Detener</Boton>
         ) : (

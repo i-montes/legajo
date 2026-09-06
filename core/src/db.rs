@@ -15,7 +15,7 @@ pub struct Sesion {
     pub paso: String,
     pub progreso: i64,
     pub taxonomia: Option<String>,
-    pub design_id: Option<i64>,
+    pub lote_id: Option<i64>,
     /// El descubrimiento guardado, para no volver a sondear el sitio al abrir.
     pub discovery_json: Option<String>,
     pub etiqueta: Option<String>,
@@ -56,6 +56,47 @@ pub struct RelacionFila {
     pub a_mid: String,
     pub b_mid: String,
     pub predicado: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NodoGrafo {
+    pub tipo: String,
+    pub texto: String,
+    pub menciones: i64,
+    pub articulos: i64,
+    /// La confirmó una persona; el resto lo propuso el modelo.
+    pub revisada: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AristaGrafo {
+    pub a: String,
+    pub b: String,
+    pub predicado: String,
+    pub articulos: i64,
+    pub revisada: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResumenGrafo {
+    pub articulos: i64,
+    pub procesados: i64,
+    pub revisados: i64,
+    pub entidades_distintas: i64,
+    pub entidades_una_vez: i64,
+    pub relaciones: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoteRow {
+    pub id: i64,
+    pub etiqueta: String,
+    pub taxonomia: Option<String>,
+    pub creado: String,
+    pub articulos: i64,
+    pub calibrar: i64,
+    pub extraidos: i64,
+    pub calibrado: bool,
 }
 
 /// Una fila de la muestra con todo lo necesario para anotarla.
@@ -121,6 +162,140 @@ impl Db {
         if !existe {
             conn.execute(&format!("ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"), [])?;
         }
+        Ok(())
+    }
+
+    /// Renombra `design_id` a `lote_id` en las tablas que aún lo lleven.
+    ///
+    /// El paso dejó de llamarse «diseño de muestra» y pasó a ser «lote», y el
+    /// esquema declarado se renombró con él; pero `CREATE TABLE IF NOT EXISTS`
+    /// no toca una tabla que ya existe, así que cualquier base anterior seguía
+    /// con la columna vieja y toda consulta nueva fallaba contra ella. Renombrar
+    /// conserva las anotaciones, los tiempos y lo ya extraído.
+    fn renombrar_columna_de_lote(conn: &Sqlite) -> Result<()> {
+        for tabla in [
+            "lote_articulos", "anotaciones", "relaciones", "extraidas",
+            "relaciones_extraidas", "tiempos",
+        ] {
+            let existe: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [tabla], |r| r.get(0))?;
+            if existe == 0 {
+                continue;
+            }
+            let mut st = conn.prepare(&format!("PRAGMA table_info({tabla})"))?;
+            let columnas: Vec<String> = st
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(st);
+            if columnas.iter().any(|c| c == "design_id") && !columnas.iter().any(|c| c == "lote_id") {
+                conn.execute(
+                    &format!("ALTER TABLE {tabla} RENAME COLUMN design_id TO lote_id"), [])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reapunta a `lotes` las claves foráneas que aún nombran a `designs`.
+    ///
+    /// `ALTER TABLE … RENAME COLUMN` arregla el nombre de la columna pero deja
+    /// intacta la tabla a la que apunta, así que las anotaciones seguían
+    /// exigiendo una fila en `designs` que ya nadie escribe: cualquier registro
+    /// nuevo moría con «FOREIGN KEY constraint failed». SQLite tampoco sabe
+    /// alterar una restricción, de modo que hay que rehacer la tabla.
+    ///
+    /// La definición nueva se saca de la vieja cambiando solo el nombre
+    /// apuntado, en vez de repetir aquí el esquema: repetirlo garantizaría que
+    /// un día divergiera del declarado y nadie se enterase.
+    fn reapuntar_a_lotes(conn: &Sqlite) -> Result<()> {
+        let mut st = conn.prepare(
+            "SELECT name, sql FROM sqlite_master
+             WHERE type = 'table' AND sql LIKE '%REFERENCES designs%'")?;
+        let pendientes: Vec<(String, String)> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+
+        for (tabla, sql) in pendientes {
+            // Los índices se van con la tabla; hay que rehacerlos después.
+            let mut st = conn.prepare(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1
+                 AND sql IS NOT NULL")?;
+            let indices: Vec<String> = st
+                .query_map([&tabla], |r| r.get::<_, String>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(st);
+
+            let temporal = format!("{tabla}__reapuntada");
+            let nuevo = sql
+                .replace("REFERENCES designs", "REFERENCES lotes")
+                .replacen(&tabla, &temporal, 1);
+
+            conn.execute_batch("PRAGMA foreign_keys = OFF; BEGIN;")?;
+            let hecho = (|| -> Result<()> {
+                conn.execute_batch(&nuevo)?;
+                conn.execute(&format!("INSERT INTO {temporal} SELECT * FROM {tabla}"), [])?;
+                conn.execute(&format!("DROP TABLE {tabla}"), [])?;
+                conn.execute(&format!("ALTER TABLE {temporal} RENAME TO {tabla}"), [])?;
+                for i in &indices {
+                    conn.execute_batch(i)?;
+                }
+                Ok(())
+            })();
+            match hecho {
+                Ok(()) => conn.execute_batch("COMMIT; PRAGMA foreign_keys = ON;")?,
+                Err(e) => {
+                    conn.execute_batch("ROLLBACK; PRAGMA foreign_keys = ON;").ok();
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Rehace `lotes` sin las columnas del muestreo aleatorio.
+    ///
+    /// Solo actúa si siguen ahí, y conserva todas las filas: quien venga de una
+    /// versión anterior no pierde los lotes que ya tenía.
+    fn retirar_columnas_del_muestreo(conn: &Sqlite) -> Result<()> {
+        let mut st = conn.prepare("PRAGMA table_info(lotes)")?;
+        let sobra = st
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .any(|n| n == "seed" || n == "spec_json");
+        drop(st);
+        if !sobra {
+            return Ok(());
+        }
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = OFF;
+            BEGIN;
+            CREATE TABLE lotes_nueva (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                connection_id     INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                label             TEXT NOT NULL,
+                taxonomia         TEXT,
+                terminos_json     TEXT NOT NULL DEFAULT '[]',
+                desde_anio        INTEGER,
+                hasta_anio        INTEGER,
+                calibracion_json  TEXT,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO lotes_nueva
+                (id, connection_id, label, taxonomia, terminos_json,
+                 desde_anio, hasta_anio, calibracion_json, created_at)
+            SELECT id, connection_id, label, taxonomia, terminos_json,
+                   desde_anio, hasta_anio, calibracion_json, created_at FROM lotes;
+            DROP TABLE lotes;
+            ALTER TABLE lotes_nueva RENAME TO lotes;
+            COMMIT;
+            PRAGMA foreign_keys = ON;
+            "#,
+        )?;
         Ok(())
     }
 
@@ -215,23 +390,30 @@ impl Db {
                 detail         TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS designs (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                connection_id  INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
-                label          TEXT NOT NULL,
-                seed           INTEGER NOT NULL,
-                spec_json      TEXT NOT NULL,
-                created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+            -- Un lote es un trozo del archivo elegido para procesar: unas
+            -- categorias, opcionalmente un rango de anios. Sustituye al diseno
+            -- de muestra estadistica, que respondia a otra pregunta.
+            CREATE TABLE IF NOT EXISTS lotes (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                connection_id     INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                label             TEXT NOT NULL,
+                taxonomia         TEXT,
+                terminos_json     TEXT NOT NULL DEFAULT '[]',
+                desde_anio        INTEGER,
+                hasta_anio        INTEGER,
+                -- Lo aprendido corrigiendo: umbrales, bloqueos y diccionario.
+                calibracion_json  TEXT,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS sample (
-                design_id  INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS lote_articulos (
+                lote_id    INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 wp_id      INTEGER NOT NULL,
-                epoch      TEXT,
-                section    TEXT,
-                doc_type   TEXT,
-                phase      INTEGER NOT NULL DEFAULT 1,
-                PRIMARY KEY (design_id, wp_id)
+                seccion    TEXT,
+                -- Los primeros del lote se usan para calibrar antes de soltar
+                -- el extractor sobre el resto.
+                calibra    INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (lote_id, wp_id)
             );
 
             -- Se guarda el HTML crudo ademas del texto limpio: sin el, cambiar el
@@ -250,7 +432,7 @@ impl Db {
             -- parrafo del texto limpio: el unico anclaje estable que sobrevive
             -- a que el articulo se vuelva a maquetar en el sitio.
             CREATE TABLE IF NOT EXISTS anotaciones (
-                design_id  INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                lote_id  INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 wp_id      INTEGER NOT NULL,
                 mid        TEXT NOT NULL,
                 pi         INTEGER NOT NULL,
@@ -258,37 +440,37 @@ impl Db {
                 fin        INTEGER NOT NULL,
                 texto      TEXT NOT NULL,
                 tipo       TEXT NOT NULL,
-                PRIMARY KEY (design_id, wp_id, mid)
+                PRIMARY KEY (lote_id, wp_id, mid)
             );
-            CREATE INDEX IF NOT EXISTS anotaciones_art ON anotaciones(design_id, wp_id);
+            CREATE INDEX IF NOT EXISTS anotaciones_art ON anotaciones(lote_id, wp_id);
 
             CREATE TABLE IF NOT EXISTS relaciones (
-                design_id  INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                lote_id  INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 wp_id      INTEGER NOT NULL,
                 rid        TEXT NOT NULL,
                 a_mid      TEXT NOT NULL,
                 b_mid      TEXT NOT NULL,
                 predicado  TEXT NOT NULL,
-                PRIMARY KEY (design_id, wp_id, rid)
+                PRIMARY KEY (lote_id, wp_id, rid)
             );
 
             -- La medida que justifica toda la fase: cuanto cuesta de verdad
             -- anotar un articulo. Se guarda por articulo, no en agregado, para
             -- poder mirar la mediana y la curva de aprendizaje por separado.
             CREATE TABLE IF NOT EXISTS tiempos (
-                design_id   INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                lote_id   INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 wp_id       INTEGER NOT NULL,
                 segundos    INTEGER NOT NULL,
                 menciones   INTEGER NOT NULL DEFAULT 0,
                 orden       INTEGER NOT NULL DEFAULT 0,
                 cerrado_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (design_id, wp_id)
+                PRIMARY KEY (lote_id, wp_id)
             );
 
             -- Decisiones de resolucion. Se guarda el par, no la entidad
             -- fusionada: asi se puede rehacer el grafo si cambia el criterio.
             CREATE TABLE IF NOT EXISTS resoluciones (
-                design_id  INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                lote_id  INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 clave      TEXT NOT NULL,
                 a_nombre   TEXT NOT NULL,
                 b_nombre   TEXT NOT NULL,
@@ -296,14 +478,14 @@ impl Db {
                 decision   TEXT NOT NULL,
                 confianza  REAL NOT NULL DEFAULT 0,
                 decidido_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (design_id, clave)
+                PRIMARY KEY (lote_id, clave)
             );
 
             -- Lo que propuso el modelo. Mismas coordenadas que la anotacion
             -- manual (parrafo + desplazamiento), que es lo que permite
             -- compararlas sin aproximar nada.
             CREATE TABLE IF NOT EXISTS extraidas (
-                design_id  INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                lote_id  INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
                 wp_id      INTEGER NOT NULL,
                 pi         INTEGER NOT NULL,
                 ini        INTEGER NOT NULL,
@@ -311,9 +493,23 @@ impl Db {
                 texto      TEXT NOT NULL,
                 etiqueta   TEXT NOT NULL,
                 score      REAL NOT NULL DEFAULT 0,
-                PRIMARY KEY (design_id, wp_id, pi, ini, fin)
+                PRIMARY KEY (lote_id, wp_id, pi, ini, fin)
             );
-            CREATE INDEX IF NOT EXISTS extraidas_art ON extraidas(design_id, wp_id);
+            CREATE INDEX IF NOT EXISTS extraidas_art ON extraidas(lote_id, wp_id);
+
+            -- Relaciones que propuso el modelo, aparte de las humanas. Se
+            -- guardan por texto y no por identificador de marca porque el
+            -- extractor no conoce las marcas de nadie.
+            CREATE TABLE IF NOT EXISTS relaciones_extraidas (
+                lote_id    INTEGER NOT NULL REFERENCES lotes(id) ON DELETE CASCADE,
+                wp_id      INTEGER NOT NULL,
+                pi         INTEGER NOT NULL,
+                a          TEXT NOT NULL,
+                b          TEXT NOT NULL,
+                predicado  TEXT NOT NULL,
+                score      REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (lote_id, wp_id, pi, a, b, predicado)
+            );
 
             -- Dónde se quedó el usuario. Una sola fila: la sesión es una.
             --
@@ -327,7 +523,7 @@ impl Db {
                 paso           TEXT NOT NULL DEFAULT 'conexion',
                 progreso       INTEGER NOT NULL DEFAULT 0,
                 taxonomia      TEXT,
-                design_id      INTEGER,
+                lote_id      INTEGER,
                 guardado_at    TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -359,11 +555,33 @@ impl Db {
         // Yepes», «Yepes» y «el politico caldense» comparten grupo. Es verdad de
         // referencia para el paso 7, no una conjetura de la maquina.
         Self::asegurar_columna(&conn, "anotaciones", "grupo", "TEXT")?;
+        // Un articulo terminado y una medicion creible son cosas distintas.
+        // Borrar la medicion contaminada de un articulo lo devolvia a la cola
+        // como si no se hubiera anotado, y la reanudacion mandaba al principio.
+        Self::asegurar_columna(&conn, "tiempos", "valido", "INTEGER NOT NULL DEFAULT 1")?;
+        Self::asegurar_columna(&conn, "lote_articulos", "seccion", "TEXT")?;
+        Self::asegurar_columna(&conn, "lote_articulos", "calibra", "INTEGER NOT NULL DEFAULT 0")?;
+        for (t, c) in [("lotes", "taxonomia TEXT"), ("lotes", "terminos_json TEXT NOT NULL DEFAULT '[]'"),
+                       ("lotes", "desde_anio INTEGER"), ("lotes", "hasta_anio INTEGER"),
+                       ("lotes", "calibracion_json TEXT")] {
+            let (col, tipo) = c.split_once(' ').unwrap();
+            Self::asegurar_columna(&conn, t, col, tipo)?;
+        }
+
+        // `lotes` nació como `designs`, la tabla del muestreo aleatorio, con
+        // `seed` y `spec_json` obligatorias. Un lote ya no se sortea: se define
+        // por un recorte del árbol de categorías, así que esas dos columnas no
+        // tienen valor que darles y su NOT NULL rechazaba todo lote nuevo. SQLite
+        // no sabe relajar una restricción, de modo que hay que rehacer la tabla.
+        Self::renombrar_columna_de_lote(&conn)?;
+        Self::retirar_columnas_del_muestreo(&conn)?;
+        Self::reapuntar_a_lotes(&conn)?;
 
         // Los índices que dependen de esas columnas van al final, ya con la
         // certeza de que existen.
         conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS census_title_key ON census(connection_id, title_key);",
+            "CREATE INDEX IF NOT EXISTS census_title_key ON census(connection_id, title_key);
+             CREATE INDEX IF NOT EXISTS lote_art_cal ON lote_articulos(lote_id, calibra);",
         )?;
         Ok(())
     }
@@ -634,70 +852,105 @@ impl Db {
         Ok(it.filter_map(|r| r.ok()).collect())
     }
 
-    // ── Muestra ──────────────────────────────────────────────────────────
+    // ── Lotes ────────────────────────────────────────────────────────────
 
-    /// Guarda el diseño y su sorteo. Un diseño nuevo por cada sorteo: cambiar
-    /// la semilla o los criterios no debe pisar la muestra que ya se anotó.
-    pub fn guardar_muestra(
-        &self,
-        conn_id: i64,
-        etiqueta: &str,
-        spec: &crate::muestreo::Diseno,
-        filas: &[crate::muestreo::FilaMuestra],
+    /// Crea un lote y materializa sus artículos desde el censo.
+    ///
+    /// Los `n_calibrar` que se marcan para la corrección previa se reparten
+    /// entre secciones en vez de tomarse en bloque: revisar quince artículos
+    /// seguidos de la misma sección no enseñaría nada sobre las demás.
+    pub fn crear_lote(
+        &self, conn_id: i64, etiqueta: &str,
+        alcance: &crate::alcance::Alcance, consulta: &str, n_calibrar: i64,
     ) -> Result<i64> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO designs (connection_id, label, seed, spec_json) VALUES (?1,?2,?3,?4)",
+            "INSERT INTO lotes (connection_id, label, taxonomia, terminos_json,
+                                desde_anio, hasta_anio)
+             VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params![
-                conn_id, etiqueta,
-                crate::muestreo::semilla_num(&spec.semilla),
-                serde_json::to_string(spec)?
+                conn_id, etiqueta, alcance.taxonomia,
+                serde_json::to_string(&alcance.terminos)?,
+                alcance.desde_anio, alcance.hasta_anio
             ],
         )?;
-        let design_id = tx.last_insert_rowid();
-        {
-            let mut st = tx.prepare(
-                "INSERT INTO sample (design_id, wp_id, epoch, section, phase) VALUES (?1,?2,?3,?4,1)",
+        let lote_id = tx.last_insert_rowid();
+
+        tx.execute(
+            &format!(
+                "INSERT INTO lote_articulos (lote_id, wp_id, seccion)
+                 SELECT {lote_id}, q.wp_id, q.seccion FROM ({consulta}) q"),
+            [conn_id],
+        )?;
+
+        // Reparto del conjunto de calibración: uno por sección dando vueltas,
+        // hasta completar. Así entran todas las secciones representadas.
+        if n_calibrar > 0 {
+            tx.execute(
+                "UPDATE lote_articulos SET calibra = 1 WHERE lote_id = ?1 AND wp_id IN (
+                   SELECT wp_id FROM (
+                     SELECT wp_id, ROW_NUMBER() OVER (PARTITION BY seccion ORDER BY wp_id) AS puesto
+                     FROM lote_articulos WHERE lote_id = ?1
+                   ) ORDER BY puesto, wp_id LIMIT ?2)",
+                rusqlite::params![lote_id, n_calibrar],
             )?;
-            for f in filas {
-                st.execute(rusqlite::params![design_id, f.wp_id, f.epoca, f.seccion])?;
-            }
         }
         tx.commit()?;
-        Ok(design_id)
+        Ok(lote_id)
     }
 
-    pub fn ultimo_diseno(&self, conn_id: i64) -> Result<Option<(i64, String, i64)>> {
+    pub fn lotes(&self, conn_id: i64) -> Result<Vec<LoteRow>> {
         let conn = self.conn.lock().unwrap();
-        let r = conn.query_row(
-            "SELECT d.id, d.spec_json, (SELECT COUNT(*) FROM sample s WHERE s.design_id = d.id)
-             FROM designs d WHERE d.connection_id = ?1 ORDER BY d.id DESC LIMIT 1",
-            [conn_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        );
-        match r {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        let mut st = conn.prepare(
+            "SELECT l.id, l.label, l.taxonomia, l.created_at,
+                    (SELECT COUNT(*) FROM lote_articulos a WHERE a.lote_id = l.id),
+                    (SELECT COUNT(*) FROM lote_articulos a WHERE a.lote_id = l.id AND a.calibra = 1),
+                    (SELECT COUNT(DISTINCT e.wp_id) FROM extraidas e WHERE e.lote_id = l.id),
+                    l.calibracion_json IS NOT NULL
+             FROM lotes l WHERE l.connection_id = ?1 ORDER BY l.id DESC")?;
+        let v = st
+            .query_map([conn_id], |r| Ok(LoteRow {
+                id: r.get(0)?, etiqueta: r.get(1)?, taxonomia: r.get(2)?,
+                creado: r.get(3)?, articulos: r.get(4)?, calibrar: r.get(5)?,
+                extraidos: r.get(6)?, calibrado: r.get::<_, i64>(7)? != 0,
+            }))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
     }
 
-    /// La muestra con lo que hace falta para anotarla, en orden estable.
-    pub fn muestra(&self, design_id: i64) -> Result<Vec<crate::db::FilaAnotable>> {
+    pub fn guardar_calibracion(&self, lote_id: i64, cal: &crate::calibracion::Calibracion) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE lotes SET calibracion_json = ?2 WHERE id = ?1",
+                     rusqlite::params![lote_id, serde_json::to_string(cal)?])?;
+        Ok(())
+    }
+
+    pub fn calibracion(&self, lote_id: i64) -> Result<Option<crate::calibracion::Calibracion>> {
+        let conn = self.conn.lock().unwrap();
+        let j: Option<String> = conn
+            .query_row("SELECT calibracion_json FROM lotes WHERE id = ?1", [lote_id], |r| r.get(0))
+            .unwrap_or(None);
+        Ok(j.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    // ── Los artículos del lote ───────────────────────────────────────────
+
+    pub fn muestra(&self, lote_id: i64) -> Result<Vec<crate::db::FilaAnotable>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
             "SELECT s.wp_id, s.epoch, s.section, c.title, c.date, c.link,
                     a.text_plain, a.html_raw, a.word_count
-             FROM sample s
-             JOIN census c ON c.connection_id = (SELECT connection_id FROM designs WHERE id = ?1)
+             FROM lote_articulos s
+             JOIN census c ON c.connection_id = (SELECT connection_id FROM lotes WHERE id = ?1)
                           AND c.wp_id = s.wp_id
              LEFT JOIN articles a ON a.connection_id = c.connection_id AND a.wp_id = s.wp_id
-             WHERE s.design_id = ?1
+             WHERE s.lote_id = ?1
              ORDER BY c.date, s.wp_id",
         )?;
         let v = st
-            .query_map([design_id], |r| {
+            .query_map([lote_id], |r| {
                 Ok(FilaAnotable {
                     wp_id: r.get(0)?, epoca: r.get(1)?, seccion: r.get(2)?,
                     titulo: r.get(3)?, fecha: r.get(4)?, link: r.get(5)?,
@@ -710,17 +963,17 @@ impl Db {
     }
 
     /// Artículos de la muestra a los que todavía les falta el cuerpo.
-    pub fn muestra_sin_contenido(&self, design_id: i64) -> Result<Vec<i64>> {
+    pub fn muestra_sin_contenido(&self, lote_id: i64) -> Result<Vec<i64>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT s.wp_id FROM sample s
-             WHERE s.design_id = ?1 AND NOT EXISTS (
+            "SELECT s.wp_id FROM lote_articulos s
+             WHERE s.lote_id = ?1 AND NOT EXISTS (
                SELECT 1 FROM articles a
-               WHERE a.connection_id = (SELECT connection_id FROM designs WHERE id = ?1)
+               WHERE a.connection_id = (SELECT connection_id FROM lotes WHERE id = ?1)
                  AND a.wp_id = s.wp_id)",
         )?;
         let v = st
-            .query_map([design_id], |r| r.get::<_, i64>(0))?
+            .query_map([lote_id], |r| r.get::<_, i64>(0))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)
@@ -755,44 +1008,44 @@ impl Db {
     /// cambio: son decenas de filas y evita un estado a medias si algo falla.
     pub fn guardar_anotacion(
         &self,
-        design_id: i64,
+        lote_id: i64,
         wp_id: i64,
         menciones: &[Mencion],
         relaciones: &[RelacionFila],
     ) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM anotaciones WHERE design_id = ?1 AND wp_id = ?2",
-                   rusqlite::params![design_id, wp_id])?;
-        tx.execute("DELETE FROM relaciones WHERE design_id = ?1 AND wp_id = ?2",
-                   rusqlite::params![design_id, wp_id])?;
+        tx.execute("DELETE FROM anotaciones WHERE lote_id = ?1 AND wp_id = ?2",
+                   rusqlite::params![lote_id, wp_id])?;
+        tx.execute("DELETE FROM relaciones WHERE lote_id = ?1 AND wp_id = ?2",
+                   rusqlite::params![lote_id, wp_id])?;
         {
             let mut st = tx.prepare(
-                "INSERT INTO anotaciones (design_id, wp_id, mid, pi, ini, fin, texto, tipo, auto, grupo)
+                "INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo, auto, grupo)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
             for m in menciones {
                 st.execute(rusqlite::params![
-                    design_id, wp_id, m.mid, m.pi, m.ini, m.fin, m.texto, m.tipo,
+                    lote_id, wp_id, m.mid, m.pi, m.ini, m.fin, m.texto, m.tipo,
                     m.auto as i64, m.grupo])?;
             }
             let mut st = tx.prepare(
-                "INSERT INTO relaciones (design_id, wp_id, rid, a_mid, b_mid, predicado)
+                "INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado)
                  VALUES (?1,?2,?3,?4,?5,?6)")?;
             for r in relaciones {
-                st.execute(rusqlite::params![design_id, wp_id, r.rid, r.a_mid, r.b_mid, r.predicado])?;
+                st.execute(rusqlite::params![lote_id, wp_id, r.rid, r.a_mid, r.b_mid, r.predicado])?;
             }
         }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn anotacion(&self, design_id: i64, wp_id: i64) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
+    pub fn anotacion(&self, lote_id: i64, wp_id: i64) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
             "SELECT mid, pi, ini, fin, texto, tipo, auto, grupo FROM anotaciones
-             WHERE design_id = ?1 AND wp_id = ?2 ORDER BY pi, ini")?;
+             WHERE lote_id = ?1 AND wp_id = ?2 ORDER BY pi, ini")?;
         let ms: Vec<Mencion> = st
-            .query_map(rusqlite::params![design_id, wp_id], |r| Ok(Mencion {
+            .query_map(rusqlite::params![lote_id, wp_id], |r| Ok(Mencion {
                 mid: r.get(0)?, pi: r.get(1)?, ini: r.get(2)?, fin: r.get(3)?,
                 texto: r.get(4)?, tipo: r.get(5)?, auto: r.get::<_, i64>(6)? != 0,
                 grupo: r.get(7)?,
@@ -801,9 +1054,9 @@ impl Db {
             .collect();
         drop(st);
         let mut st = conn.prepare(
-            "SELECT rid, a_mid, b_mid, predicado FROM relaciones WHERE design_id = ?1 AND wp_id = ?2")?;
+            "SELECT rid, a_mid, b_mid, predicado FROM relaciones WHERE lote_id = ?1 AND wp_id = ?2")?;
         let rs: Vec<RelacionFila> = st
-            .query_map(rusqlite::params![design_id, wp_id], |r| Ok(RelacionFila {
+            .query_map(rusqlite::params![lote_id, wp_id], |r| Ok(RelacionFila {
                 rid: r.get(0)?, a_mid: r.get(1)?, b_mid: r.get(2)?, predicado: r.get(3)?,
             }))?
             .filter_map(|r| r.ok())
@@ -826,35 +1079,109 @@ impl Db {
     ///
     /// Es lo que el paso 7 tendria que haber deducido solo. Guardarlo permite
     /// medir cuanto acierta el emparejador automatico contra un criterio humano.
-    pub fn alias_declarados(&self, design_id: i64) -> Result<Vec<(String, String, String)>> {
+    /// Lo que el modelo propuso para un artículo, listo para corregir.
+    ///
+    /// Es el eslabón del que depende toda la promesa del paso: la persona no
+    /// marca desde una página en blanco, corrige. Se sirve ya filtrado por la
+    /// calibración vigente —umbral por tipo y lista de bloqueo— porque mostrar
+    /// lo que la calibración anterior ya descartó obligaría a rechazar dos veces
+    /// lo mismo.
+    ///
+    /// Las relaciones vienen por texto y no por identificador de marca, que es
+    /// como las guarda el extractor; se casan con las menciones aquí, y la que
+    /// no encuentre sus dos extremos se descarta en silencio: proponer una
+    /// relación cuyos extremos no están marcados no es corregible.
+    pub fn propuestas(&self, lote_id: i64, wp_id: i64) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
+        let cal = self.calibracion(lote_id)?.unwrap_or_default();
+        let bloqueadas: std::collections::HashSet<String> =
+            cal.bloqueadas.iter().map(|t| t.to_lowercase()).collect();
+
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT pi, ini, fin, texto, etiqueta, score FROM extraidas
+             WHERE lote_id = ?1 AND wp_id = ?2 ORDER BY pi, ini, fin")?;
+        let crudas: Vec<(i64, i64, i64, String, String, f64)> = st
+            .query_map(rusqlite::params![lote_id, wp_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+
+        let mut menciones: Vec<Mencion> = Vec::new();
+        for (pi, ini, fin, texto, etiqueta, score) in crudas {
+            let umbral = cal.umbrales.get(&etiqueta).copied().unwrap_or(0.50);
+            if score < umbral || bloqueadas.contains(&texto.to_lowercase()) {
+                continue;
+            }
+            menciones.push(Mencion {
+                mid: format!("m{pi}-{ini}-{fin}"),
+                pi, ini, fin, texto, tipo: etiqueta,
+                // Todo lo que llega del modelo entra marcado como asistido: lo
+                // que la persona toque deja de serlo, y esa diferencia es lo que
+                // permite decir después cuánto puso cada uno.
+                auto: true,
+                grupo: None,
+            });
+        }
+
+        let mut st = conn.prepare(
+            "SELECT pi, a, b, predicado FROM relaciones_extraidas
+             WHERE lote_id = ?1 AND wp_id = ?2 ORDER BY pi")?;
+        let crudas: Vec<(i64, String, String, String)> = st
+            .query_map(rusqlite::params![lote_id, wp_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+
+        let buscar = |pi: i64, texto: &str| -> Option<String> {
+            menciones.iter()
+                .find(|m| m.pi == pi && m.texto == texto)
+                .map(|m| m.mid.clone())
+        };
+        let mut relaciones = Vec::new();
+        for (pi, a, b, predicado) in crudas {
+            if let (Some(am), Some(bm)) = (buscar(pi, &a), buscar(pi, &b)) {
+                if am == bm { continue; }
+                let rid = format!("r{pi}-{am}-{bm}");
+                if relaciones.iter().any(|r: &RelacionFila| r.rid == rid) { continue; }
+                relaciones.push(RelacionFila { rid, a_mid: am, b_mid: bm, predicado });
+            }
+        }
+        Ok((menciones, relaciones))
+    }
+
+    pub fn alias_declarados(&self, lote_id: i64) -> Result<Vec<(String, String, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
             "SELECT DISTINCT a.tipo, a.texto, b.texto
              FROM anotaciones a JOIN anotaciones b
-               ON a.design_id = b.design_id AND a.grupo = b.grupo
-             WHERE a.design_id = ?1 AND a.grupo IS NOT NULL
+               ON a.lote_id = b.lote_id AND a.grupo = b.grupo
+             WHERE a.lote_id = ?1 AND a.grupo IS NOT NULL
                AND a.texto < b.texto",
         )?;
         let v = st
-            .query_map([design_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)
     }
 
-    pub fn lexico(&self, design_id: i64) -> Result<Vec<EntradaLexico>> {
+    pub fn lexico(&self, lote_id: i64) -> Result<Vec<EntradaLexico>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
             "SELECT a.texto, a.tipo, COUNT(DISTINCT a.wp_id) AS arts,
                     (SELECT COUNT(DISTINCT b.tipo) FROM anotaciones b
-                     WHERE b.design_id = a.design_id AND b.texto = a.texto) AS tipos
+                     WHERE b.lote_id = a.lote_id AND b.texto = a.texto) AS tipos
              FROM anotaciones a
-             WHERE a.design_id = ?1 AND LENGTH(a.texto) >= 3
+             WHERE a.lote_id = ?1 AND LENGTH(a.texto) >= 3
              GROUP BY a.texto, a.tipo
              ORDER BY LENGTH(a.texto) DESC",
         )?;
         let v = st
-            .query_map([design_id], |r| {
+            .query_map([lote_id], |r| {
                 Ok(EntradaLexico {
                     texto: r.get(0)?,
                     tipo: r.get(1)?,
@@ -868,37 +1195,39 @@ impl Db {
     }
 
     pub fn registrar_tiempo(
-        &self, design_id: i64, wp_id: i64, segundos: i64, menciones: i64, cerrado: bool,
+        &self, lote_id: i64, wp_id: i64, segundos: i64, menciones: i64, cerrado: bool,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let orden: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tiempos WHERE design_id = ?1 AND cerrado = 1",
-            [design_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM tiempos WHERE lote_id = ?1 AND cerrado = 1",
+            [lote_id], |r| r.get(0))?;
         conn.execute(
-            "INSERT INTO tiempos (design_id, wp_id, segundos, menciones, orden, cerrado)
+            "INSERT INTO tiempos (lote_id, wp_id, segundos, menciones, orden, cerrado)
              VALUES (?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(design_id, wp_id) DO UPDATE SET
+             ON CONFLICT(lote_id, wp_id) DO UPDATE SET
                segundos = excluded.segundos, menciones = excluded.menciones,
                -- Un artículo ya cerrado no vuelve a abrirse por un guardado
                -- periódico posterior, ni pierde su puesto en el orden.
                cerrado = MAX(tiempos.cerrado, excluded.cerrado),
                orden = CASE WHEN tiempos.cerrado = 1 THEN tiempos.orden ELSE excluded.orden END,
                cerrado_at = datetime('now')",
-            rusqlite::params![design_id, wp_id, segundos, menciones, orden, cerrado as i64],
+            rusqlite::params![lote_id, wp_id, segundos, menciones, orden, cerrado as i64],
         )?;
         Ok(())
     }
 
-    /// Borra la medición de un artículo.
+    /// Invalida la medición de un artículo sin deshacer su cierre.
     ///
     /// Una medición contaminada —la ventana abierta mientras se hacía otra
     /// cosa, o un artículo por el que se pasó de largo— es peor que ninguna:
-    /// entra en la mediana y desplaza la única cifra que la fase produce.
-    pub fn descartar_tiempo(&self, design_id: i64, wp_id: i64) -> Result<()> {
+    /// entra en la mediana y desplaza la única cifra que la fase produce. Pero
+    /// el artículo sigue anotado y terminado: borrar la fila entera lo devolvía
+    /// a la cola y mandaba la reanudación al principio de la muestra.
+    pub fn descartar_tiempo(&self, lote_id: i64, wp_id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM tiempos WHERE design_id = ?1 AND wp_id = ?2",
-            rusqlite::params![design_id, wp_id],
+            "UPDATE tiempos SET valido = 0 WHERE lote_id = ?1 AND wp_id = ?2",
+            rusqlite::params![lote_id, wp_id],
         )?;
         Ok(())
     }
@@ -907,94 +1236,191 @@ impl Db {
     ///
     /// Muy cortas: se pasó de largo sin anotar. Muy largas: la ventana quedó
     /// abierta. No se borran solas —eso lo decide quien anota— pero se señalan.
-    pub fn tiempos_dudosos(&self, design_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
+    pub fn tiempos_dudosos(&self, lote_id: i64) -> Result<Vec<(i64, i64, i64, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
             "SELECT t.wp_id, t.segundos, t.menciones, COALESCE(c.title, '')
              FROM tiempos t
-             JOIN designs d ON d.id = t.design_id
+             JOIN lotes d ON d.id = t.lote_id
              LEFT JOIN census c ON c.connection_id = d.connection_id AND c.wp_id = t.wp_id
-             WHERE t.design_id = ?1 AND t.cerrado = 1
+             WHERE t.lote_id = ?1 AND t.cerrado = 1
+               AND t.valido = 1
                AND (t.segundos < 20 OR t.segundos > 1800)
              ORDER BY t.segundos",
         )?;
         let v = st
-            .query_map([design_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)
     }
 
     /// Segundos ya invertidos en un artículo, para reanudar el cronómetro.
-    pub fn tiempo_de(&self, design_id: i64, wp_id: i64) -> Result<i64> {
+    pub fn tiempo_de(&self, lote_id: i64, wp_id: i64) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         Ok(conn
             .query_row(
-                "SELECT segundos FROM tiempos WHERE design_id = ?1 AND wp_id = ?2",
-                rusqlite::params![design_id, wp_id],
+                "SELECT segundos FROM tiempos WHERE lote_id = ?1 AND wp_id = ?2",
+                rusqlite::params![lote_id, wp_id],
                 |r| r.get(0),
             )
             .unwrap_or(0))
     }
 
     /// Cuantos articulos de la muestra llevan ya anotacion cerrada.
-    pub fn avance_anotacion(&self, design_id: i64) -> Result<(i64, i64)> {
+    pub fn avance_anotacion(&self, lote_id: i64) -> Result<(i64, i64)> {
         let conn = self.conn.lock().unwrap();
         let hechos: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tiempos WHERE design_id = ?1 AND cerrado = 1",
-            [design_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM tiempos WHERE lote_id = ?1 AND cerrado = 1",
+            [lote_id], |r| r.get(0))?;
         let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sample WHERE design_id = ?1", [design_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM lote_articulos WHERE lote_id = ?1", [lote_id], |r| r.get(0))?;
         Ok((hechos, total))
+    }
+
+    // ── Grafo ────────────────────────────────────────────────────────────
+
+    /// Las entidades del lote, uniendo lo extraido con lo revisado a mano.
+    ///
+    /// Se cuenta por articulos distintos y no por menciones: una entidad que
+    /// aparece cuarenta veces en un solo articulo pesa menos en el grafo que
+    /// una que aparece en cuarenta articulos.
+    pub fn grafo_entidades(&self, lote_id: i64, limite: i64) -> Result<Vec<NodoGrafo>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT tipo, texto, SUM(menciones), COUNT(DISTINCT wp_id), MAX(revisada) FROM (
+                 -- Cuando la persona declaró que varias marcas nombran a la
+                 -- misma entidad, el grafo la cuenta una vez y con el nombre
+                 -- más largo del grupo, que es casi siempre el completo:
+                 -- «Gustavo Petro» y no «Petro». Ignorar esa declaración sería
+                 -- tirar el único dato de identidad que hay verificado.
+                 SELECT a.tipo AS tipo,
+                        COALESCE((SELECT g.texto FROM anotaciones g
+                                  WHERE g.lote_id = a.lote_id AND g.grupo = a.grupo
+                                  ORDER BY LENGTH(g.texto) DESC, g.texto LIMIT 1),
+                                 a.texto) AS texto,
+                        COUNT(*) AS menciones,
+                        a.wp_id AS wp_id, 1 AS revisada
+                 FROM anotaciones a WHERE a.lote_id = ?1
+                 GROUP BY a.tipo, texto, a.wp_id
+                 UNION ALL
+                 SELECT e.etiqueta, e.texto, COUNT(*), e.wp_id, 0
+                 FROM extraidas e WHERE e.lote_id = ?1
+                   AND NOT EXISTS (SELECT 1 FROM anotaciones a2
+                                   WHERE a2.lote_id = e.lote_id AND a2.wp_id = e.wp_id)
+                 GROUP BY e.etiqueta, e.texto, e.wp_id
+             ) GROUP BY tipo, texto ORDER BY 4 DESC, 3 DESC LIMIT ?2")?;
+        let v = st
+            .query_map(rusqlite::params![lote_id, limite], |r| Ok(NodoGrafo {
+                tipo: r.get(0)?, texto: r.get(1)?, menciones: r.get(2)?,
+                articulos: r.get(3)?, revisada: r.get::<_, i64>(4)? != 0,
+            }))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    pub fn grafo_relaciones(&self, lote_id: i64, limite: i64) -> Result<Vec<AristaGrafo>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT a, b, predicado, COUNT(DISTINCT wp_id), MAX(revisada) FROM (
+                 SELECT ma.texto AS a, mb.texto AS b, r.predicado AS predicado,
+                        r.wp_id AS wp_id, 1 AS revisada
+                 FROM relaciones r
+                 JOIN anotaciones ma ON ma.lote_id = r.lote_id AND ma.wp_id = r.wp_id AND ma.mid = r.a_mid
+                 JOIN anotaciones mb ON mb.lote_id = r.lote_id AND mb.wp_id = r.wp_id AND mb.mid = r.b_mid
+                 WHERE r.lote_id = ?1
+                 UNION ALL
+                 SELECT x.a, x.b, x.predicado, x.wp_id, 0
+                 FROM relaciones_extraidas x WHERE x.lote_id = ?1
+                   AND NOT EXISTS (SELECT 1 FROM relaciones r2
+                                   WHERE r2.lote_id = x.lote_id AND r2.wp_id = x.wp_id)
+             ) WHERE a <> '' AND b <> ''
+             GROUP BY a, b, predicado ORDER BY 4 DESC LIMIT ?2")?;
+        let v = st
+            .query_map(rusqlite::params![lote_id, limite], |r| Ok(AristaGrafo {
+                a: r.get(0)?, b: r.get(1)?, predicado: r.get(2)?,
+                articulos: r.get(3)?, revisada: r.get::<_, i64>(4)? != 0,
+            }))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    /// Cifras de conjunto del lote.
+    pub fn grafo_resumen(&self, lote_id: i64) -> Result<ResumenGrafo> {
+        let conn = self.conn.lock().unwrap();
+        let uno = |sql: &str| -> i64 { conn.query_row(sql, [lote_id], |r| r.get(0)).unwrap_or(0) };
+        let distintas = uno(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT tipo, texto FROM (
+               SELECT tipo, texto FROM anotaciones WHERE lote_id = ?1
+               UNION SELECT etiqueta, texto FROM extraidas WHERE lote_id = ?1))");
+        let una_vez = uno(
+            "SELECT COUNT(*) FROM (
+               SELECT texto FROM (
+                 SELECT texto, wp_id FROM anotaciones WHERE lote_id = ?1
+                 UNION SELECT texto, wp_id FROM extraidas WHERE lote_id = ?1)
+               GROUP BY texto HAVING COUNT(DISTINCT wp_id) = 1)");
+        Ok(ResumenGrafo {
+            articulos: uno("SELECT COUNT(*) FROM lote_articulos WHERE lote_id = ?1"),
+            procesados: uno("SELECT COUNT(DISTINCT wp_id) FROM extraidas WHERE lote_id = ?1"),
+            revisados: uno("SELECT COUNT(DISTINCT wp_id) FROM anotaciones WHERE lote_id = ?1"),
+            entidades_distintas: distintas,
+            entidades_una_vez: una_vez,
+            relaciones: uno(
+                "SELECT COUNT(*) FROM (
+                   SELECT a, b, predicado FROM relaciones_extraidas WHERE lote_id = ?1
+                   UNION SELECT a_mid, b_mid, predicado FROM relaciones WHERE lote_id = ?1)"),
+        })
     }
 
     // ── Resolucion ───────────────────────────────────────────────────────
 
     pub fn decidir_resolucion(
-        &self, design_id: i64, clave: &str, a: &str, b: &str,
+        &self, lote_id: i64, clave: &str, a: &str, b: &str,
         tipo: &str, decision: &str, confianza: f64,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO resoluciones (design_id, clave, a_nombre, b_nombre, tipo, decision, confianza)
+            "INSERT INTO resoluciones (lote_id, clave, a_nombre, b_nombre, tipo, decision, confianza)
              VALUES (?1,?2,?3,?4,?5,?6,?7)
-             ON CONFLICT(design_id, clave) DO UPDATE SET
+             ON CONFLICT(lote_id, clave) DO UPDATE SET
                decision = excluded.decision, decidido_at = datetime('now')",
-            rusqlite::params![design_id, clave, a, b, tipo, decision, confianza],
+            rusqlite::params![lote_id, clave, a, b, tipo, decision, confianza],
         )?;
         Ok(())
     }
 
-    pub fn avance_resolucion(&self, design_id: i64) -> Result<(i64, i64)> {
+    pub fn avance_resolucion(&self, lote_id: i64) -> Result<(i64, i64)> {
         let conn = self.conn.lock().unwrap();
         let decididos: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM resoluciones WHERE design_id = ?1 AND decision <> 'posponer'",
-            [design_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM resoluciones WHERE lote_id = ?1 AND decision <> 'posponer'",
+            [lote_id], |r| r.get(0))?;
         let pospuestos: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM resoluciones WHERE design_id = ?1 AND decision = 'posponer'",
-            [design_id], |r| r.get(0))?;
+            "SELECT COUNT(*) FROM resoluciones WHERE lote_id = ?1 AND decision = 'posponer'",
+            [lote_id], |r| r.get(0))?;
         Ok((decididos, pospuestos))
     }
 
     // ── Extraccion ───────────────────────────────────────────────────────
 
     pub fn guardar_extraidas(
-        &self, design_id: i64, wp_id: i64,
+        &self, lote_id: i64, wp_id: i64,
         por_parrafo: &[Vec<crate::extraccion::Entidad>],
     ) -> Result<i64> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM extraidas WHERE design_id = ?1 AND wp_id = ?2",
-                   rusqlite::params![design_id, wp_id])?;
+        tx.execute("DELETE FROM extraidas WHERE lote_id = ?1 AND wp_id = ?2",
+                   rusqlite::params![lote_id, wp_id])?;
         let mut n = 0i64;
         {
             let mut st = tx.prepare(
-                "INSERT OR REPLACE INTO extraidas (design_id, wp_id, pi, ini, fin, texto, etiqueta, score)
+                "INSERT OR REPLACE INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")?;
             for (pi, grupo) in por_parrafo.iter().enumerate() {
                 for e in grupo {
                     st.execute(rusqlite::params![
-                        design_id, wp_id, pi as i64, e.inicio, e.fin, e.texto, e.etiqueta, e.score])?;
+                        lote_id, wp_id, pi as i64, e.inicio, e.fin, e.texto, e.etiqueta, e.score])?;
                     n += 1;
                 }
             }
@@ -1003,34 +1429,102 @@ impl Db {
         Ok(n)
     }
 
-    /// Articulos de la muestra con cuerpo descargado y sin extraer todavia.
-    pub fn pendientes_extraccion(&self, design_id: i64) -> Result<Vec<(i64, String)>> {
+    pub fn guardar_relaciones_extraidas(
+        &self, lote_id: i64, wp_id: i64,
+        por_parrafo: &[Vec<crate::extraccion::RelacionExtraida>],
+    ) -> Result<i64> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM relaciones_extraidas WHERE lote_id = ?1 AND wp_id = ?2",
+                   rusqlite::params![lote_id, wp_id])?;
+        let mut n = 0i64;
+        {
+            let mut st = tx.prepare(
+                "INSERT OR REPLACE INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
+            for (pi, grupo) in por_parrafo.iter().enumerate() {
+                for r in grupo {
+                    st.execute(rusqlite::params![lote_id, wp_id, pi as i64, r.a, r.b, r.predicado, r.score])?;
+                    n += 1;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Articulos del lote con cuerpo descargado y sin extraer todavia.
+    ///
+    /// `solo_calibracion` limita al conjunto que se revisa antes de soltar el
+    /// extractor sobre el resto.
+    pub fn pendientes_extraccion_lote(
+        &self, lote_id: i64, solo_calibracion: bool,
+    ) -> Result<Vec<(i64, String)>> {
         let conn = self.conn.lock().unwrap();
-        let mut st = conn.prepare(
-            "SELECT s.wp_id, a.text_plain FROM sample s
-             JOIN designs d ON d.id = s.design_id
+        let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
+        let mut st = conn.prepare(&format!(
+            "SELECT s.wp_id, a.text_plain FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
              JOIN articles a ON a.connection_id = d.connection_id AND a.wp_id = s.wp_id
-             WHERE s.design_id = ?1 AND a.text_plain IS NOT NULL AND a.text_plain <> ''
+             WHERE s.lote_id = ?1 {filtro}
+               AND a.text_plain IS NOT NULL AND a.text_plain <> ''
                AND NOT EXISTS (SELECT 1 FROM extraidas e
-                               WHERE e.design_id = s.design_id AND e.wp_id = s.wp_id)
-             ORDER BY s.wp_id")?;
+                               WHERE e.lote_id = s.lote_id AND e.wp_id = s.wp_id)
+             ORDER BY s.wp_id"))?;
         let v = st
-            .query_map([design_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?)))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(v)
     }
 
-    pub fn avance_extraccion(&self, design_id: i64) -> Result<(i64, i64)> {
+    /// Articulos del lote sin el cuerpo descargado todavia.
+    pub fn lote_sin_contenido(&self, lote_id: i64, solo_calibracion: bool) -> Result<Vec<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
+        let mut st = conn.prepare(&format!(
+            "SELECT s.wp_id FROM lote_articulos s JOIN lotes d ON d.id = s.lote_id
+             WHERE s.lote_id = ?1 {filtro} AND NOT EXISTS (
+               SELECT 1 FROM articles a
+               WHERE a.connection_id = d.connection_id AND a.wp_id = s.wp_id
+                 AND a.text_plain IS NOT NULL AND a.text_plain <> '')"))?;
+        let v = st.query_map([lote_id], |r| r.get::<_, i64>(0))?.filter_map(|r| r.ok()).collect();
+        Ok(v)
+    }
+
+    pub fn conexion_de_lote(&self, lote_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT connection_id FROM lotes WHERE id = ?1", [lote_id], |r| r.get(0))?)
+    }
+
+    /// Articulos de la muestra con cuerpo descargado y sin extraer todavia.
+    pub fn pendientes_extraccion(&self, lote_id: i64) -> Result<Vec<(i64, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT s.wp_id, a.text_plain FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
+             JOIN articles a ON a.connection_id = d.connection_id AND a.wp_id = s.wp_id
+             WHERE s.lote_id = ?1 AND a.text_plain IS NOT NULL AND a.text_plain <> ''
+               AND NOT EXISTS (SELECT 1 FROM extraidas e
+                               WHERE e.lote_id = s.lote_id AND e.wp_id = s.wp_id)
+             ORDER BY s.wp_id")?;
+        let v = st
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    pub fn avance_extraccion(&self, lote_id: i64) -> Result<(i64, i64)> {
         let conn = self.conn.lock().unwrap();
         let hechos: i64 = conn.query_row(
-            "SELECT COUNT(DISTINCT wp_id) FROM extraidas WHERE design_id = ?1",
-            [design_id], |r| r.get(0))?;
+            "SELECT COUNT(DISTINCT wp_id) FROM extraidas WHERE lote_id = ?1",
+            [lote_id], |r| r.get(0))?;
         let total: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sample s JOIN designs d ON d.id = s.design_id
+            "SELECT COUNT(*) FROM lote_articulos s JOIN lotes d ON d.id = s.lote_id
              JOIN articles a ON a.connection_id = d.connection_id AND a.wp_id = s.wp_id
-             WHERE s.design_id = ?1 AND a.text_plain IS NOT NULL AND a.text_plain <> ''",
-            [design_id], |r| r.get(0))?;
+             WHERE s.lote_id = ?1 AND a.text_plain IS NOT NULL AND a.text_plain <> ''",
+            [lote_id], |r| r.get(0))?;
         Ok((hechos, total))
     }
 
@@ -1038,17 +1532,17 @@ impl Db {
 
     pub fn guardar_sesion(
         &self, connection_id: Option<i64>, paso: &str, progreso: i64,
-        taxonomia: Option<&str>, design_id: Option<i64>,
+        taxonomia: Option<&str>, lote_id: Option<i64>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO sesion (id, connection_id, paso, progreso, taxonomia, design_id)
+            "INSERT INTO sesion (id, connection_id, paso, progreso, taxonomia, lote_id)
              VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                connection_id = excluded.connection_id, paso = excluded.paso,
                progreso = excluded.progreso, taxonomia = excluded.taxonomia,
-               design_id = excluded.design_id, guardado_at = datetime('now')",
-            rusqlite::params![connection_id, paso, progreso, taxonomia, design_id],
+               lote_id = excluded.lote_id, guardado_at = datetime('now')",
+            rusqlite::params![connection_id, paso, progreso, taxonomia, lote_id],
         )?;
         Ok(())
     }
@@ -1058,7 +1552,7 @@ impl Db {
     pub fn cargar_sesion(&self) -> Result<Option<Sesion>> {
         let conn = self.conn.lock().unwrap();
         let r = conn.query_row(
-            "SELECT s.connection_id, s.paso, s.progreso, s.taxonomia, s.design_id,
+            "SELECT s.connection_id, s.paso, s.progreso, s.taxonomia, s.lote_id,
                     c.discovery_json, c.label
              FROM sesion s LEFT JOIN connections c ON c.id = s.connection_id
              WHERE s.id = 1",
@@ -1069,7 +1563,7 @@ impl Db {
                     paso: r.get(1)?,
                     progreso: r.get(2)?,
                     taxonomia: r.get(3)?,
-                    design_id: r.get(4)?,
+                    lote_id: r.get(4)?,
                     discovery_json: r.get(5)?,
                     etiqueta: r.get(6)?,
                 })
@@ -1093,18 +1587,18 @@ impl Db {
     /// Reanudar en el índice cero obligaría a pasar de nuevo por todo lo ya
     /// anotado, y peor: el cronómetro volvería a contar tiempo sobre artículos
     /// ya medidos y estropearía la única cifra que la fase existe para producir.
-    pub fn siguiente_sin_cerrar(&self, design_id: i64) -> Result<Option<i64>> {
+    pub fn siguiente_sin_cerrar(&self, lote_id: i64) -> Result<Option<i64>> {
         let conn = self.conn.lock().unwrap();
         let r = conn.query_row(
-            "SELECT s.wp_id FROM sample s
-             JOIN designs d ON d.id = s.design_id
+            "SELECT s.wp_id FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
              JOIN census c ON c.connection_id = d.connection_id AND c.wp_id = s.wp_id
-             WHERE s.design_id = ?1
+             WHERE s.lote_id = ?1
                AND NOT EXISTS (SELECT 1 FROM tiempos t
-                               WHERE t.design_id = s.design_id AND t.wp_id = s.wp_id
+                               WHERE t.lote_id = s.lote_id AND t.wp_id = s.wp_id
                                  AND t.cerrado = 1)
              ORDER BY c.date, s.wp_id LIMIT 1",
-            [design_id],
+            [lote_id],
             |r| r.get::<_, i64>(0),
         );
         match r {
@@ -1158,6 +1652,178 @@ mod tests {
 
         db.delete_connection(id).unwrap();
         assert!(db.list_connections().unwrap().is_empty());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn el_grafo_cuenta_una_vez_lo_que_la_persona_declaro_igual() {
+        /* Marcar «Gustavo Petro», «Petro» y «el presidente» como la misma
+           entidad es de lo más laborioso que hace la persona en la revisión.
+           Si el grafo los pinta como tres nodos, ese trabajo no sirvió de nada. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-alias.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo, grupo) VALUES
+                   (1,100,'m1',0, 0,13,'Gustavo Petro','persona','g1'),
+                   (1,100,'m2',1, 0, 5,'Petro','persona','g1'),
+                   (1,101,'m3',0, 0,13,'el presidente','persona','g1'),
+                   (1,100,'m4',2, 0, 6,'Duque','persona',NULL);",
+            ).unwrap();
+        }
+
+        let nodos = db.grafo_entidades(1, 50).unwrap();
+        let personas: Vec<_> = nodos.iter().filter(|n| n.tipo == "persona").collect();
+        assert_eq!(personas.len(), 2, "el grupo debía colapsar en un nodo: {personas:?}");
+
+        let petro = personas.iter().find(|n| n.texto == "Gustavo Petro")
+            .expect("gana el nombre más largo del grupo");
+        assert_eq!(petro.menciones, 3, "las tres menciones son de la misma entidad");
+        assert_eq!(petro.articulos, 2, "y aparecen en dos artículos");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn lo_propuesto_llega_filtrado_por_la_calibracion() {
+        /* La promesa del paso es corregir, no marcar desde cero, y eso solo se
+           sostiene si lo que llega ya viene depurado: volver a rechazar lo que
+           la calibración anterior descartó convertiría la revisión en un bucle. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-propuestas.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, 100);
+                 INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score) VALUES
+                   (1,100,0, 0, 5,'Petro','persona',0.97),
+                   (1,100,0,10,17,'senador','persona',0.41),
+                   (1,100,0,20,28,'Congreso','lugar',0.88),
+                   (1,100,1, 0, 5,'Petro','persona',0.95);
+                 INSERT INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score) VALUES
+                   (1,100,0,'Petro','Congreso','trabaja en',0.7),
+                   (1,100,0,'Petro','senador','trabaja en',0.6);",
+            ).unwrap();
+        }
+
+        // Sin calibración: pasa lo que supere el corte por defecto.
+        let (m, r) = db.propuestas(1, 100).unwrap();
+        assert_eq!(m.len(), 3, "el senador de 0,41 no debía pasar: {m:?}");
+        assert!(m.iter().all(|x| x.auto), "todo lo del modelo entra como asistido");
+        assert_eq!(r.len(), 1, "la relación cuyo extremo se filtró no es corregible");
+        assert_eq!(r[0].predicado, "trabaja en");
+
+        // Con la calibración puesta: sube el corte de persona y se bloquea
+        // «Congreso», que ya se rechazó dos veces.
+        let cal = crate::calibracion::Calibracion {
+            umbrales: [("persona".to_string(), 0.96)].into_iter().collect(),
+            bloqueadas: vec!["congreso".into()],
+            diccionario: vec![],
+        };
+        db.guardar_calibracion(1, &cal).unwrap();
+        let (m, r) = db.propuestas(1, 100).unwrap();
+        assert_eq!(m.len(), 1, "solo el Petro de 0,97 supera el corte: {m:?}");
+        assert_eq!(m[0].pi, 0);
+        assert!(r.is_empty(), "sin los dos extremos no hay relación que corregir");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn migra_una_base_del_tiempo_en_que_el_lote_se_llamaba_diseno() {
+        /* El fallo real, en tres actos, contra una base con datos dentro:
+           el lote no se dejaba crear porque `seed` era obligatoria y ya nadie
+           la escribe; la extracción no encontraba `lote_id` porque la columna
+           seguía llamándose `design_id`; y renombrarla no bastaba, porque la
+           clave foránea seguía exigiendo una fila en `designs`, tabla que
+           quedó vacía. Cada acto se descubrió al chocar con el siguiente. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-designs.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Sqlite::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE connections (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL,
+                   resolved_origin TEXT NOT NULL UNIQUE, transport_json TEXT NOT NULL,
+                   transport_label TEXT NOT NULL, site_name TEXT,
+                   auth_method TEXT NOT NULL DEFAULT 'anonymous', discovery_json TEXT NOT NULL,
+                   total_posts INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                   last_used_at TEXT NOT NULL DEFAULT (datetime('now')));
+                 CREATE TABLE designs (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   connection_id INTEGER NOT NULL, label TEXT NOT NULL,
+                   seed INTEGER NOT NULL, spec_json TEXT NOT NULL,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now')));
+                 CREATE TABLE lotes (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   connection_id INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                   label TEXT NOT NULL, seed INTEGER NOT NULL, spec_json TEXT NOT NULL,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now')));
+                 CREATE TABLE anotaciones (
+                   design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+                   wp_id INTEGER NOT NULL, mid TEXT NOT NULL, pi INTEGER NOT NULL,
+                   ini INTEGER NOT NULL, fin INTEGER NOT NULL, texto TEXT NOT NULL,
+                   tipo TEXT NOT NULL, PRIMARY KEY (design_id, wp_id, mid));
+                 CREATE INDEX anotaciones_art ON anotaciones(design_id, wp_id);
+                 INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO designs (id, connection_id, label, seed, spec_json)
+                   VALUES (7, 1, 'lote viejo', 42, '{}');
+                 INSERT INTO lotes (id, connection_id, label, seed, spec_json)
+                   VALUES (7, 1, 'lote viejo', 42, '{}');
+                 INSERT INTO anotaciones (design_id, wp_id, mid, pi, ini, fin, texto, tipo)
+                   VALUES (7, 100, 'm1', 0, 0, 5, 'Petro', 'persona');",
+            ).unwrap();
+        }
+
+        let db = Db::open(&path).expect("la migración debe sobrevivir al esquema de designs");
+
+        // El trabajo anterior sigue ahí: migrar no puede costarle a nadie sus
+        // anotaciones.
+        let (menciones, _) = db.anotacion(7, 100).unwrap();
+        assert_eq!(menciones.len(), 1, "se perdió la anotación al migrar");
+        assert_eq!(menciones[0].texto, "Petro");
+
+        {
+            let conn = db.conn.lock().unwrap();
+            // La foránea apunta a `lotes`, no al cementerio de `designs`.
+            let mut st = conn.prepare("PRAGMA foreign_key_list(anotaciones)").unwrap();
+            let destinos: Vec<String> = st.query_map([], |r| r.get::<_, String>(2)).unwrap()
+                .filter_map(|r| r.ok()).collect();
+            assert_eq!(destinos, vec!["lotes".to_string()], "la foránea quedó apuntando mal");
+            drop(st);
+
+            // El índice sobrevive a rehacer la tabla.
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='anotaciones_art'",
+                [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 1, "el índice se perdió al rehacer la tabla");
+
+            // Y `lotes` ya no exige lo que nadie escribe.
+            let mut st = conn.prepare("PRAGMA table_info(lotes)").unwrap();
+            let cols: Vec<String> = st.query_map([], |r| r.get::<_, String>(1)).unwrap()
+                .filter_map(|r| r.ok()).collect();
+            assert!(!cols.contains(&"seed".to_string()), "sigue la columna del sorteo: {cols:?}");
+        }
+
+        // Un lote nuevo entra sin pelea, que es lo que fallaba.
+        let a = crate::alcance::Alcance {
+            taxonomia: "categories".into(), terminos: vec![],
+            desde_anio: None, hasta_anio: None, incluir_sin_fecha: false,
+        };
+        let (consulta, _) = crate::alcance::consulta(&a);
+        db.crear_lote(1, "lote nuevo", &a, &consulta, 0)
+            .expect("no se pudo crear un lote tras migrar");
 
         let _ = std::fs::remove_file(path);
     }
@@ -1236,10 +1902,10 @@ mod tests {
                     rusqlite::params![conn_id, wp, fecha]).unwrap();
             }
             c.execute(
-                "INSERT INTO designs (connection_id, label, seed, spec_json) VALUES (?1,'d',1,'{}')",
+                "INSERT INTO lotes (connection_id, label) VALUES (?1,'d')",
                 [conn_id]).unwrap();
             for wp in [10, 11, 12] {
-                c.execute("INSERT INTO sample (design_id, wp_id) VALUES (1, ?1)", [wp]).unwrap();
+                c.execute("INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, ?1)", [wp]).unwrap();
             }
         }
 
@@ -1282,7 +1948,7 @@ mod tests {
             .filter_map(|r| r.ok())
             .filter(|t| !t.starts_with("sqlite_"))
             .collect();
-        for esperada in ["anomalies", "articles", "census", "connections", "designs", "jobs", "sample"] {
+        for esperada in ["anomalies", "articles", "census", "connections", "lotes", "jobs", "lote_articulos"] {
             assert!(tablas.contains(&esperada.to_string()), "falta la tabla {esperada}: {tablas:?}");
         }
         drop(stmt);

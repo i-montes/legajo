@@ -24,6 +24,63 @@ pub struct Entidad {
     pub score: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelacionExtraida {
+    pub a: String,
+    pub b: String,
+    pub predicado: String,
+    pub score: f64,
+}
+
+/// Qué modelos usa el extractor. Se guarda con el lote: comparar dos corridas
+/// solo tiene sentido si se sabe con qué se hicieron.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Modelos {
+    pub gliner: String,
+    pub spacy: String,
+    pub glirel: Option<String>,
+    pub relaciones: bool,
+}
+
+impl Default for Modelos {
+    fn default() -> Self {
+        Self {
+            gliner: "urchade/gliner_multi-v2.1".into(),
+            spacy: "es_core_news_sm".into(),
+            glirel: Some("jackboyla/glirel-large-v0".into()),
+            relaciones: true,
+        }
+    }
+}
+
+/// Los modelos entre los que se puede elegir, con lo que cuesta cada uno.
+pub fn catalogo() -> Value {
+    json!({
+        "gliner": [
+            {"id": "urchade/gliner_multi-v2.1", "nombre": "GLiNER multilingüe v2.1",
+             "nota": "El caballo de batalla. Multilingüe, 209M, equilibrado."},
+            {"id": "urchade/gliner_multi_pii-v1", "nombre": "GLiNER multilingüe PII",
+             "nota": "Afinado para datos personales; útil si el foco son personas."},
+            {"id": "knowledgator/gliner-bi-large-v1.0", "nombre": "GLiNER bi-encoder grande",
+             "nota": "Codifica etiquetas aparte: más rápido con muchas etiquetas, y más pesado de cargar."},
+            {"id": "knowledgator/gliner-multitask-large-v0.5", "nombre": "GLiNER multitarea grande",
+             "nota": "El más preciso de la familia y el más lento. Sirve para saber cuánto techo se deja."}
+        ],
+        "spacy": [
+            {"id": "es_core_news_sm", "nombre": "spaCy español pequeño",
+             "nota": "15 MB. Segmenta y tokeniza de sobra para lo que hace falta."},
+            {"id": "es_core_news_md", "nombre": "spaCy español mediano",
+             "nota": "40 MB, con vectores. Mejor segmentación en prosa difícil."},
+            {"id": "es_core_news_lg", "nombre": "spaCy español grande",
+             "nota": "560 MB. Solo si la segmentación resulta ser el cuello de botella."}
+        ],
+        "glirel": [
+            {"id": "jackboyla/glirel-large-v0", "nombre": "GLiREL grande",
+             "nota": "Relaciones de vocabulario abierto sobre las entidades ya halladas."}
+        ]
+    })
+}
+
 /// Los ocho tipos del sistema y cómo se le piden al modelo.
 ///
 /// GLiNER es de vocabulario abierto: la etiqueta es una instrucción en lenguaje
@@ -39,6 +96,15 @@ pub const ETIQUETAS: &[(&str, &str)] = &[
     ("obra", "obra o publicación"),
     ("monto", "monto o cifra"),
 ];
+
+/// Los predicados tal como se le piden a GLiREL. También son instrucciones en
+/// lenguaje natural, no clases: cómo se redacten cambia lo que devuelve.
+pub fn predicados_modelo() -> Vec<String> {
+    ["ocupa el cargo", "aspira a", "aliado de", "opositor de", "familiar de",
+     "investigado por", "financia a", "trabaja en", "parte de", "citado en",
+     "ubicado en", "destinado a", "sanciona con"]
+        .iter().map(|s| s.to_string()).collect()
+}
 
 pub fn etiquetas_modelo() -> Vec<String> {
     ETIQUETAS.iter().map(|(_, v)| v.to_string()).collect()
@@ -100,6 +166,8 @@ pub struct Sidecar {
     salida: BufReader<ChildStdout>,
     pub modelo: Option<String>,
     pub dispositivo: String,
+    /// GLiREL cargó de verdad. Puede fallar sin impedir extraer entidades.
+    pub glirel_activo: bool,
 }
 
 impl Sidecar {
@@ -117,7 +185,10 @@ impl Sidecar {
         let entrada = hijo.stdin.take().ok_or_else(|| Error::Other("sin stdin".into()))?;
         let salida = BufReader::new(hijo.stdout.take().ok_or_else(|| Error::Other("sin stdout".into()))?);
 
-        let mut s = Self { hijo, entrada, salida, modelo: None, dispositivo: "cpu".into() };
+        let mut s = Self {
+            hijo, entrada, salida, modelo: None,
+            dispositivo: "cpu".into(), glirel_activo: false,
+        };
         // El proceso saluda al arrancar; leerlo confirma que está vivo.
         s.leer().await?;
         Ok(s)
@@ -152,39 +223,56 @@ impl Sidecar {
         self.leer().await
     }
 
-    pub async fn cargar(&mut self, modelo: &str, dispositivo: &str) -> Result<u64> {
+    pub async fn cargar(&mut self, m: &Modelos) -> Result<u64> {
         let r = self
-            .pedir(json!({"op": "cargar", "modelo": modelo, "dispositivo": dispositivo}))
+            .pedir(json!({
+                "op": "cargar", "gliner": m.gliner, "spacy": m.spacy,
+                "glirel": m.glirel, "relaciones": m.relaciones,
+            }))
             .await?;
-        self.modelo = Some(modelo.to_string());
-        self.dispositivo = dispositivo.to_string();
+        self.modelo = Some(m.gliner.clone());
+        // El sidecar responde qué cargó de verdad: si GLiREL falló, se sabe.
+        self.glirel_activo = r.get("glirel").and_then(Value::as_str).is_some();
         Ok(r.get("ms").and_then(Value::as_u64).unwrap_or(0))
     }
 
-    /// Extrae entidades párrafo a párrafo. El índice de la lista devuelta es el
-    /// del párrafo, para que las posiciones cuadren con la anotación manual.
-    pub async fn extraer(
+    /// Procesa un artículo párrafo a párrafo.
+    ///
+    /// El índice de las listas devueltas es el del párrafo, para que las
+    /// posiciones cuadren con la revisión humana sin aproximar nada.
+    pub async fn procesar(
         &mut self,
         id: i64,
         parrafos: &[String],
-        umbral: f64,
-    ) -> Result<(Vec<Vec<Entidad>>, u64)> {
+        umbrales: &std::collections::HashMap<String, f64>,
+        predicados: &[String],
+        umbral_rel: f64,
+    ) -> Result<(Vec<Vec<Entidad>>, Vec<Vec<RelacionExtraida>>, u64)> {
+        // Se pide con el umbral más bajo de todos y se filtra por tipo después:
+        // así las puntuaciones quedan guardadas y recalibrar no exige volver a
+        // pasar el modelo, que es lo que hace que el antes y el después sean
+        // instantáneos.
+        let piso = umbrales.values().cloned().fold(0.30_f64, f64::min);
+
         let r = self
             .pedir(json!({
-                "op": "extraer", "id": id, "parrafos": parrafos,
-                "etiquetas": etiquetas_modelo(), "umbral": umbral,
+                "op": "procesar", "id": id, "parrafos": parrafos,
+                "etiquetas": etiquetas_modelo(), "predicados": predicados,
+                "umbral": piso, "umbral_rel": umbral_rel,
             }))
             .await?;
 
         let ms = r.get("ms").and_then(Value::as_u64).unwrap_or(0);
         let crudo = r.get("parrafos").cloned().unwrap_or(Value::Array(vec![]));
-        let mut out: Vec<Vec<Entidad>> = serde_json::from_value(crudo)?;
-        for grupo in &mut out {
+        let mut ents: Vec<Vec<Entidad>> = serde_json::from_value(crudo)?;
+        for grupo in &mut ents {
             for e in grupo.iter_mut() {
                 e.etiqueta = clave_de(&e.etiqueta);
             }
         }
-        Ok((out, ms))
+        let crudo = r.get("relaciones").cloned().unwrap_or(Value::Array(vec![]));
+        let rels: Vec<Vec<RelacionExtraida>> = serde_json::from_value(crudo).unwrap_or_default();
+        Ok((ents, rels, ms))
     }
 
     pub async fn cerrar(mut self) {

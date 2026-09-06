@@ -3,11 +3,11 @@ import { AYUDA, type Paso } from "./contenido/ayuda";
 import Conexion from "./screens/Conexion";
 import Perfil from "./screens/Perfil";
 import Sanidad from "./screens/Sanidad";
-import Muestreo from "./screens/Muestreo";
-import Anotacion from "./screens/Anotacion";
+import Alcance from "./screens/Alcance";
+import Calibracion from "./screens/Calibracion";
+import Revision from "./screens/Revision";
 import Extraccion from "./screens/Extraccion";
-import Resolucion from "./screens/Resolucion";
-import Reporte from "./screens/Reporte";
+import Grafo from "./screens/Grafo";
 import Fundamentos from "./screens/Fundamentos";
 import { cargarSesion, guardarSesion, olvidarSesion } from "./lib/ipc";
 import type { Discovery, SesionRecuperada } from "./types";
@@ -16,11 +16,11 @@ const PASOS: [Paso, string, string][] = [
   ["conexion", "01", "Conexión"],
   ["perfil", "02", "Perfil"],
   ["sanidad", "03", "Sanidad"],
-  ["muestreo", "04", "Muestreo"],
-  ["anotacion", "05", "Anotación"],
-  ["extraccion", "06", "Extracción"],
-  ["resolucion", "07", "Resolución"],
-  ["reporte", "08", "Reporte"],
+  ["alcance", "04", "Alcance"],
+  ["calibracion", "05", "Calibración"],
+  ["revision", "06", "Revisión"],
+  ["extraccion", "07", "Extracción"],
+  ["grafo", "08", "Grafo"],
 ];
 
 /* Durante los tres primeros pasos la app se presenta sin cromo: son pantallas
@@ -32,9 +32,12 @@ export interface EstadoApp {
   sitio: Discovery | null;
   conexionId: number | null;
   taxonomia: string | null;
+  /** El lote de extracción activo: define sobre qué trabajan los pasos 5 a 8. */
+  loteId: number | null;
   progreso: number;
   avanzar: (hasta: number, siguiente: Paso) => void;
   setTaxonomia: (t: string) => void;
+  setLoteId: (id: number) => void;
 }
 
 export default function App() {
@@ -44,6 +47,7 @@ export default function App() {
   const [sitio, setSitio] = useState<Discovery | null>(null);
   const [conexionId, setConexionId] = useState<number | null>(null);
   const [taxonomia, setTaxonomia] = useState<string | null>(null);
+  const [loteId, setLoteId] = useState<number | null>(null);
   const [ayudaAbierta, setAyudaAbierta] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const [restaurando, setRestaurando] = useState(true);
@@ -60,6 +64,7 @@ export default function App() {
           setSitio(s.sitio);
           setConexionId(s.connection_id);
           setTaxonomia(s.taxonomia);
+          setLoteId(s.lote_id);
           setProgreso(s.progreso);
           setPaso(s.paso as Paso);
         }
@@ -71,8 +76,8 @@ export default function App() {
   // Cada movimiento se anota. Es una fila; no hace falta esperar a nada.
   useEffect(() => {
     if (restaurando) return;
-    guardarSesion(conexionId, paso, progreso, taxonomia, null).catch(() => {});
-  }, [restaurando, conexionId, paso, progreso, taxonomia]);
+    guardarSesion(conexionId, paso, progreso, taxonomia, loteId).catch(() => {});
+  }, [restaurando, conexionId, paso, progreso, taxonomia, loteId]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-tema", tema);
@@ -96,8 +101,8 @@ export default function App() {
   }, []);
 
   const estado: EstadoApp = useMemo(
-    () => ({ sitio, conexionId, taxonomia, progreso, avanzar, setTaxonomia }),
-    [sitio, conexionId, taxonomia, progreso, avanzar]
+    () => ({ sitio, conexionId, taxonomia, loteId, progreso, avanzar, setTaxonomia, setLoteId }),
+    [sitio, conexionId, taxonomia, loteId, progreso, avanzar]
   );
 
   const conCromo = !SIN_CROMO.includes(paso);
@@ -192,7 +197,7 @@ export default function App() {
                 // Solo se olvida por dónde ibas: el censo, la muestra, las
                 // anotaciones y los tiempos siguen donde estaban.
                 olvidarSesion().catch(() => {});
-                setSitio(null); setConexionId(null); setTaxonomia(null);
+                setSitio(null); setConexionId(null); setTaxonomia(null); setLoteId(null);
                 setProgreso(0); setPaso("conexion"); setAviso(null);
               }}
               style={{ appearance: "none", border: 0, background: "transparent", textAlign: "left", padding: "8px 10px", fontSize: 12.5, color: "var(--t3)", cursor: "pointer" }}
@@ -281,11 +286,11 @@ export default function App() {
           )}
           {paso === "perfil" && <Perfil estado={estado} />}
           {paso === "sanidad" && <Sanidad estado={estado} />}
-          {paso === "muestreo" && <Muestreo estado={estado} />}
-          {paso === "anotacion" && <Anotacion estado={estado} />}
+          {paso === "alcance" && <Alcance estado={estado} />}
+          {paso === "calibracion" && <Calibracion estado={estado} />}
+          {paso === "revision" && <Revision estado={estado} />}
           {paso === "extraccion" && <Extraccion estado={estado} />}
-          {paso === "resolucion" && <Resolucion estado={estado} />}
-          {paso === "reporte" && <Reporte estado={estado} />}
+          {paso === "grafo" && <Grafo estado={estado} />}
           {paso === "fundamentos" && <Fundamentos />}
         </main>
       </div>

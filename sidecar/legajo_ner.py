@@ -1,29 +1,37 @@
-"""Extractor de entidades de Legajo.
+"""Extractor de Legajo: spaCy + GLiNER + GLiREL en un solo proceso.
 
 Habla con la app por líneas JSON en stdin/stdout. No abre puertos ni escucha en
 la red: la promesa de la app es que el archivo no sale del computador, y un
 proceso hijo con tuberías es la forma más simple de cumplirla y de demostrarlo.
 
-Protocolo, una petición por línea:
-    {"op":"cargar","modelo":"...","dispositivo":"cpu"}
-    {"op":"extraer","id":1,"parrafos":["...","..."],"etiquetas":[...],"umbral":0.5}
-    {"op":"salir"}
+El reparto de trabajo:
 
-Cada respuesta es otra línea JSON con "ok" y, si falla, "error".
-El registro de diagnóstico va a stderr para no ensuciar el canal.
+- **spaCy** tokeniza y segmenta oraciones. Es lo que le da a GLiNER trozos con
+  sentido gramatical en vez de ventanas de N palabras cortadas a ciegas, y lo
+  que permite alinear las entidades a límites de token antes de pasárselas a
+  GLiREL.
+- **GLiNER** extrae entidades de vocabulario abierto: las etiquetas son
+  instrucciones en lenguaje natural, no clases aprendidas.
+- **GLiREL** extrae relaciones sobre las entidades ya encontradas, también de
+  vocabulario abierto.
+
+Protocolo, una petición por línea:
+    {"op":"cargar","gliner":"...","spacy":"es_core_news_sm","relaciones":true}
+    {"op":"procesar","id":1,"parrafos":[...],"etiquetas":[...],"predicados":[...]}
+    {"op":"salir"}
 """
 
 import json
 import sys
 import time
 
-MODELO_POR_DEFECTO = "urchade/gliner_multi-v2.1"
+GLINER_POR_DEFECTO = "urchade/gliner_multi-v2.1"
+SPACY_POR_DEFECTO = "es_core_news_sm"
+GLIREL_POR_DEFECTO = "jackboyla/glirel-large-v0"
 
-# GLiNER trabaja con una ventana corta. Se trocea por palabras con solape y se
-# vuelven a mapear las posiciones al texto original: sin el solape, toda entidad
-# que caiga en un borde se pierde.
-VENTANA_PALABRAS = 300
-SOLAPE_PALABRAS = 60
+# Techo de oraciones por lote que se le pasa a GLiNER de una vez. Su ventana es
+# corta; agrupar oraciones hasta este límite aprovecha el contexto sin pasarse.
+CARACTERES_POR_TROZO = 1200
 
 
 def log(msg):
@@ -35,35 +43,27 @@ def responder(obj):
     sys.stdout.flush()
 
 
-def trozos(texto):
-    """Trozos (texto, desplazamiento) con solape, cortando por palabras."""
-    palabras = []
-    i = 0
-    for token in texto.split(" "):
-        palabras.append((i, token))
-        i += len(token) + 1
+def trozos_por_oracion(doc, limite=CARACTERES_POR_TROZO):
+    """Agrupa oraciones en trozos que quepan en la ventana del modelo.
 
-    if not palabras:
-        return []
-    if len(palabras) <= VENTANA_PALABRAS:
-        return [(texto, 0)]
-
-    out = []
-    paso = VENTANA_PALABRAS - SOLAPE_PALABRAS
-    for ini in range(0, len(palabras), paso):
-        grupo = palabras[ini:ini + VENTANA_PALABRAS]
-        if not grupo:
-            break
-        desde = grupo[0][0]
-        hasta = grupo[-1][0] + len(grupo[-1][1])
-        out.append((texto[desde:hasta], desde))
-        if ini + VENTANA_PALABRAS >= len(palabras):
-            break
-    return out
+    Cortar por oración y no por número de palabras evita partir una entidad por
+    la mitad, que es de donde salían los fallos de borde del troceo anterior.
+    """
+    trozos, actual, ini = [], [], None
+    for sent in doc.sents:
+        if ini is None:
+            ini = sent.start_char
+        if actual and (sent.end_char - ini) > limite:
+            trozos.append((doc.text[ini:actual[-1]], ini))
+            actual, ini = [], sent.start_char
+        actual.append(sent.end_char)
+    if actual and ini is not None:
+        trozos.append((doc.text[ini:actual[-1]], ini))
+    return trozos or ([(doc.text, 0)] if doc.text else [])
 
 
 def deduplicar(entidades):
-    """Quita las repetidas que produce el solape y los solapamientos parciales.
+    """Quita repetidas y solapamientos parciales entre trozos.
 
     Se conserva la de mayor puntuación; a igualdad, la más larga. Un mismo
     nombre marcado dos veces con límites distintos ensuciaría la evaluación
@@ -81,28 +81,46 @@ def deduplicar(entidades):
 
 class Motor:
     def __init__(self):
-        self.modelo = None
-        self.nombre = None
-        self.dispositivo = "cpu"
+        self.nlp = None
+        self.gliner = None
+        self.glirel = None
+        self.nombres = {}
 
-    def cargar(self, nombre, dispositivo):
-        from gliner import GLiNER
+    def cargar(self, cfg):
+        import spacy
 
         t0 = time.time()
-        log(f"cargando {nombre} en {dispositivo}…")
-        self.modelo = GLiNER.from_pretrained(nombre)
-        if dispositivo != "cpu":
-            self.modelo = self.modelo.to(dispositivo)
-        self.modelo.eval()
-        self.nombre = nombre
-        self.dispositivo = dispositivo
+        nombre_spacy = cfg.get("spacy") or SPACY_POR_DEFECTO
+        log(f"cargando spaCy {nombre_spacy}…")
+        # Sin NER propio ni etiquetador: solo hace falta segmentar y tokenizar,
+        # y desactivar el resto ahorra la mitad del tiempo por artículo.
+        self.nlp = spacy.load(nombre_spacy, exclude=["ner", "lemmatizer", "textcat"])
+
+        from gliner import GLiNER
+
+        nombre_gliner = cfg.get("gliner") or GLINER_POR_DEFECTO
+        log(f"cargando GLiNER {nombre_gliner}…")
+        self.gliner = GLiNER.from_pretrained(nombre_gliner)
+        self.gliner.eval()
+
+        if cfg.get("relaciones"):
+            nombre_glirel = cfg.get("glirel") or GLIREL_POR_DEFECTO
+            log(f"cargando GLiREL {nombre_glirel}…")
+            self.glirel = cargar_glirel(nombre_glirel)
+
+        self.nombres = {
+            "spacy": nombre_spacy,
+            "gliner": nombre_gliner,
+            "glirel": (cfg.get("glirel") or GLIREL_POR_DEFECTO) if self.glirel else None,
+        }
         return round((time.time() - t0) * 1000)
 
-    def extraer(self, texto, etiquetas, umbral):
+    def entidades(self, doc, etiquetas, umbral):
         salida = []
-        for trozo, desplazamiento in trozos(texto):
-            crudas = self.modelo.predict_entities(trozo, etiquetas, threshold=umbral)
-            for c in crudas:
+        for trozo, desplazamiento in trozos_por_oracion(doc):
+            if not trozo.strip():
+                continue
+            for c in self.gliner.predict_entities(trozo, etiquetas, threshold=umbral):
                 salida.append({
                     "texto": c["text"],
                     "inicio": c["start"] + desplazamiento,
@@ -111,6 +129,99 @@ class Motor:
                     "score": round(float(c["score"]), 4),
                 })
         return deduplicar(salida)
+
+    def relaciones(self, doc, ents, predicados, umbral):
+        """Relaciones entre las entidades ya encontradas.
+
+        GLiREL no trabaja sobre cadenas sino sobre **tokens**: quiere el texto
+        como lista de tokens y las entidades como índices de token. Aquí es
+        donde spaCy paga su sitio en el pipeline — alinear los desplazamientos
+        de carácter que devuelve GLiNER a límites de token es exactamente lo
+        que hace falta, y hacerlo a mano con expresiones regulares sería
+        frágil en español.
+        """
+        if not self.glirel or len(ents) < 2 or not predicados:
+            return []
+
+        tokens = [t.text for t in doc]
+        spans = []
+        for e in ents:
+            span = doc.char_span(e["inicio"], e["fin"], label=e["etiqueta"], alignment_mode="expand")
+            if span is not None and span.end > span.start:
+                spans.append(span)
+        spans = spacy_sin_solapes(spans)
+        if len(spans) < 2:
+            return []
+
+        # Formato de GLiREL: [inicio_token, fin_token_inclusive, etiqueta, texto]
+        ner = [[s.start, s.end - 1, s.label_, s.text] for s in spans]
+
+        try:
+            crudas = self.glirel.predict_relations(
+                tokens, predicados, threshold=umbral, ner=ner, top_k=1
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"GLiREL falló: {type(e).__name__}: {e}")
+            return []
+
+        out = []
+        for r in crudas or []:
+            score = float(r.get("score", 0))
+            if score < umbral:
+                continue
+            cabeza = r.get("head_text")
+            cola = r.get("tail_text")
+            out.append({
+                "a": " ".join(cabeza) if isinstance(cabeza, list) else str(cabeza or ""),
+                "b": " ".join(cola) if isinstance(cola, list) else str(cola or ""),
+                "predicado": r.get("label", ""),
+                "score": round(score, 4),
+            })
+        return out
+
+
+def cargar_glirel(nombre):
+    """Carga GLiREL sorteando el desajuste con huggingface_hub.
+
+    Su `_from_pretrained` exige `proxies` y `resume_download`, argumentos que
+    las versiones nuevas del hub ya no le pasan. Se llama directamente con los
+    valores por defecto en vez de esperar a que el paquete se actualice.
+    """
+    try:
+        from glirel import GLiREL
+    except Exception as e:  # noqa: BLE001
+        log(f"GLiREL no importable ({type(e).__name__}: {e}); se sigue sin relaciones")
+        return None
+
+    try:
+        m = GLiREL.from_pretrained(nombre)
+    except TypeError:
+        try:
+            m = GLiREL._from_pretrained(
+                model_id=nombre, revision=None, cache_dir=None, force_download=False,
+                proxies=None, resume_download=False, local_files_only=False, token=None,
+                map_location="cpu", strict=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"GLiREL no disponible ({type(e).__name__}: {e}); se sigue sin relaciones")
+            return None
+    except Exception as e:  # noqa: BLE001
+        log(f"GLiREL no disponible ({type(e).__name__}: {e}); se sigue sin relaciones")
+        return None
+
+    m.eval()
+    return m
+
+
+def spacy_sin_solapes(spans):
+    """spaCy no admite entidades solapadas: gana la más larga."""
+    spans = sorted(spans, key=lambda s: (s.start_char, -(s.end_char - s.start_char)))
+    out = []
+    for s in spans:
+        if any(s.start_char < o.end_char and s.end_char > o.start_char for o in out):
+            continue
+        out.append(s)
+    return out
 
 
 def main():
@@ -134,33 +245,33 @@ def main():
                 return
 
             if op == "cargar":
-                ms = motor.cargar(
-                    pet.get("modelo") or MODELO_POR_DEFECTO,
-                    pet.get("dispositivo") or "cpu",
-                )
-                responder({
-                    "ok": True, "evento": "listo", "modelo": motor.nombre,
-                    "dispositivo": motor.dispositivo, "ms": ms,
-                })
+                ms = motor.cargar(pet)
+                responder({"ok": True, "evento": "listo", "ms": ms, **motor.nombres})
 
-            elif op == "extraer":
-                if motor.modelo is None:
+            elif op == "procesar":
+                if motor.gliner is None:
                     responder({"ok": False, "id": pet.get("id"), "error": "el modelo no está cargado"})
                     continue
                 t0 = time.time()
                 etiquetas = pet.get("etiquetas") or []
-                umbral = float(pet.get("umbral", 0.5))
-                # Se extrae párrafo a párrafo, no sobre el texto entero: la
-                # anotación manual guarda las posiciones dentro del párrafo, y
-                # comparar las dos cosas exige el mismo sistema de coordenadas.
-                # Se pierde algo de contexto entre párrafos, y a cambio la
-                # medición de precisión es exacta en vez de aproximada.
-                por_parrafo = [
-                    motor.extraer(par, etiquetas, umbral)
-                    for par in (pet.get("parrafos") or [])
-                ]
+                predicados = pet.get("predicados") or []
+                umbral = float(pet.get("umbral", 0.35))
+                umbral_rel = float(pet.get("umbral_rel", 0.5))
+
+                # Párrafo a párrafo: la anotación manual guarda las posiciones
+                # dentro del párrafo, y comparar las dos cosas exige el mismo
+                # sistema de coordenadas.
+                ents_por_parrafo, rels_por_parrafo = [], []
+                for texto in pet.get("parrafos") or []:
+                    doc = motor.nlp(texto)
+                    ents = motor.entidades(doc, etiquetas, umbral)
+                    ents_por_parrafo.append(ents)
+                    rels_por_parrafo.append(motor.relaciones(doc, ents, predicados, umbral_rel))
+
                 responder({
-                    "ok": True, "id": pet.get("id"), "parrafos": por_parrafo,
+                    "ok": True, "id": pet.get("id"),
+                    "parrafos": ents_por_parrafo,
+                    "relaciones": rels_por_parrafo,
                     "ms": round((time.time() - t0) * 1000),
                 })
 

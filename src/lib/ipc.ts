@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  ConnectionRow, Diseno, Discovery, Epoca, FilaAnotable, FinCenso, Hallazgo,
-  Caso, EntradaLexico, Evaluacion, Mencion, PerfilArchivo, Plan, ProgresoCenso,
-  ProgresoExtraccion, Puerta, RelacionFila, Reporte as ReporteT, SesionRecuperada,
+  Alcance, ArbolCategorias, AristaGrafo, Calibracion, Caso, CatalogoModelos,
+  ConnectionRow, Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
+  Hallazgo, LoteRow, Mencion, Modelos, NodoGrafo, PerfilArchivo, ProgresoCenso,
+  ProgresoExtraccion, RelacionFila, ResultadoCalibracion, ResumenGrafo,
+  SesionRecuperada,
 } from "../types";
 
 export const discoverSite = (input: string) =>
@@ -41,78 +43,35 @@ export const alFinCenso = (cb: (f: FinCenso) => void): Promise<UnlistenFn> =>
 
 // ── Muestra ──────────────────────────────────────────────────────────────
 
-export const proponerEpocas = (connectionId: number, cuantas: number) =>
-  invoke<{ epocas: Epoca[] }>("proponer_epocas", { connectionId, cuantas });
-
-export const planMuestra = (connectionId: number, diseno: Diseno) =>
-  invoke<Plan>("plan_muestra", { connectionId, diseno });
-
-export const sortearMuestra = (connectionId: number, diseno: Diseno, etiqueta: string) =>
-  invoke<{ design_id: number; n: number }>("sortear_muestra", { connectionId, diseno, etiqueta });
-
-export const muestraActual = (connectionId: number) =>
-  invoke<[number, number] | null>("muestra_actual", { connectionId });
-
-export const muestra = (designId: number) =>
-  invoke<FilaAnotable[]>("muestra", { designId });
-
-export const descargarMuestra = (connectionId: number, designId: number) =>
-  invoke<void>("descargar_muestra", { connectionId, designId });
-
-export const alProgresoMuestra = (cb: (p: ProgresoCenso) => void): Promise<UnlistenFn> =>
-  listen<ProgresoCenso>("muestra:progreso", (e) => cb(e.payload));
-
-export const alFinMuestra = (cb: (f: FinCenso) => void): Promise<UnlistenFn> =>
-  listen<FinCenso>("muestra:fin", (e) => cb(e.payload));
+export const muestra = (loteId: number) =>
+  invoke<FilaAnotable[]>("muestra", { loteId });
 
 // ── Anotación ────────────────────────────────────────────────────────────
 
 export const guardarAnotacion = (
-  designId: number, wpId: number, menciones: Mencion[], relaciones: RelacionFila[]
-) => invoke<void>("guardar_anotacion", { designId, wpId, menciones, relaciones });
+  loteId: number, wpId: number, menciones: Mencion[], relaciones: RelacionFila[]
+) => invoke<void>("guardar_anotacion", { loteId, wpId, menciones, relaciones });
 
-export const cargarAnotacion = (designId: number, wpId: number) =>
-  invoke<[Mencion[], RelacionFila[]]>("anotacion", { designId, wpId });
+export const cargarAnotacion = (loteId: number, wpId: number) =>
+  invoke<[Mencion[], RelacionFila[]]>("anotacion", { loteId, wpId });
 
-export const cerrarArticulo = (designId: number, wpId: number, segundos: number, menciones: number) =>
-  invoke<void>("cerrar_articulo", { designId, wpId, segundos, menciones });
+export const cerrarArticulo = (loteId: number, wpId: number, segundos: number, menciones: number) =>
+  invoke<void>("cerrar_articulo", { loteId, wpId, segundos, menciones });
 
-export const avanceAnotacion = (designId: number) =>
-  invoke<[number, number]>("avance_anotacion", { designId });
-
-// ── Resolución y reporte ─────────────────────────────────────────────────
-
-export const casosResolucion = (designId: number) =>
-  invoke<Caso[]>("casos_resolucion", { designId });
-
-export const decidirResolucion = (
-  designId: number, clave: string, a: string, b: string,
-  tipo: string, decision: string, confianza: number
-) => invoke<void>("decidir_resolucion", { designId, clave, a, b, tipo, decision, confianza });
-
-export const avanceResolucion = (designId: number) =>
-  invoke<[number, number]>("avance_resolucion", { designId });
-
-export const reporte = (designId: number, universo: number) =>
-  invoke<ReporteT>("reporte", { designId, universo });
-
-export const puerta = (
-  horasNecesarias: number, personas: number, horasSemana: number, semanas: number, universo: number
-) => invoke<Puerta>("puerta", { horasNecesarias, personas, horasSemana, semanas, universo });
+export const avanceAnotacion = (loteId: number) =>
+  invoke<[number, number]>("avance_anotacion", { loteId });
 
 // ── Extracción ───────────────────────────────────────────────────────────
 
-export const iniciarExtraccion = (designId: number, modelo: string | null, umbral: number) =>
-  invoke<void>("iniciar_extraccion", { designId, modelo, umbral });
+export const iniciarExtraccion = (
+  loteId: number, modelos: Modelos | null, soloCalibracion: boolean
+) => invoke<void>("iniciar_extraccion", { loteId, modelos, soloCalibracion });
 
 export const cancelarExtraccion = () => invoke<void>("cancelar_extraccion");
 export const extrayendo = () => invoke<boolean>("extrayendo");
 
-export const avanceExtraccion = (designId: number) =>
-  invoke<[number, number]>("avance_extraccion", { designId });
-
-export const evaluacion = (designId: number) =>
-  invoke<Evaluacion>("evaluacion", { designId });
+export const avanceExtraccion = (loteId: number) =>
+  invoke<[number, number]>("avance_extraccion", { loteId });
 
 export const alProgresoExtraccion = (cb: (p: ProgresoExtraccion) => void): Promise<UnlistenFn> =>
   listen<ProgresoExtraccion>("extraccion:progreso", (e) => cb(e.payload));
@@ -127,27 +86,68 @@ export const alAvisoCenso = (cb: (m: string) => void): Promise<UnlistenFn> =>
 
 export const guardarSesion = (
   connectionId: number | null, paso: string, progreso: number,
-  taxonomia: string | null, designId: number | null
-) => invoke<void>("guardar_sesion", { connectionId, paso, progreso, taxonomia, designId });
+  taxonomia: string | null, loteId: number | null
+) => invoke<void>("guardar_sesion", { connectionId, paso, progreso, taxonomia, loteId });
 
 export const cargarSesion = () => invoke<SesionRecuperada | null>("cargar_sesion");
 export const olvidarSesion = () => invoke<void>("olvidar_sesion");
 
-export const reanudarAnotacion = (designId: number) =>
-  invoke<number | null>("reanudar_anotacion", { designId });
+export const reanudarAnotacion = (loteId: number) =>
+  invoke<number | null>("reanudar_anotacion", { loteId });
 
-export const apuntarTiempo = (designId: number, wpId: number, segundos: number, menciones: number) =>
-  invoke<void>("apuntar_tiempo", { designId, wpId, segundos, menciones });
+export const apuntarTiempo = (loteId: number, wpId: number, segundos: number, menciones: number) =>
+  invoke<void>("apuntar_tiempo", { loteId, wpId, segundos, menciones });
 
-export const tiempoArticulo = (designId: number, wpId: number) =>
-  invoke<number>("tiempo_articulo", { designId, wpId });
+export const tiempoArticulo = (loteId: number, wpId: number) =>
+  invoke<number>("tiempo_articulo", { loteId, wpId });
 
-export const lexico = (designId: number) =>
-  invoke<EntradaLexico[]>("lexico", { designId });
+export const lexico = (loteId: number) =>
+  invoke<EntradaLexico[]>("lexico", { loteId });
 
-export const descartarTiempo = (designId: number, wpId: number) =>
-  invoke<void>("descartar_tiempo", { designId, wpId });
+export const descartarTiempo = (loteId: number, wpId: number) =>
+  invoke<void>("descartar_tiempo", { loteId, wpId });
 
 /** Mediciones no creíbles: muy cortas (se pasó de largo) o muy largas (ventana abierta). */
-export const tiemposDudosos = (designId: number) =>
-  invoke<[number, number, number, string][]>("tiempos_dudosos", { designId });
+export const tiemposDudosos = (loteId: number) =>
+  invoke<[number, number, number, string][]>("tiempos_dudosos", { loteId });
+
+// ── Alcance ──────────────────────────────────────────────────────────────
+
+export const arbolCategorias = (connectionId: number, taxonomia: string) =>
+  invoke<ArbolCategorias>("arbol_categorias", { connectionId, taxonomia });
+
+export const estimarAlcance = (connectionId: number, alcanceSel: Alcance) =>
+  invoke<Estimacion>("estimar_alcance", { connectionId, alcanceSel });
+
+export const crearLote = (
+  connectionId: number, etiqueta: string, alcanceSel: Alcance, nCalibrar: number
+) => invoke<number>("crear_lote", { connectionId, etiqueta, alcanceSel, nCalibrar });
+
+export const lotes = (connectionId: number) => invoke<LoteRow[]>("lotes", { connectionId });
+
+export const catalogoModelos = () => invoke<CatalogoModelos>("catalogo_modelos");
+
+// ── Calibración ──────────────────────────────────────────────────────────
+
+export const calibrar = (loteId: number) =>
+  invoke<ResultadoCalibracion>("calibrar", { loteId });
+
+export const aplicarCalibracion = (loteId: number, cal: Calibracion) =>
+  invoke<void>("aplicar_calibracion", { loteId, cal });
+
+export const calibracionGuardada = (loteId: number) =>
+  invoke<Calibracion | null>("calibracion_guardada", { loteId });
+
+// ── Grafo ────────────────────────────────────────────────────────────────
+
+export const grafoResumen = (loteId: number) =>
+  invoke<ResumenGrafo>("grafo_resumen", { loteId });
+
+export const grafoEntidades = (loteId: number, limite = 200) =>
+  invoke<NodoGrafo[]>("grafo_entidades", { loteId, limite });
+
+export const grafoDuplicados = (loteId: number) =>
+  invoke<Caso[]>("grafo_duplicados", { loteId });
+
+export const grafoRelaciones = (loteId: number, limite = 200) =>
+  invoke<AristaGrafo[]>("grafo_relaciones", { loteId, limite });

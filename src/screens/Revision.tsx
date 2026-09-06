@@ -3,7 +3,7 @@ import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo, predicadosPara } from "../contenido/tipos";
 import {
   apuntarTiempo, avanceAnotacion, cargarAnotacion, cerrarArticulo, descartarTiempo, guardarAnotacion,
-  lexico as cargarLexico, muestra as cargarMuestra, muestraActual,
+  lexico as cargarLexico, muestra as cargarMuestra,
   reanudarAnotacion, tiempoArticulo,
 } from "../lib/ipc";
 import {
@@ -20,10 +20,8 @@ interface Punto { x: number; y: number }
 interface Pendiente { pi: number; ini: number; fin: number; texto: string }
 
 
-export default function Anotacion({ estado }: { estado: EstadoApp }) {
-  const { conexionId } = estado;
-
-  const [designId, setDesignId] = useState<number | null>(null);
+export default function Revision({ estado }: { estado: EstadoApp }) {
+  const { loteId } = estado;
   const [filas, setFilas] = useState<FilaAnotable[] | null>(null);
   const [i, setI] = useState(0);
   const [menciones, setMenciones] = useState<Mencion[]>([]);
@@ -39,6 +37,10 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
   const [lexico, setLexico] = useState<EntradaLexico[]>([]);
   const [ultimaPropagacion, setUltimaPropagacion] = useState<{ texto: string; n: number } | null>(null);
   const [preMarcadas, setPreMarcadas] = useState(0);
+  /* De dónde salió lo que ya estaba marcado al abrir. Las tres procedencias se
+     corrigen igual pero no merecen la misma confianza, y decirlo evita que se
+     revise el trabajo del modelo con el mismo ojo que una propagación literal. */
+  const [origen, setOrigen] = useState<"modelo" | "lexico" | null>(null);
   /* Al pasar el ratón por una relación se iluminan sus dos marcas en el texto.
      Es la única forma de saber cuál de los dos «50 mil millones» es: en el
      panel las dos filas se leen igual. */
@@ -58,11 +60,9 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
      el cronómetro contaría de nuevo tiempo sobre artículos ya medidos: la cifra
      de minutos por artículo es justo lo que la fase existe para producir. */
   useEffect(() => {
-    if (conexionId == null) return;
-    muestraActual(conexionId).then(async (m) => {
-      if (!m) { setFilas([]); return; }
-      const design = m[0];
-      setDesignId(design);
+    if (loteId == null) { setFilas([]); return; }
+    void (async () => {
+      const design = loteId;
       const [lista, avance, siguiente] = await Promise.all([
         cargarMuestra(design),
         avanceAnotacion(design),
@@ -78,16 +78,16 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
         // Todo cerrado: se muestra la pantalla final, no el primer artículo.
         setI(lista.length);
       }
-    });
-  }, [conexionId]);
+    })();
+  }, [loteId]);
 
   // Al cambiar de artículo se recuperan sus anotaciones y arranca el reloj.
   useEffect(() => {
-    if (designId == null || !fila) return;
+    if (loteId == null || !fila) return;
     const wp = fila.wp_id;
     setRelSel([]); setPendiente(null); setPunto(null); setRelPicker(false); setCrudo(false);
-    setUltimaPropagacion(null);
-    Promise.all([cargarAnotacion(designId, wp), tiempoArticulo(designId, wp).catch(() => 0)])
+    setUltimaPropagacion(null); setOrigen(null);
+    Promise.all([cargarAnotacion(loteId, wp), tiempoArticulo(loteId, wp).catch(() => 0)])
       .then(([[ms, rs], segundos]) => {
         setRelaciones(rs);
         // El cronómetro continúa desde lo ya invertido, no desde cero.
@@ -98,80 +98,93 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
            propuestas de la máquina sería peor que no proponer nada. */
         if (ms.length > 0) {
           setMenciones(ms);
-          setPreMarcadas(0);
+          /* El backend sirve lo que propuso el modelo cuando la persona todavía
+             no ha tocado el artículo, y lo entrega entero como `auto`. Que no
+             quede ni una marca propia es lo que distingue una propuesta sin
+             abrir del trabajo ya hecho. */
+          const virgen = ms.every((m) => m.auto);
+          setPreMarcadas(virgen ? ms.length : 0);
+          setOrigen(virgen ? "modelo" : null);
           return;
         }
         const previas = aplicarLexico(parrafos, lexico);
         setMenciones(previas);
         setPreMarcadas(previas.length);
+        setOrigen(previas.length > 0 ? "lexico" : null);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [designId, fila?.wp_id, lexico]);
+  }, [loteId, fila?.wp_id, lexico]);
 
 
   // El guardado es automático: perder media hora de anotación por olvidar
   // pulsar un botón es inaceptable en un trabajo que se mide en horas.
   useEffect(() => {
-    if (designId == null || !fila) return;
+    if (loteId == null || !fila) return;
     const t = setTimeout(() => {
-      guardarAnotacion(designId, fila.wp_id, menciones, relaciones).catch(() => {});
+      guardarAnotacion(loteId, fila.wp_id, menciones, relaciones).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [designId, fila?.wp_id, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, menciones, relaciones]);
 
   /* El cronómetro también se persiste cada diez segundos, sin marcar el
      artículo como terminado. Cerrar la ventana a mitad no debe borrar los
      minutos ya puestos: son parte del coste real que la fase mide. */
   useEffect(() => {
-    if (designId == null || !fila || reloj.estado !== "corriendo") return;
+    if (loteId == null || !fila || reloj.estado !== "corriendo") return;
     const t = setInterval(() => {
-      apuntarTiempo(designId, fila.wp_id, crono, menciones.length).catch(() => {});
+      apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
     }, 10_000);
     return () => clearInterval(t);
-  }, [designId, fila?.wp_id, reloj.estado, crono, menciones.length]);
+  }, [loteId, fila?.wp_id, reloj.estado, crono, menciones.length]);
 
   // Y una última vez al cerrar la ventana, para no perder los segundos sueltos.
   useEffect(() => {
     const alSalir = () => {
-      if (designId == null || !fila) return;
-      apuntarTiempo(designId, fila.wp_id, crono, menciones.length).catch(() => {});
-      guardarAnotacion(designId, fila.wp_id, menciones, relaciones).catch(() => {});
+      if (loteId == null || !fila) return;
+      apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
+      guardarAnotacion(loteId, fila.wp_id, menciones, relaciones).catch(() => {});
     };
     window.addEventListener("beforeunload", alSalir);
     return () => window.removeEventListener("beforeunload", alSalir);
-  }, [designId, fila?.wp_id, crono, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, crono, menciones, relaciones]);
 
   /* Moverse entre artículos guarda lo anotado pero NO registra un cierre.
      Antes, pasar de largo con J/K dejaba una medición de un segundo que entraba
      en la mediana: la mitad del ruido de los primeros veinte artículos venía
      de ahí. Solo «Cerrar y seguir» da un artículo por terminado. */
+  useEffect(() => {
+    if (!ultimaPropagacion) return;
+    const t = setTimeout(() => setUltimaPropagacion(null), 4000);
+    return () => clearTimeout(t);
+  }, [ultimaPropagacion]);
+
   const irArticulo = useCallback(async (d: number) => {
-    if (designId == null || !filas) return;
+    if (loteId == null || !filas) return;
     const actual = filas[i];
     if (actual) {
-      await guardarAnotacion(designId, actual.wp_id, menciones, relaciones).catch(() => {});
-      await apuntarTiempo(designId, actual.wp_id, crono, menciones.length).catch(() => {});
+      await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
+      await apuntarTiempo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
     }
     setI((v) => Math.max(0, Math.min(filas.length, v + d)));
-  }, [designId, filas, i, menciones, relaciones, crono]);
+  }, [loteId, filas, i, menciones, relaciones, crono]);
 
   const cerrarYSeguir = useCallback(async () => {
-    if (designId == null || !filas) return;
+    if (loteId == null || !filas) return;
     const actual = filas[i];
     if (actual) {
-      await guardarAnotacion(designId, actual.wp_id, menciones, relaciones).catch(() => {});
-      await cerrarArticulo(designId, actual.wp_id, crono, menciones.length).catch(() => {});
-      avanceAnotacion(designId).then(([h]) => setHechos(h));
+      await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
+      await cerrarArticulo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
+      avanceAnotacion(loteId).then(([h]) => setHechos(h));
     }
     setI((v) => Math.min(filas.length, v + 1));
-  }, [designId, filas, i, menciones, relaciones, crono]);
+  }, [loteId, filas, i, menciones, relaciones, crono]);
 
   const descartarMedicion = useCallback(async () => {
-    if (designId == null || !fila) return;
-    await descartarTiempo(designId, fila.wp_id).catch(() => {});
+    if (loteId == null || !fila) return;
+    await descartarTiempo(loteId, fila.wp_id).catch(() => {});
     reloj.reiniciar(0);
-    avanceAnotacion(designId).then(([h]) => setHechos(h));
-  }, [designId, fila?.wp_id]);
+    avanceAnotacion(loteId).then(([h]) => setHechos(h));
+  }, [loteId, fila?.wp_id]);
 
   /* Nada de efectos dentro de un actualizador de estado: React los invoca dos
      veces en modo estricto para detectar actualizadores impuros, y eso añadía
@@ -392,7 +405,7 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
         <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-8)", maxWidth: "46ch" }}>
           Vuelve al paso de muestreo, sortea una muestra y descárgala.
         </p>
-        <Boton onClick={() => estado.avanzar(3, "muestreo")}>Ir al muestreo</Boton>
+        <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al muestreo</Boton>
       </Lienzo>
     );
   }
@@ -420,69 +433,87 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 16, padding: "12px 24px", borderBottom: "1px solid var(--borde)" }}>
-        <span className="t-menor" style={{ color: "var(--t2)", whiteSpace: "nowrap" }}>
-          Artículo {i + 1} de {total}
-        </span>
-        <div style={{ width: 150 }}><Barra pct={(hechos / total) * 100} /></div>
-        <span className="t-menor" style={{ color: "var(--t3)" }}>{hechos} cerrados</span>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={reloj.alternar}
-          title={`Medimos minutos por artículo para estimar cuánto cuesta curar el archivo completo. Se detiene solo al cambiar de ventana o tras un minuto sin actividad. Estado: ${ETIQUETA_RELOJ[reloj.estado]}.`}
-          style={{
-            appearance: "none", background: "transparent",
-            border: `1px solid ${reloj.estado === "corriendo" ? "var(--borde)" : "var(--advertencia)"}`,
-            borderRadius: 6, padding: "5px 11px", display: "flex", alignItems: "center",
-            gap: 8, cursor: "pointer",
-            color: reloj.estado === "corriendo" ? "var(--t2)" : "var(--advertencia)",
-            fontSize: 12.5,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: 9 }}>{reloj.estado === "corriendo" ? "❙❙" : "▶"}</span>
-          <span className="t-mono" style={{ fontVariantNumeric: "tabular-nums" }}>{mmss(crono)}</span>
-          {reloj.estado !== "corriendo" && reloj.estado !== "detenido" && (
-            <span style={{ fontSize: 11 }}>en pausa</span>
-          )}
-        </button>
-        {relSel.length === 2 && (
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <span className="t-menor" style={{ color: "var(--t3)" }}>
-              {(() => {
-                const a = menciones.find((m) => m.mid === relSel[0]);
-                const b = menciones.find((m) => m.mid === relSel[1]);
-                return a && b ? `${recorta(a.texto)} → ${recorta(b.texto)}:` : "dos marcas:";
-              })()}
-            </span>
-            <Boton variante="secundario" onClick={enlazarAlias}
-                   title="Las dos formas nombran la misma cosa del mundo: «Ómar Yepes» y «Yepes».">
-              Son la misma <span className="t-mono" style={{ fontSize: 11, opacity: .6 }}>=</span>
-            </Boton>
-            <Boton variante="secundario" onClick={abrirRelacion}
-                   title="Son cosas distintas unidas por algo: «Comisión Tercera» parte de «Congreso».">
-              Relacionar <span className="t-mono" style={{ fontSize: 11, opacity: .6 }}>R</span>
-            </Boton>
-            <span className="t-menor" style={{ color: "var(--t3)" }}>
-              ¿misma cosa o una dentro de otra?
-            </span>
-          </div>
-        )}
-        {ultimaPropagacion && (
-          <span className="t-menor" style={{ color: "var(--t3)", whiteSpace: "nowrap" }}>
-            +{ultimaPropagacion.n} «{ultimaPropagacion.texto.length > 22 ? ultimaPropagacion.texto.slice(0, 22) + "…" : ultimaPropagacion.texto}»
+      {/* Cabecera en dos alturas.
+          Todo en una fila se rompía en columnas de una palabra: la barra
+          permanente y las acciones que solo salen con dos marcas elegidas
+          competían por el mismo espacio. */}
+      <div style={{ flex: "0 0 auto", borderBottom: "1px solid var(--borde)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "11px 24px" }}>
+          <span className="t-menor" style={{ color: "var(--t2)", whiteSpace: "nowrap" }}>
+            Artículo {i + 1} de {total}
           </span>
-        )}
-        {crono > 0 && (
-          <Boton
-            variante="texto"
-            onClick={() => void descartarMedicion()}
-            title="Borra el tiempo de este artículo. Úsalo si la ventana quedó abierta haciendo otra cosa: una medición contaminada desplaza la mediana de toda la muestra."
-          >
-            descartar tiempo
+          <div style={{ width: 120, flex: "0 0 auto" }}><Barra pct={(hechos / total) * 100} /></div>
+          <span className="t-menor" style={{ color: "var(--t3)", whiteSpace: "nowrap" }}>
+            {hechos} cerrados
+          </span>
+
+          <div style={{ flex: 1, minWidth: 12 }} />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+            <button
+              onClick={reloj.alternar}
+              title={`Medimos minutos por artículo para estimar cuánto cuesta curar el archivo completo. Se detiene solo al cambiar de ventana o tras un minuto sin actividad. Estado: ${ETIQUETA_RELOJ[reloj.estado]}.`}
+              style={{
+                appearance: "none", background: "transparent",
+                border: `1px solid ${reloj.estado === "corriendo" ? "var(--borde)" : "var(--advertencia)"}`,
+                borderRadius: 6, padding: "5px 10px", display: "flex", alignItems: "center",
+                gap: 7, cursor: "pointer", whiteSpace: "nowrap",
+                color: reloj.estado === "corriendo" ? "var(--t2)" : "var(--advertencia)",
+                fontSize: 12.5,
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 9 }}>{reloj.estado === "corriendo" ? "❙❙" : "▶"}</span>
+              <span className="t-mono" style={{ fontVariantNumeric: "tabular-nums" }}>{mmss(crono)}</span>
+            </button>
+            {crono > 20 && (
+              <button
+                onClick={() => void descartarMedicion()}
+                title="Borra el tiempo de este artículo. Úsalo si la ventana quedó abierta haciendo otra cosa: una medición contaminada desplaza la mediana de toda la muestra."
+                aria-label="Descartar la medición de este artículo"
+                style={{ appearance: "none", background: "transparent", border: 0, color: "var(--t3)", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1 }}
+              >
+                ⟲
+              </button>
+            )}
+          </div>
+
+          <Boton variante="secundario" onClick={() => void cerrarYSeguir()} style={{ whiteSpace: "nowrap" }}>
+            Cerrar y seguir
           </Boton>
-        )}
-        <Boton variante="secundario" onClick={() => void cerrarYSeguir()}>Cerrar y seguir</Boton>
-        <Boton variante="texto" onClick={() => setPanel(!panel)}>{panel ? "Ocultar panel" : "Mostrar panel"}</Boton>
+          <button
+            onClick={() => setPanel(!panel)}
+            title={panel ? "Ocultar el panel" : "Mostrar el panel"}
+            style={{ appearance: "none", background: "transparent", border: 0, color: "var(--t3)", cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1, flex: "0 0 auto" }}
+          >
+            {panel ? "⇥" : "⇤"}
+          </button>
+        </div>
+
+        {/* Segunda altura, solo con dos marcas elegidas. Aquí sí cabe explicar
+            la única decisión que hay que tomar. */}
+        {relSel.length === 2 && (() => {
+          const a = menciones.find((m) => m.mid === relSel[0]);
+          const b = menciones.find((m) => m.mid === relSel[1]);
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "9px 24px", background: "var(--acento-suave)", borderTop: "1px solid var(--borde)", flexWrap: "wrap" }}>
+              <span className="t-menor" style={{ color: "var(--t1)", whiteSpace: "nowrap" }}>
+                {a && b ? `${recorta(a.texto)} → ${recorta(b.texto)}` : "dos marcas"}
+              </span>
+              <span className="t-menor" style={{ color: "var(--t2)" }}>
+                ¿nombran la misma cosa, o una está dentro de otra?
+              </span>
+              <div style={{ flex: 1, minWidth: 8 }} />
+              <Boton variante="secundario" onClick={enlazarAlias} style={{ whiteSpace: "nowrap" }}
+                     title="Las dos formas nombran la misma cosa del mundo: «Ómar Yepes» y «Yepes».">
+                Son la misma <span className="t-mono" style={{ fontSize: 11, opacity: .6 }}>=</span>
+              </Boton>
+              <Boton variante="secundario" onClick={abrirRelacion} style={{ whiteSpace: "nowrap" }}
+                     title="Son cosas distintas unidas por algo: «Comisión Tercera» parte de «Congreso».">
+                Relacionar <span className="t-mono" style={{ fontSize: 11, opacity: .6 }}>R</span>
+              </Boton>
+            </div>
+          );
+        })()}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
@@ -609,6 +640,16 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
               <span className="t-mono" style={{ color: "var(--t3)" }}>{menciones.length}</span>
             </div>
 
+            {/* El aviso de propagación vive donde están las entidades, no en la
+                cabecera: allí competía por espacio con todo lo demás. */}
+            {ultimaPropagacion && (
+              <div style={{ marginBottom: 10, padding: "6px 9px", borderRadius: 5, background: "var(--acento-suave)" }}>
+                <span className="t-menor" style={{ color: "var(--t1)" }}>
+                  +{ultimaPropagacion.n} «{recorta(ultimaPropagacion.texto)}» en el resto del artículo
+                </span>
+              </div>
+            )}
+
             {(() => {
               const auto = menciones.filter((m) => m.auto).length;
               if (auto === 0) return null;
@@ -617,7 +658,9 @@ export default function Anotacion({ estado }: { estado: EstadoApp }) {
                   <div style={{ fontSize: 11.5, color: "var(--t2)", lineHeight: 1.55 }}>
                     {auto} {auto === 1 ? "marcada sola" : "marcadas solas"}
                     {preMarcadas > 0 && menciones.length === preMarcadas
-                      ? " a partir de artículos anteriores"
+                      ? origen === "modelo"
+                        ? " por el extractor"
+                        : " a partir de artículos anteriores"
                       : " al propagar dentro del artículo"}
                     . Revísalas: borrar con ⌫ cuesta menos que arrastrar un error.
                   </div>

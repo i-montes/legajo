@@ -1,6 +1,6 @@
 export type Paso =
-  | "conexion" | "perfil" | "sanidad" | "muestreo"
-  | "anotacion" | "extraccion" | "resolucion" | "reporte" | "fundamentos";
+  | "conexion" | "perfil" | "sanidad" | "alcance"
+  | "calibracion" | "revision" | "extraccion" | "grafo" | "fundamentos";
 
 export interface Regla {
   titulo: string;
@@ -92,92 +92,94 @@ export const AYUDA: Record<Exclude<Paso, "fundamentos">, Ayuda> = {
   conexion: {
     paso: "Paso 1 de 8",
     titulo: "Conexión con el WordPress del medio",
-    que: "Legajo necesita leer el archivo desde dentro: entra al WordPress con tu propia cuenta de editora, con los mismos permisos que ya tienes.",
-    meta: "Una conexión autorizada y guardada, para poder perfilar el archivo sin volver a pedirte credenciales.",
+    que: "Legajo necesita leer el archivo desde dentro. La mayoría de los archivos públicos se leen sin credenciales; si el tuyo no, se conecta con tu propia cuenta.",
+    meta: "Una conexión guardada, para poder leer el archivo sin volver a pedirte nada.",
     como: [
-      "Escribe la dirección del sitio como la usas a diario, por ejemplo labrujula.co.",
-      "Pulsa «Conectar con WordPress»: se abrirá tu navegador con la solicitud de autorización del propio sitio.",
-      "Acepta ahí la solicitud. Si no estabas con la sesión abierta, inicia sesión primero; esta ventana espera el tiempo que necesites.",
-      "Si tu instalación no permite la autorización automática, usa «conectar manualmente» con una contraseña de aplicación.",
+      "Escribe la dirección del sitio como la usas a diario, por ejemplo tumedio.co.",
+      "Legajo averigua solo cómo hablar con él: hay tres formas distintas según cómo esté alojado.",
+      "Si el sitio no deja leer sin credenciales, usa «conectar manualmente» con una contraseña de aplicación.",
     ],
   },
   perfil: {
     paso: "Paso 2 de 8",
-    titulo: "Perfil de la instalación",
-    que: "Un retrato del archivo: cuántos artículos hay, en qué años, con qué editor se escribieron y qué plugins tocan el contenido.",
-    meta: "Que sepas con qué material trabajas antes de invertir horas anotando, y que entiendas por qué unas partes costarán más que otras.",
+    titulo: "Leer el archivo",
+    que: "Un recorrido por todo el archivo leyendo solo metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que permite después elegir qué procesar con criterio.",
+    meta: "Saber con qué material trabajas: cuántos artículos hay, en qué años y en qué secciones.",
     como: [
-      "Lee de arriba abajo: cada cifra viene con la consecuencia práctica que tiene para el diagnóstico.",
-      "No hay nada que configurar aquí. Si algo no cuadra con lo que sabes del medio, anótalo: suele indicar una migración mal hecha.",
-      "Cuando termines, continúa a la sanidad del archivo.",
+      "Pulsa «Leer el archivo». Va por tramos mensuales y con pausas de cortesía, así que tarda unos minutos.",
+      "Puedes detenerlo y retomarlo: cada tramo se guarda al terminarlo.",
+      "Si algo no cuadra con lo que sabes del medio, anótalo: suele indicar una migración mal hecha.",
     ],
   },
   sanidad: {
     paso: "Paso 3 de 8",
     titulo: "Sanidad del archivo",
-    que: "Cinco hallazgos de calidad —fechas dudosas, HTML roto, duplicados, contenido de agencia y notas muy cortas— con ejemplos reales de tu instalación.",
-    meta: "Una regla explícita para cada hallazgo, de modo que la muestra sea defendible y el diagnóstico reproducible.",
+    que: "Hallazgos de calidad calculados sobre el censo —fechas dañadas, titulares repetidos, notas muy cortas— con ejemplos reales de tu instalación.",
+    meta: "Saber qué conviene dejar fuera antes de gastar cómputo en ello.",
     como: [
       "Abre cada hallazgo y mira los ejemplos: son artículos reales, no estimaciones.",
-      "Elige una decisión por hallazgo. Puedes cambiarla más tarde volviendo a este paso.",
-      "El muestreo se habilita cuando las cinco estén decididas.",
+      "Elige qué hacer con cada uno. Puedes cambiarlo después.",
     ],
   },
-  muestreo: {
+  alcance: {
     paso: "Paso 4 de 8",
-    titulo: "Diseño de la muestra",
-    que: "El plan de qué artículos vas a anotar a mano: cuántos, repartidos según qué criterios y con qué semilla de azar.",
-    meta: "Una muestra que se parezca al archivo en lo que importa, y que cualquiera pueda reconstruir exactamente a partir de la semilla.",
+    titulo: "Qué trozo del archivo procesar",
+    que: "La selección de secciones y años sobre los que va a trabajar el extractor. No es una muestra estadística: es un alcance de trabajo.",
+    meta: "Un lote acotado y trazable, con su coste de cómputo conocido de antemano.",
     como: [
-      "Ajusta el tamaño mirando la columna de sesgo: más artículos reducen el error, pero cada uno cuesta minutos de tu tiempo.",
-      "Marca los criterios por los que quieres estratificar. Cada criterio que añades reparte la muestra en más celdas y deja menos casos en cada una.",
-      "Anota la semilla o guárdala: sin ella el sorteo no es reproducible y el diagnóstico pierde su valor como evidencia.",
+      "Elige secciones en el árbol. Marcar una arrastra sus subsecciones: en WordPress un artículo regional no siempre lleva también la categoría madre.",
+      "Acota los años si quieres empezar por lo reciente y ampliar después.",
+      "Mira el cómputo estimado antes de crear el lote. Es tiempo de máquina, desatendido, pero conviene saberlo.",
+      "Los artículos de calibración salen de aquí, repartidos entre secciones.",
     ],
   },
-  anotacion: {
+  calibracion: {
     paso: "Paso 5 de 8",
-    titulo: "Anotación manual",
-    que: "Marcar a mano las entidades de cada artículo de la muestra. Es el patrón contra el que se mide después la extracción automática.",
-    meta: "Un conjunto de referencia fiable y una medida honesta de cuántos minutos cuesta curar cien artículos.",
+    titulo: "Enseñarle al extractor qué está haciendo mal",
+    que: "El modelo corre sobre un puñado de artículos, tú corriges, y con esas correcciones se recalcula cómo se usa: el corte de confianza de cada tipo y qué no debe proponer nunca.",
+    meta: "No descubrir a las cinco horas de cómputo que el extractor estaba etiquetando mal media cosa.",
     como: [
-      "Selecciona el texto de una entidad y elige su tipo, con el ratón o con las teclas 1 a 8.",
-      "Para relacionar dos marcas, pulsa sobre ambas y luego R.",
-      "No corrijas el reloj: si te levantas, púsalo. La medida solo sirve si refleja el tiempo real.",
-      "Marca lo que el texto afirma, no lo que tú sabes del asunto. Es la regla que más sube el acuerdo entre anotadores.",
+      "Elige los modelos. Con los que vienen por defecto se empieza bien.",
+      "Deja que extraiga sobre los artículos de calibración; la primera vez descarga los modelos y tarda.",
+      "Ve a revisar y corrige: borra lo que sobra, añade lo que falta, arregla los tipos.",
+      "Vuelve aquí y calcula. Verás el antes y el después por tipo, y podrás aplicarlo al lote.",
+    ],
+  },
+  revision: {
+    paso: "Paso 6 de 8",
+    titulo: "Revisar lo que propuso el extractor",
+    que: "Corregir sobre lo ya marcado, no empezar de cero. Borrar lo que sobra, añadir lo que falta y unir las formas que nombran lo mismo.",
+    meta: "Corregir es tres o cuatro veces más rápido que marcar desde cero, y produce la misma información: qué falla el modelo y un diccionario de entidades.",
+    como: [
+      "Lo punteado lo propuso la máquina; pulsarlo lo da por bueno. Lo que sobre se borra con ⌫.",
+      "Selecciona texto y marca con 1—8 lo que el modelo no vio. Se marcan también sus repeticiones.",
+      "Con dos marcas elegidas: «=» si nombran la misma cosa, «R» si son cosas distintas unidas por algo.",
+      "Marca lo que el texto afirma, no lo que tú sabes del asunto.",
     ],
     reglas: REGLAS,
   },
   extraccion: {
-    paso: "Paso 6 de 8",
-    titulo: "Extracción automática",
-    que: "El modelo recorre el archivo completo y propone entidades en cada artículo, sin intervención tuya.",
-    meta: "Cobertura de todo el archivo para poder comparar lo que propone la máquina con lo que anotaste a mano.",
-    como: [
-      "Lánzala y déjala correr. Puedes minimizar y seguir usando el computador.",
-      "Pausar no pierde trabajo: cada artículo se guarda antes de pasar al siguiente.",
-      "Si la velocidad cae mucho, suele ser el servidor del medio limitando peticiones. Legajo espera y reintenta solo.",
-    ],
-  },
-  resolucion: {
     paso: "Paso 7 de 8",
-    titulo: "Resolución de entidades",
-    que: "Decidir cuándo dos menciones distintas nombran a la misma persona u organización, y cuándo no.",
-    meta: "Un índice donde cada entidad aparece una sola vez. Es lo que separa una lista de nombres de un archivo consultable.",
+    titulo: "Extracción sobre el lote entero",
+    que: "El modelo, ya calibrado, recorre todo el lote sin intervención tuya.",
+    meta: "Cobertura completa del alcance elegido, con los umbrales y el diccionario que salieron de tu revisión.",
     como: [
-      "Lee las menciones de cada candidato antes de decidir: el contexto desempata más que el parecido del nombre.",
-      "Fusionar (F), separar (S) o no decidir (D). Cada caso se resuelve con una tecla.",
-      "«No decidir» no penaliza: devuelve el caso a la cola para cuando haya más menciones que lo aclaren.",
+      "Lánzala y déjala correr. Es tiempo de máquina.",
+      "Detener no pierde trabajo: cada artículo se guarda al terminarlo.",
+      "Si la velocidad cae, suele ser el servidor del medio limitando peticiones durante la descarga.",
     ],
   },
-  reporte: {
+  grafo: {
     paso: "Paso 8 de 8",
-    titulo: "Reporte de viabilidad",
-    que: "El resultado del diagnóstico: qué tan bien funciona la extracción por tipo de entidad y cuánto costaría curar el archivo entero.",
-    meta: "Una decisión informada sobre si seguir, con qué alcance y a qué coste — no una promesa.",
+    titulo: "El grafo",
+    que: "El resultado: entidades, sus formas equivalentes y las relaciones entre ellas, sobre el lote procesado.",
+    meta: "Un índice consultable del archivo, y la base de cualquier cosa que se construya encima.",
     como: [
-      "Mira primero los minutos de curación por cada cien artículos: multiplicados por el archivo completo, dan las horas que la redacción tendría que poner.",
-      "Compara esa cifra con las horas que de verdad puedes dedicar en tres meses. Si no cuadra, el alcance hay que recortarlo antes de seguir.",
-      "El reporte exportable lleva solo métricas agregadas: puede compartirse sin exponer nada del archivo.",
+      "Mira primero las entidades más frecuentes: son las que sostienen el grafo.",
+      "Las que aparecen una sola vez son la mayoría y aportan poco; no te preocupes por ellas todavía.",
+      "El grafo funde los nombres que marcaste iguales con = al revisar, y solo esos: si ves «Petro» y «Gustavo Petro» separados, es que falta declararlo.",
+      "El aviso de nombres parecidos señala los pares que probablemente sobren, pero no los une por su cuenta: una identidad inventada es peor que una repetida.",
+      "Exporta cuando quieras llevártelo a otra herramienta.",
     ],
   },
 };

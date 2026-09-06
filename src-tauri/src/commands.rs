@@ -1,6 +1,9 @@
 use legajo_core::census::{self, ProgresoCenso};
-use legajo_core::db::{ConnectionRow, EntradaLexico, FilaAnotable, Mencion, RelacionFila};
-use legajo_core::{evaluacion, extraccion, muestreo, reporte, resolucion};
+use legajo_core::db::{
+    AristaGrafo, ConnectionRow, EntradaLexico, FilaAnotable, LoteRow, Mencion,
+    NodoGrafo, RelacionFila, ResumenGrafo,
+};
+use legajo_core::{alcance, calibracion, extraccion};
 use legajo_core::perfil::{self, Hallazgo, PerfilArchivo};
 use legajo_core::{contenido, discover, Auth, Db, Discovery, Error, Http, Result};
 use serde::Serialize;
@@ -91,7 +94,7 @@ pub struct SesionRecuperada {
     pub paso: String,
     pub progreso: i64,
     pub taxonomia: Option<String>,
-    pub design_id: Option<i64>,
+    pub lote_id: Option<i64>,
     pub etiqueta: Option<String>,
     /// El descubrimiento tal cual se guardó, para reabrir sin volver a sondear.
     pub sitio: Option<Discovery>,
@@ -104,11 +107,11 @@ pub async fn guardar_sesion(
     paso: String,
     progreso: i64,
     taxonomia: Option<String>,
-    design_id: Option<i64>,
+    lote_id: Option<i64>,
 ) -> Result<()> {
     let db = state.db.clone();
     en_hilo(move || {
-        db.guardar_sesion(connection_id, &paso, progreso, taxonomia.as_deref(), design_id)
+        db.guardar_sesion(connection_id, &paso, progreso, taxonomia.as_deref(), lote_id)
     })
     .await
 }
@@ -129,7 +132,7 @@ pub async fn cargar_sesion(state: State<'_, AppState>) -> Result<Option<SesionRe
             paso: s.paso,
             progreso: s.progreso,
             taxonomia: s.taxonomia,
-            design_id: s.design_id,
+            lote_id: s.lote_id,
             etiqueta: s.etiqueta,
             sitio,
         }
@@ -144,9 +147,9 @@ pub async fn olvidar_sesion(state: State<'_, AppState>) -> Result<()> {
 
 /// Índice del primer artículo sin cerrar dentro de la muestra.
 #[tauri::command]
-pub async fn reanudar_anotacion(state: State<'_, AppState>, design_id: i64) -> Result<Option<i64>> {
+pub async fn reanudar_anotacion(state: State<'_, AppState>, lote_id: i64) -> Result<Option<i64>> {
     let db = state.db.clone();
-    en_hilo(move || db.siguiente_sin_cerrar(design_id)).await
+    en_hilo(move || db.siguiente_sin_cerrar(lote_id)).await
 }
 
 // ── Censo ────────────────────────────────────────────────────────────────
@@ -331,136 +334,12 @@ pub async fn perfil_archivo(
     .await
 }
 
-// ── Muestra ──────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct EpocasPropuestas {
-    pub epocas: Vec<legajo_core::muestreo::Epoca>,
-}
-
-/// Épocas sugeridas a partir del reparto real por año del archivo.
-#[tauri::command]
-pub async fn proponer_epocas(
-    state: State<'_, AppState>,
-    connection_id: i64,
-    cuantas: usize,
-) -> Result<EpocasPropuestas> {
-    let db = state.db.clone();
-    en_hilo(move || {
-        let p = perfil::perfil(&db, connection_id, None)?;
-        Ok(EpocasPropuestas { epocas: muestreo::proponer_epocas(&p.por_anio, cuantas) })
-    })
-    .await
-}
+// ── Los artículos del lote ───────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn plan_muestra(
-    state: State<'_, AppState>,
-    connection_id: i64,
-    diseno: muestreo::Diseno,
-) -> Result<muestreo::Plan> {
+pub async fn muestra(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<FilaAnotable>> {
     let db = state.db.clone();
-    en_hilo(move || muestreo::plan(&db, connection_id, &diseno)).await
-}
-
-#[derive(Serialize)]
-pub struct MuestraSorteada {
-    pub design_id: i64,
-    pub n: usize,
-}
-
-#[tauri::command]
-pub async fn sortear_muestra(
-    state: State<'_, AppState>,
-    connection_id: i64,
-    diseno: muestreo::Diseno,
-    etiqueta: String,
-) -> Result<MuestraSorteada> {
-    let db = state.db.clone();
-    en_hilo(move || {
-        let plan = muestreo::plan(&db, connection_id, &diseno)?;
-        let filas = muestreo::sortear(&db, connection_id, &diseno, &plan)?;
-        let design_id = db.guardar_muestra(connection_id, &etiqueta, &diseno, &filas)?;
-        Ok(MuestraSorteada { design_id, n: filas.len() })
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn muestra_actual(state: State<'_, AppState>, connection_id: i64) -> Result<Option<(i64, i64)>> {
-    let db = state.db.clone();
-    en_hilo(move || Ok(db.ultimo_diseno(connection_id)?.map(|(id, _, n)| (id, n)))).await
-}
-
-#[tauri::command]
-pub async fn muestra(state: State<'_, AppState>, design_id: i64) -> Result<Vec<FilaAnotable>> {
-    let db = state.db.clone();
-    en_hilo(move || db.muestra(design_id)).await
-}
-
-/// Descarga el cuerpo de los artículos de la muestra.
-///
-/// Es el único momento en que Legajo baja contenido completo, y solo de los
-/// cientos que caen en la muestra: el archivo entero se recorrió leyendo
-/// metadatos.
-#[tauri::command]
-pub fn descargar_muestra(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    connection_id: i64,
-    design_id: i64,
-) -> Result<()> {
-    if state.censo_corriendo.swap(true, Ordering::SeqCst) {
-        return Err(Error::Other("Hay otra descarga en marcha.".into()));
-    }
-    state.censo_cancelar.store(false, Ordering::SeqCst);
-
-    let http = state.http.clone();
-    let db = state.db.clone();
-    let corriendo = state.censo_corriendo.clone();
-    let cancelar = state.censo_cancelar.clone();
-
-    tauri::async_runtime::spawn(async move {
-        let r = bajar_muestra(&app, &http, &db, connection_id, design_id, &cancelar).await;
-        corriendo.store(false, Ordering::SeqCst);
-        let cancelado = cancelar.load(Ordering::SeqCst);
-        let fin = match r {
-            Ok(n) => FinCenso { ok: !cancelado, cancelado, error: None, filas: n },
-            Err(e) => FinCenso { ok: false, cancelado, error: Some(e.to_string()), filas: 0 },
-        };
-        let _ = app.emit("muestra:fin", fin);
-    });
-    Ok(())
-}
-
-async fn bajar_muestra(
-    app: &AppHandle,
-    http: &Http,
-    db: &Db,
-    conn_id: i64,
-    design_id: i64,
-    cancelar: &AtomicBool,
-) -> Result<i64> {
-    let transporte = db.transporte(conn_id)?;
-    let pendientes = db.muestra_sin_contenido(design_id)?;
-    let total = pendientes.len() as u64;
-    let mut hechos = 0u64;
-
-    for trozo in pendientes.chunks(50) {
-        if cancelar.load(Ordering::SeqCst) { break; }
-        let cuerpos = census::traer_contenido(http, &transporte, &Auth::None, trozo).await?;
-        let filas: Vec<(i64, String, contenido::Limpio)> = cuerpos
-            .into_iter()
-            .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
-            .collect();
-        db.guardar_articulos(conn_id, &filas)?;
-        hechos += trozo.len() as u64;
-        let _ = app.emit(
-            "muestra:progreso",
-            ProgresoCenso { fase: "descarga".into(), ventana: String::new(), hechos, total },
-        );
-    }
-    Ok(hechos as i64)
+    en_hilo(move || db.muestra(lote_id)).await
 }
 
 // ── Anotación ────────────────────────────────────────────────────────────
@@ -468,23 +347,36 @@ async fn bajar_muestra(
 #[tauri::command]
 pub async fn guardar_anotacion(
     state: State<'_, AppState>,
-    design_id: i64,
+    lote_id: i64,
     wp_id: i64,
     menciones: Vec<Mencion>,
     relaciones: Vec<RelacionFila>,
 ) -> Result<()> {
     let db = state.db.clone();
-    en_hilo(move || db.guardar_anotacion(design_id, wp_id, &menciones, &relaciones)).await
+    en_hilo(move || db.guardar_anotacion(lote_id, wp_id, &menciones, &relaciones)).await
 }
 
+/// Lo que la pantalla de revisión tiene que pintar para un artículo.
+///
+/// Si la persona ya lo tocó, se le devuelve su trabajo tal cual. Si no, se le
+/// sirve lo que propuso el modelo, ya filtrado por la calibración vigente: es la
+/// diferencia entre corregir y empezar de cero, y es la razón de que revisar
+/// unas decenas de artículos sea un rato y no una semana.
 #[tauri::command]
 pub async fn anotacion(
     state: State<'_, AppState>,
-    design_id: i64,
+    lote_id: i64,
     wp_id: i64,
 ) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
     let db = state.db.clone();
-    en_hilo(move || db.anotacion(design_id, wp_id)).await
+    en_hilo(move || {
+        let (menciones, relaciones) = db.anotacion(lote_id, wp_id)?;
+        if menciones.is_empty() && relaciones.is_empty() {
+            return db.propuestas(lote_id, wp_id);
+        }
+        Ok((menciones, relaciones))
+    })
+    .await
 }
 
 /// Cierra un artículo: guarda el tiempo real que costó anotarlo.
@@ -496,13 +388,13 @@ pub async fn anotacion(
 #[tauri::command]
 pub async fn cerrar_articulo(
     state: State<'_, AppState>,
-    design_id: i64,
+    lote_id: i64,
     wp_id: i64,
     segundos: i64,
     menciones: i64,
 ) -> Result<()> {
     let db = state.db.clone();
-    en_hilo(move || db.registrar_tiempo(design_id, wp_id, segundos, menciones, true)).await
+    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, true)).await
 }
 
 /// Guardado periódico del cronómetro mientras se anota.
@@ -512,80 +404,154 @@ pub async fn cerrar_articulo(
 #[tauri::command]
 pub async fn apuntar_tiempo(
     state: State<'_, AppState>,
-    design_id: i64,
+    lote_id: i64,
     wp_id: i64,
     segundos: i64,
     menciones: i64,
 ) -> Result<()> {
     let db = state.db.clone();
-    en_hilo(move || db.registrar_tiempo(design_id, wp_id, segundos, menciones, false)).await
+    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, false)).await
 }
 
 #[tauri::command]
-pub async fn tiempo_articulo(state: State<'_, AppState>, design_id: i64, wp_id: i64) -> Result<i64> {
+pub async fn tiempo_articulo(state: State<'_, AppState>, lote_id: i64, wp_id: i64) -> Result<i64> {
     let db = state.db.clone();
-    en_hilo(move || db.tiempo_de(design_id, wp_id)).await
+    en_hilo(move || db.tiempo_de(lote_id, wp_id)).await
 }
 
 /// Lo anotado hasta ahora, para pre-marcar los artículos siguientes.
 #[tauri::command]
-pub async fn lexico(state: State<'_, AppState>, design_id: i64) -> Result<Vec<EntradaLexico>> {
+pub async fn lexico(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<EntradaLexico>> {
     let db = state.db.clone();
-    en_hilo(move || db.lexico(design_id)).await
+    en_hilo(move || db.lexico(lote_id)).await
 }
 
 #[tauri::command]
-pub async fn descartar_tiempo(state: State<'_, AppState>, design_id: i64, wp_id: i64) -> Result<()> {
+pub async fn descartar_tiempo(state: State<'_, AppState>, lote_id: i64, wp_id: i64) -> Result<()> {
     let db = state.db.clone();
-    en_hilo(move || db.descartar_tiempo(design_id, wp_id)).await
+    en_hilo(move || db.descartar_tiempo(lote_id, wp_id)).await
 }
 
 #[tauri::command]
 pub async fn tiempos_dudosos(
     state: State<'_, AppState>,
-    design_id: i64,
+    lote_id: i64,
 ) -> Result<Vec<(i64, i64, i64, String)>> {
     let db = state.db.clone();
-    en_hilo(move || db.tiempos_dudosos(design_id)).await
+    en_hilo(move || db.tiempos_dudosos(lote_id)).await
 }
 
 #[tauri::command]
-pub async fn avance_anotacion(state: State<'_, AppState>, design_id: i64) -> Result<(i64, i64)> {
+pub async fn avance_anotacion(state: State<'_, AppState>, lote_id: i64) -> Result<(i64, i64)> {
     let db = state.db.clone();
-    en_hilo(move || db.avance_anotacion(design_id)).await
+    en_hilo(move || db.avance_anotacion(lote_id)).await
+}
+
+// ── Alcance ──────────────────────────────────────────────────────────────
+
+/// Árbol de categorías › subcategorías con sus conteos reales.
+#[tauri::command]
+pub async fn arbol_categorias(
+    state: State<'_, AppState>, connection_id: i64, taxonomia: String,
+) -> Result<alcance::Arbol> {
+    let db = state.db.clone();
+    en_hilo(move || alcance::arbol(&db, connection_id, &taxonomia)).await
+}
+
+#[derive(Serialize)]
+pub struct Estimacion {
+    pub articulos: i64,
+    pub terminos_expandidos: Vec<i64>,
+    /// Segundos de cómputo, a la velocidad medida en el sondeo.
+    pub segundos_cpu: f64,
+    /// Los que aún no tienen el cuerpo descargado.
+    pub por_descargar: i64,
+}
+
+/// Cuántos artículos caen en un alcance y cuánto costaría procesarlos.
+#[tauri::command]
+pub async fn estimar_alcance(
+    state: State<'_, AppState>,
+    connection_id: i64,
+    mut alcance_sel: alcance::Alcance,
+) -> Result<Estimacion> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        // Elegir un padre arrastra sus hijos: en WordPress un artículo regional
+        // no siempre lleva también la categoría madre.
+        let expandidos = alcance::expandir(
+            &db, connection_id, &alcance_sel.taxonomia, &alcance_sel.terminos)?;
+        alcance_sel.terminos = expandidos.clone();
+        let n = alcance::contar(&db, connection_id, &alcance_sel)?;
+        Ok(Estimacion {
+            articulos: n,
+            terminos_expandidos: expandidos,
+            // 1,9 s por artículo con relaciones, medido en el sondeo.
+            segundos_cpu: n as f64 * 1.9,
+            por_descargar: n,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn crear_lote(
+    state: State<'_, AppState>,
+    connection_id: i64,
+    etiqueta: String,
+    mut alcance_sel: alcance::Alcance,
+    n_calibrar: i64,
+) -> Result<i64> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        alcance_sel.terminos = alcance::expandir(
+            &db, connection_id, &alcance_sel.taxonomia, &alcance_sel.terminos)?;
+        alcance::crear_lote(&db, connection_id, &etiqueta, &alcance_sel, n_calibrar)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn lotes(state: State<'_, AppState>, connection_id: i64) -> Result<Vec<LoteRow>> {
+    let db = state.db.clone();
+    en_hilo(move || db.lotes(connection_id)).await
+}
+
+#[tauri::command]
+pub fn catalogo_modelos() -> serde_json::Value {
+    extraccion::catalogo()
 }
 
 // ── Extracción ───────────────────────────────────────────────────────────
 
-/// Lanza la extracción sobre los artículos de la muestra.
+/// Lanza la extracción sobre un lote.
 ///
-/// El alcance es la muestra, no el archivo entero, y es deliberado: extraer
-/// sobre las 84.000 piezas exigiría antes descargarlas todas, que es justo lo
-/// que el censo evita. Lo que la Fase 0 necesita medir es cómo se porta el
-/// modelo frente a lo que anotó una persona, y eso solo se puede medir donde
-/// hay anotación. Recorrer el archivo completo es un paso de producción
-/// posterior, cuando la puerta ya haya dicho que sí.
+/// `solo_calibracion` limita al puñado de artículos que la persona va a revisar
+/// antes de soltar el extractor sobre el resto: es la etapa de corrección que
+/// evita descubrir a las cinco horas que el modelo estaba etiquetando mal.
 #[tauri::command]
 pub fn iniciar_extraccion(
     app: AppHandle,
     state: State<'_, AppState>,
-    design_id: i64,
-    modelo: Option<String>,
-    umbral: f64,
+    lote_id: i64,
+    modelos: Option<extraccion::Modelos>,
+    solo_calibracion: bool,
 ) -> Result<()> {
     if state.extrayendo.swap(true, Ordering::SeqCst) {
         return Err(Error::Other("Ya hay una extracción en marcha.".into()));
     }
     state.extraccion_cancelar.store(false, Ordering::SeqCst);
 
+    let http = state.http.clone();
     let db = state.db.clone();
     let corriendo = state.extrayendo.clone();
     let cancelar = state.extraccion_cancelar.clone();
-    let modelo = modelo.unwrap_or_else(|| "urchade/gliner_multi-v2.1".to_string());
+    let modelos = modelos.unwrap_or_default();
     let recursos = app.path().resource_dir().ok();
 
     tauri::async_runtime::spawn(async move {
-        let r = extraer(&app, &db, design_id, &modelo, umbral, recursos.as_deref(), &cancelar).await;
+        let r = extraer(&app, &http, &db, lote_id, &modelos, solo_calibracion,
+                        recursos.as_deref(), &cancelar).await;
         corriendo.store(false, Ordering::SeqCst);
         let cancelado = cancelar.load(Ordering::SeqCst);
         let fin = match r {
@@ -608,9 +574,9 @@ pub fn extrayendo(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
-pub async fn avance_extraccion(state: State<'_, AppState>, design_id: i64) -> Result<(i64, i64)> {
+pub async fn avance_extraccion(state: State<'_, AppState>, lote_id: i64) -> Result<(i64, i64)> {
     let db = state.db.clone();
-    en_hilo(move || db.avance_extraccion(design_id)).await
+    en_hilo(move || db.avance_extraccion(lote_id)).await
 }
 
 #[derive(Clone, Serialize)]
@@ -620,71 +586,99 @@ pub struct ProgresoExtraccion {
     pub total: u64,
     pub wp_id: i64,
     pub entidades: i64,
-    /// Milisegundos por artículo, medidos: es el dato que dice si esto es
-    /// viable sobre un archivo entero o no.
+    pub relaciones: i64,
+    /// Milisegundos por artículo, medidos: dice si esto es viable sobre un
+    /// archivo entero o no.
     pub ms: u64,
     pub detalle: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn extraer(
     app: &AppHandle,
+    http: &Http,
     db: &Db,
-    design_id: i64,
-    modelo: &str,
-    umbral: f64,
+    lote_id: i64,
+    modelos: &extraccion::Modelos,
+    solo_calibracion: bool,
     recursos: Option<&std::path::Path>,
     cancelar: &AtomicBool,
 ) -> Result<i64> {
-    let avisar = |fase: &str, hechos: u64, total: u64, wp: i64, ents: i64, ms: u64, detalle: &str| {
+    let avisar = |fase: &str, hechos: u64, total: u64, wp: i64, ents: i64, rels: i64, ms: u64, detalle: &str| {
         let _ = app.emit(
             "extraccion:progreso",
             ProgresoExtraccion {
                 fase: fase.into(), hechos, total, wp_id: wp,
-                entidades: ents, ms, detalle: detalle.into(),
+                entidades: ents, relaciones: rels, ms, detalle: detalle.into(),
             },
         );
     };
 
-    let (python, guion) = extraccion::localizar(recursos)?;
-    avisar("arrancando", 0, 0, 0, 0, 0, &format!("{}", python.display()));
+    let conn_id = db.conexion_de_lote(lote_id)?;
 
+    // 1 · Lo que falte por descargar. El censo solo trajo metadatos.
+    let faltan = db.lote_sin_contenido(lote_id, solo_calibracion)?;
+    if !faltan.is_empty() {
+        let transporte = db.transporte(conn_id)?;
+        let total = faltan.len() as u64;
+        let mut hechos = 0u64;
+        avisar("descargando", 0, total, 0, 0, 0, 0, "");
+        for trozo in faltan.chunks(50) {
+            if cancelar.load(Ordering::SeqCst) { return Ok(0); }
+            let cuerpos = census::traer_contenido(http, &transporte, &Auth::None, trozo).await?;
+            let filas: Vec<(i64, String, contenido::Limpio)> = cuerpos
+                .into_iter()
+                .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
+                .collect();
+            db.guardar_articulos(conn_id, &filas)?;
+            hechos += trozo.len() as u64;
+            avisar("descargando", hechos, total, 0, 0, 0, 0, "");
+        }
+    }
+
+    // 2 · El extractor.
+    let (python, guion) = extraccion::localizar(recursos)?;
+    avisar("arrancando", 0, 0, 0, 0, 0, 0, &python.display().to_string());
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
 
-    // La primera vez el modelo se descarga: son varios minutos y hay que decirlo.
-    avisar("cargando", 0, 0, 0, 0, 0, modelo);
-    let ms_carga = sc.cargar(modelo, "cpu").await?;
-    avisar("cargado", 0, 0, 0, 0, ms_carga, modelo);
+    avisar("cargando", 0, 0, 0, 0, 0, 0, &modelos.gliner);
+    let ms_carga = sc.cargar(modelos).await?;
+    let nota = if sc.glirel_activo { "" } else { "sin relaciones: GLiREL no cargó" };
+    avisar("cargado", 0, 0, 0, 0, 0, ms_carga, nota);
 
-    let pendientes = db.pendientes_extraccion(design_id)?;
+    // 3 · El recorrido. Los umbrales de la calibración, si ya la hubo.
+    let cal = db.calibracion(lote_id)?.unwrap_or_default();
+    let predicados: Vec<String> = if modelos.relaciones {
+        legajo_core::extraccion::predicados_modelo()
+    } else {
+        vec![]
+    };
+
+    let pendientes = db.pendientes_extraccion_lote(lote_id, solo_calibracion)?;
     let total = pendientes.len() as u64;
     let mut hechos = 0u64;
     let mut entidades = 0i64;
 
     for (wp_id, texto) in pendientes {
-        if cancelar.load(Ordering::SeqCst) {
-            break;
-        }
-        // Los párrafos se parten igual que en la pantalla de anotación, o las
-        // posiciones no coincidirían y la evaluación mediría cualquier cosa.
+        if cancelar.load(Ordering::SeqCst) { break; }
         let parrafos: Vec<String> = texto
-            .split("
-
-")
+            .split("\n\n")
             .filter(|p| !p.trim().is_empty())
             .map(String::from)
             .collect();
 
-        match sc.extraer(wp_id, &parrafos, umbral).await {
-            Ok((por_parrafo, ms)) => {
-                let n = db.guardar_extraidas(design_id, wp_id, &por_parrafo)?;
+        match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
+            Ok((ents, rels, ms)) => {
+                let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
+                let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;
                 entidades += n;
                 hechos += 1;
-                avisar("extrayendo", hechos, total, wp_id, n, ms, "");
+                avisar("extrayendo", hechos, total, wp_id, n, nr, ms, "");
             }
             Err(e) => {
                 // Un artículo que falla no puede tumbar la corrida.
                 hechos += 1;
-                avisar("extrayendo", hechos, total, wp_id, 0, 0, &e.to_string());
+                avisar("extrayendo", hechos, total, wp_id, 0, 0, 0, &e.to_string());
             }
         }
     }
@@ -693,62 +687,71 @@ async fn extraer(
     Ok(entidades)
 }
 
+// ── Grafo ────────────────────────────────────────────────────────────────
+
 #[tauri::command]
-pub async fn evaluacion(state: State<'_, AppState>, design_id: i64) -> Result<evaluacion::Evaluacion> {
+pub async fn grafo_resumen(state: State<'_, AppState>, lote_id: i64) -> Result<ResumenGrafo> {
     let db = state.db.clone();
-    en_hilo(move || evaluacion::evaluar(&db, design_id)).await
+    en_hilo(move || db.grafo_resumen(lote_id)).await
+}
+
+#[tauri::command]
+pub async fn grafo_entidades(
+    state: State<'_, AppState>, lote_id: i64, limite: i64,
+) -> Result<Vec<NodoGrafo>> {
+    let db = state.db.clone();
+    en_hilo(move || db.grafo_entidades(lote_id, limite)).await
+}
+
+/// Nombres distintos que probablemente son la misma entidad.
+///
+/// El grafo funde lo que la persona declaró igual con `=`, y nada más: no
+/// adivina. Decir cuáles quedaron sueltos es la diferencia entre un grafo con
+/// una limitación conocida y uno con un error escondido.
+#[tauri::command]
+pub async fn grafo_duplicados(
+    state: State<'_, AppState>,
+    lote_id: i64,
+) -> Result<Vec<legajo_core::resolucion::Caso>> {
+    let db = state.db.clone();
+    en_hilo(move || legajo_core::resolucion::casos(&db, lote_id)).await
+}
+
+#[tauri::command]
+pub async fn grafo_relaciones(
+    state: State<'_, AppState>, lote_id: i64, limite: i64,
+) -> Result<Vec<AristaGrafo>> {
+    let db = state.db.clone();
+    en_hilo(move || db.grafo_relaciones(lote_id, limite)).await
+}
+
+// ── Calibración ──────────────────────────────────────────────────────────
+
+/// Calcula qué habría que cambiar en el extractor a partir de las correcciones.
+#[tauri::command]
+pub async fn calibrar(state: State<'_, AppState>, lote_id: i64) -> Result<calibracion::Resultado> {
+    let db = state.db.clone();
+    en_hilo(move || calibracion::calibrar(&db, lote_id)).await
+}
+
+/// Fija la calibración calculada para las siguientes extracciones del lote.
+#[tauri::command]
+pub async fn aplicar_calibracion(
+    state: State<'_, AppState>, lote_id: i64, cal: calibracion::Calibracion,
+) -> Result<()> {
+    let db = state.db.clone();
+    en_hilo(move || db.guardar_calibracion(lote_id, &cal)).await
+}
+
+#[tauri::command]
+pub async fn calibracion_guardada(
+    state: State<'_, AppState>, lote_id: i64,
+) -> Result<Option<calibracion::Calibracion>> {
+    let db = state.db.clone();
+    en_hilo(move || db.calibracion(lote_id)).await
 }
 
 // ── Resolución y reporte ─────────────────────────────────────────────────
-
-#[tauri::command]
-pub async fn casos_resolucion(state: State<'_, AppState>, design_id: i64) -> Result<Vec<resolucion::Caso>> {
-    let db = state.db.clone();
-    en_hilo(move || resolucion::casos(&db, design_id)).await
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn decidir_resolucion(
-    state: State<'_, AppState>,
-    design_id: i64,
-    clave: String,
-    a: String,
-    b: String,
-    tipo: String,
-    decision: String,
-    confianza: f64,
-) -> Result<()> {
-    let db = state.db.clone();
-    en_hilo(move || db.decidir_resolucion(design_id, &clave, &a, &b, &tipo, &decision, confianza)).await
-}
-
-#[tauri::command]
-pub async fn avance_resolucion(state: State<'_, AppState>, design_id: i64) -> Result<(i64, i64)> {
-    let db = state.db.clone();
-    en_hilo(move || db.avance_resolucion(design_id)).await
-}
-
-#[tauri::command]
-pub async fn reporte(
-    state: State<'_, AppState>,
-    design_id: i64,
-    universo: i64,
-) -> Result<reporte::Reporte> {
-    let db = state.db.clone();
-    en_hilo(move || reporte::reporte(&db, design_id, universo)).await
-}
-
-#[tauri::command]
-pub fn puerta(
-    horas_necesarias: f64,
-    personas: f64,
-    horas_semana: f64,
-    semanas: f64,
-    universo: i64,
-) -> reporte::Puerta {
-    reporte::puerta(horas_necesarias, personas, horas_semana, semanas, universo)
-}
 
 #[tauri::command]
 pub async fn hallazgos_archivo(state: State<'_, AppState>, connection_id: i64) -> Result<Vec<Hallazgo>> {

@@ -11,24 +11,28 @@ en WordPress.com.
 
 ## Los ocho pasos
 
-El diagnóstico es un recorrido, y cada paso se abre cuando el anterior está resuelto.
-Todos leen y escriben datos reales del archivo que conectes:
+Un recorrido de principio a fin: se conecta un archivo, se elige qué trozo
+procesar, se corrige al extractor sobre un puñado de artículos y se suelta sobre
+el resto.
 
-| # | Paso | Qué hace de verdad |
+| # | Paso | Qué hace |
 |---|---|---|
-| 01 | **Conexión** | Descubre el transporte, sondea qué permite el sitio y guarda la conexión |
-| 02 | **Perfil** | Censa el archivo entero leyendo solo metadatos, más un sondeo de contenido sobre una submuestra |
-| 03 | **Sanidad** | Hallazgos calculados sobre el censo: fechas dañadas, titulares repetidos, notas cortas, HTML roto |
-| 04 | **Muestreo** | Épocas cortadas por volumen, reparto entre celdas, sorteo reproducible por semilla y descarga de los cuerpos |
-| 05 | **Anotación** | Marca entidades y relaciones sobre los artículos sorteados, con cronómetro por artículo |
-| 06 | **Extracción** | Pasa GLiNER por la muestra desde un proceso hijo de Python |
-| 07 | **Resolución** | Empareja candidatos a la misma entidad y ordena la cola de la más dudosa a la más clara |
-| 08 | **Reporte** | Coste de curación, proyección al archivo completo, puerta de salida y precisión del modelo |
+| 01 | **Conexión** | Descubre cómo hablar con el sitio y qué permite |
+| 02 | **Perfil** | Censa el archivo leyendo solo metadatos, por tramos y reanudable |
+| 03 | **Sanidad** | Hallazgos de calidad sobre el censo, con ejemplos reales |
+| 04 | **Alcance** | Árbol de categorías › subcategorías, con el cómputo estimado |
+| 05 | **Calibración** | El modelo corre sobre unos pocos, tú corriges, se recalculan sus cortes |
+| 06 | **Revisión** | Corregir lo propuesto, no marcar desde cero |
+| 07 | **Extracción** | El lote entero, ya calibrado, desatendido |
+| 08 | **Grafo** | Entidades y relaciones del archivo, con lo confirmado distinguido |
 
-La cifra que persigue todo el recorrido está en el paso 8: **minutos de curación humana por cada
-cien artículos**, multiplicados por el tamaño del archivo y comparados con las horas que la
-redacción puede poner. Si no cuadra, hay que recortar el alcance — y saberlo a tiempo es justo
-para lo que existe la herramienta.
+El trabajo humano vive en los pasos 5 y 6, y siempre es **corregir**, nunca
+partir de una página en blanco: corregir es tres o cuatro veces más rápido y
+produce la misma información.
+
+Los tres modelos —spaCy para segmentar, GLiNER para entidades, GLiREL para
+relaciones— comparten un solo proceso. Está explicado en
+[`docs/pipeline.md`](docs/pipeline.md).
 
 ## Cómo se conecta a un sitio
 
