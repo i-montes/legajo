@@ -163,9 +163,16 @@ instalador.
 
 El release lo arma CI, no una máquina de nadie:
 
+La versión vive en **cinco archivos** y tienen que decir lo mismo:
+`src-tauri/tauri.conf.json`, `package.json`, `Cargo.toml`, `core/Cargo.toml` y
+`src-tauri/Cargo.toml`. El nombre del release y el número que la app compara
+salen del primero, no de la etiqueta: etiquetar `v0.1.1` sin subir ese número
+produce un release llamado 0.1.0 que ninguna instalación reconoce como nuevo.
+CI lo comprueba antes de compilar y se niega si no cuadran.
+
 ```bash
-# La versión vive en tauri.conf.json y en los Cargo.toml
-git tag v0.1.1 && git push --tags
+git commit -am "Legajo: 0.1.1"
+git tag v0.1.1 && git push origin main --tags
 ```
 
 [`.github/workflows/publicar.yml`](.github/workflows/publicar.yml) construye las

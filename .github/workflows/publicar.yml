@@ -23,11 +23,65 @@ permissions:
   contents: write
 
 jobs:
+  # La etiqueta no es la que manda: el nombre del release y el numero que la app
+  # compara para saber si hay version nueva salen de `tauri.conf.json`. Etiquetar
+  # v0.1.1 sin subir ese numero produce un release llamado 0.1.0 que ninguna
+  # instalacion reconoce como nuevo, y el fallo no se nota hasta que alguien
+  # pregunta por que no le llego nada. Se comprueba aqui, en veinte segundos, y
+  # antes de compilar cuatro plataformas.
+  comprobar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: La etiqueta y las cinco versiones dicen lo mismo
+        run: |
+          set -euo pipefail
+          conf=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          pkg=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
+          raiz=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          core=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)
+          shell=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+
+          echo "tauri.conf.json      $conf"
+          echo "package.json         $pkg"
+          echo "Cargo.toml           $raiz"
+          echo "core/Cargo.toml      $core"
+          echo "src-tauri/Cargo.toml $shell"
+
+          for v in "$pkg" "$raiz" "$core" "$shell"; do
+            if [ "$v" != "$conf" ]; then
+              echo "::error::Las versiones del repositorio no coinciden entre si."
+              exit 1
+            fi
+          done
+
+          # En un dispatch manual no hay etiqueta que comparar: se prueba la
+          # tuberia, no se publica una version.
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "Sin etiqueta (dispatch manual): no hay nada mas que comparar."
+            exit 0
+          fi
+
+          etiqueta="${{ github.ref_name }}"
+          if [ "${etiqueta#v}" != "$conf" ]; then
+            echo "::error::La etiqueta $etiqueta no corresponde a la version $conf."
+            echo "Sube la version en los cinco archivos, o etiqueta v$conf."
+            exit 1
+          fi
+          echo "La etiqueta $etiqueta y la version $conf coinciden."
+
   construir:
+    needs: comprobar
     strategy:
       # Sin fail-fast: si falla Windows, interesa igual tener el .dmg y el
       # AppImage del resto en el borrador para poder probarlos.
       fail-fast: false
+      # De uno en uno: los cuatro reescriben el mismo `latest.json` y es un
+      # lee-modifica-escribe. Si dos coinciden, el archivo queda sin una
+      # plataforma y esa deja de recibir actualizaciones sin que nada falle a la
+      # vista. Un release es cosa de cada varias semanas.
+      max-parallel: 1
       matrix:
         include:
           - plataforma: macos-latest
@@ -41,10 +95,10 @@ jobs:
           # distribución del año.
           - plataforma: ubuntu-22.04
             args: "--bundles appimage,deb"
-            objetivo: ""
+            objetivo: x86_64-unknown-linux-gnu
           - plataforma: windows-latest
             args: "--bundles nsis"
-            objetivo: ""
+            objetivo: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.plataforma }}
 
@@ -74,7 +128,7 @@ jobs:
 
       # La caché de cargo es lo que separa un build de veinte minutos de uno de
       # tres. Se separa por plataforma y objetivo porque no se comparten nada.
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./ -> target"
           key: ${{ matrix.plataforma }}-${{ matrix.objetivo }}
