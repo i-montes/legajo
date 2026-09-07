@@ -9,26 +9,35 @@ verdad curar a mano las entidades de veinte años de archivo— pero no está at
 ningún medio: funciona igual con un blog auto-hospedado que con un sitio alojado
 en WordPress.com.
 
-## Los ocho pasos
+## Los ocho pasos, en tres fases
 
 Un recorrido de principio a fin: se conecta un archivo, se elige qué trozo
 procesar, se corrige al extractor sobre un puñado de artículos y se suelta sobre
-el resto.
+el resto. La interfaz los agrupa en tres fases porque ocho pasos en fila no se
+recuerdan y tres tramos sí.
 
-| # | Paso | Qué hace |
-|---|---|---|
-| 01 | **Conexión** | Descubre cómo hablar con el sitio y qué permite |
-| 02 | **Perfil** | Censa el archivo leyendo solo metadatos, por tramos y reanudable |
-| 03 | **Sanidad** | Hallazgos de calidad sobre el censo, con ejemplos reales |
-| 04 | **Alcance** | Árbol de categorías › subcategorías, con el cómputo estimado |
-| 05 | **Calibración** | El modelo corre sobre unos pocos, tú corriges, se recalculan sus cortes |
-| 06 | **Revisión** | Corregir lo propuesto, no marcar desde cero |
-| 07 | **Extracción** | El lote entero, ya calibrado, desatendido |
-| 08 | **Grafo** | Entidades y relaciones del archivo, con lo confirmado distinguido |
+| Fase | # | Paso | Qué hace |
+|---|---|---|---|
+| El archivo | 01 | **Conexión** | Descubre cómo hablar con el sitio y comprueba que el archivo es tuyo |
+| | 02 | **Lectura** | Baja el archivo entero —metadatos y texto en la misma petición—, por tramos y reanudable |
+| | 03 | **Hallazgos** | Calidad del archivo leído, con ejemplos reales: qué conviene dejar fuera |
+| La preparación | 04 | **Alcance** | Árbol de categorías › subcategorías, con el cómputo estimado |
+| | 05 | **Calibración** | El modelo corre sobre unos pocos, tú corriges, se recalculan sus cortes |
+| | 06 | **Revisión** | Corregir lo propuesto, no marcar desde cero |
+| El resultado | 07 | **Extracción** | Categoría por categoría, ya calibrado, desatendido y sin tocar la red |
+| | 08 | **Grafo** | Entidades y relaciones del archivo, con lo confirmado distinguido |
 
-El trabajo humano vive en los pasos 5 y 6, y siempre es **corregir**, nunca
-partir de una página en blanco: corregir es tres o cuatro veces más rápido y
-produce la misma información.
+Los pasos 5 y 6 son un ida y vuelta: se extrae sobre los artículos de
+calibración en el 5, se corrigen en el 6, y al cerrar el último se vuelve al 5,
+donde la calibración se calcula sola con esas correcciones. El trabajo humano
+vive ahí, y siempre es **corregir**, nunca partir de una página en blanco:
+corregir es tres o cuatro veces más rápido y produce la misma información.
+
+Todo lo que se dice de un paso —nombre, fase, titular, frase— vive una sola vez
+en `src/contenido/pasos.ts`; la barra lateral, las cabeceras de pantalla y la
+ayuda lo leen de ahí. La ayuda de cada paso (`src/contenido/ayuda.ts`) sigue el
+mismo orden en los ocho: qué es, qué haces, qué consigues, qué pasa después, y
+aparte las razones, para quien las quiera.
 
 Los tres modelos —spaCy para segmentar, GLiNER para entidades, GLiREL para
 relaciones— comparten un solo proceso. Está explicado en
@@ -77,8 +86,8 @@ El código está partido en dos crates a propósito:
   que es la única forma de sostener la promesa de procesamiento local y de que
   se pueda auditar.
 - **`src/`** — la interfaz. `theme.css` son los tokens del sistema de diseño;
-  `ui/` las primitivas; `screens/` los ocho pasos; `contenido/` los textos de
-  ayuda y los datos de demostración.
+  `ui/` las primitivas; `screens/` los ocho pasos; `contenido/` la definición
+  de los pasos, los textos de ayuda y los datos de demostración.
 
 Las tipografías (Cormorant Garamond, Inter, JetBrains Mono) van empaquetadas en vez de
 cargarse desde Google Fonts: la promesa de la app es que el archivo nunca sale de este

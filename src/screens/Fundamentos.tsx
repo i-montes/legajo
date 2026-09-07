@@ -18,10 +18,10 @@ const TOKENS = [
 ];
 
 const ESCALA_TIPO = [
-  ["Conecta el archivo", "display/36 · serif 400 · 1.12 · −.5px", "var(--font-serif-display)", 36, 400, 1.12, "-.5px"],
-  ["El municipio que aprendió a contar", "titular/40 · serif 500 · 1.14", "var(--font-serif-display)", 40, 500, 1.14, "-.6px"],
-  ["Cuerpo del artículo, medida 65—75 caracteres", "lectura/23 · serif 500 · 1.78", "var(--font-serif-display)", 23, 500, 1.78, ".1px"],
-  ["Prosa de interfaz y hallazgos", "cuerpo/15 · sans 400 · 1.7", "var(--font-sans)", 15, 400, 1.7, "0"],
+  ["Conecta el archivo", "display/36 · serif 500 · 1.14 · −.4px", "var(--font-serif-display)", 36, 500, 1.14, "-.4px"],
+  ["El municipio que aprendió a contar", "titular/38 · serif 600 · 1.18", "var(--font-serif-display)", 38, 600, 1.18, "-.4px"],
+  ["Cuerpo del artículo, medida 65—75 caracteres", "lectura/18 · sans 400 · 1.8", "var(--font-sans)", 18, 400, 1.8, "0"],
+  ["Prosa de interfaz: la frase bajo el titular, los hallazgos", "cuerpo/15 · sans 400 · 1.7", "var(--font-sans)", 15, 400, 1.7, "0"],
   ["Etiquetas, filas de datos, navegación", "ui/13.5 · sans 400 · 1.45", "var(--font-sans)", 13.5, 400, 1.45, "0"],
   ["Metadatos y notas al pie", "menor/12.5 · sans 400", "var(--font-sans)", 12.5, 400, 1.5, "0"],
   ["DIAGNÓSTICO", "rótulo/11 · sans 400 · 1.4px tracking", "var(--font-sans)", 11, 400, 1.4, "1.4px"],

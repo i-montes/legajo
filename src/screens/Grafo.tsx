@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Boton, Glifo, Lienzo, Rotulo } from "../ui";
+import { Boton, Encabezado, Glifo, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
 import { grafoDuplicados, grafoEntidades, grafoRelaciones, grafoResumen, grafoSinNombrar } from "../lib/ipc";
 import type { AristaGrafo, Caso, NodoGrafo, ResumenGrafo, SinNombrar } from "../types";
@@ -29,10 +29,7 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   if (loteId == null || !res) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 8 · Grafo</Rotulo>
-        <p className="t-cuerpo" style={{ color: "var(--t3)" }}>
-          {loteId == null ? "Falta elegir el alcance y procesar un lote." : "Cargando…"}
-        </p>
+        <Encabezado paso="grafo" frase={loteId == null ? "Falta elegir el alcance y procesar un lote." : "Cargando…"} compacto />
       </Lienzo>
     );
   }
@@ -40,12 +37,12 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   if (res.procesados === 0) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 8 · Grafo</Rotulo>
-        <h1 className="t-display" style={{ margin: "0 0 14px" }}>Todavía no hay nada extraído</h1>
-        <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-8)", maxWidth: "52ch" }}>
-          El grafo se construye con lo que el extractor encuentra y tú confirmas. Corre la
-          extracción sobre el lote y vuelve.
-        </p>
+        <Encabezado
+          paso="grafo"
+          titulo="Todavía no hay nada extraído"
+          frase="El grafo se construye con lo que el extractor encuentra y tú confirmas. Corre la extracción sobre el lote y vuelve."
+          compacto
+        />
         <Boton onClick={() => estado.avanzar(6, "extraccion")}>Ir a la extracción</Boton>
       </Lienzo>
     );
@@ -59,14 +56,17 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo ancho={900}>
-      <Rotulo style={{ marginBottom: 12 }}>Paso 8 · Grafo</Rotulo>
-      <h1 className="t-display" style={{ margin: "0 0 10px" }}>
-        {num(res.entidades_distintas)} entidades del archivo
-      </h1>
-      <p className="t-menor" style={{ color: "var(--t3)", margin: "0 0 var(--esp-11)" }}>
-        {num(res.procesados)} de {num(res.articulos)} artículos procesados ·{" "}
-        {num(res.revisados)} revisados a mano · {num(res.relaciones)} relaciones
-      </p>
+      <Encabezado
+        paso="grafo"
+        titulo={`${num(res.entidades_distintas)} entidades del archivo`}
+        frase={
+          <span className="t-menor" style={{ color: "var(--t3)" }}>
+            {num(res.procesados)} de {num(res.articulos)} artículos procesados ·{" "}
+            {num(res.revisados)} revisados a mano · {num(res.relaciones)} relaciones
+            {res.procesados < res.articulos && " · el grafo crece con la extracción"}
+          </span>
+        }
+      />
 
       {/* ── Lo que hay que mirar primero ── */}
       <div style={{ display: "flex", gap: "var(--esp-11)", flexWrap: "wrap", marginBottom: "var(--esp-11)", paddingBottom: "var(--esp-8)", borderBottom: "1px solid var(--borde)" }}>

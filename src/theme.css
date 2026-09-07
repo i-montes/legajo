@@ -88,7 +88,10 @@ button { font-family: var(--font-sans); }
 /* El cuerpo del artículo va en la sans, al mismo tamaño que la prosa de la
    interfaz pero con más aire entre líneas: se lee durante horas seguidas. */
 .t-lectura   { font-family: var(--font-sans);          font-size: 18px;   font-weight: 400; line-height: 1.8; letter-spacing: 0; }
-.t-cuerpo    { font-family: var(--font-sans);          font-size: 18px;   font-weight: 400; line-height: 1.65; }
+/* La prosa de la interfaz —la frase bajo el titular, los hallazgos, las
+   notas— iba al mismo tamaño que el artículo, y un párrafo de interfaz a 18px
+   se lee como un aviso a gritos. Vuelve a los 15 de la especificación. */
+.t-cuerpo    { font-family: var(--font-sans);          font-size: 15px;   font-weight: 400; line-height: 1.7; }
 .t-ui        { font-family: var(--font-sans);          font-size: 13.5px; font-weight: 400; line-height: 1.45; }
 .t-menor     { font-family: var(--font-sans);          font-size: 12.5px; font-weight: 400; line-height: 1.5; }
 .t-rotulo    { font-family: var(--font-sans);          font-size: 11px;   font-weight: 400; line-height: 1.4;

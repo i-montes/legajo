@@ -4,9 +4,11 @@ use crate::transport::Transport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Una pieza del archivo, tal como la necesita el marco muestral: metadatos y
-/// nada de contenido. Descargar el cuerpo de 48.000 artículos solo para
-/// estratificar cuesta dos órdenes de magnitud más y no hace falta.
+/// Una pieza del archivo, tal como la necesita el marco muestral.
+///
+/// El cuerpo no vive aquí sino en `Lote::cuerpos`, porque no todo lo que
+/// consume el censo lo necesita: el reparto por años y secciones se calcula
+/// solo con esto.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilaCenso {
     pub wp_id: i64,
@@ -42,6 +44,10 @@ pub struct Termino {
 pub struct Lote {
     pub filas: Vec<FilaCenso>,
     pub anomalias: Vec<Anomalia>,
+    /// El HTML de cada pieza, que viaja en la misma respuesta que sus
+    /// metadatos. Pedirlo aparte era pedir dos veces lo mismo al mismo
+    /// servidor: primero para censar y después para extraer.
+    pub cuerpos: Vec<(i64, String)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,14 +116,23 @@ pub const MAX_TERMINOS_ESTRATO: u64 = 2000;
 /// hace falta traerlos todos: el censo guarda los ids de todas las taxonomías
 /// —vienen gratis en la respuesta de cada artículo— y aquí solo se resuelven
 /// los nombres de las que de verdad pueden hacer de secciones.
+/// `avisar` recibe (taxonomía, cuántas van, cuántas hay).
+///
+/// Sin esto la fase entera era muda: en un archivo con cuatro taxonomías son
+/// nueve segundos largos —una sonda por cada una y las páginas de las que sí
+/// caben— con la pantalla diciendo «0/0» y sin nada que distinga ir despacio de
+/// haberse colgado. Es justo la queja que trae la gente.
 pub async fn sincronizar_terminos(
     http: &Http,
     t: &Transport,
     auth: &Auth,
     taxonomias: &[String],
+    avisar: impl Fn(&str, u64, u64),
 ) -> Result<Terminos> {
     let mut out = Terminos::default();
-    for tax in taxonomias {
+    let total = taxonomias.len() as u64;
+    for (i, tax) in taxonomias.iter().enumerate() {
+        avisar(tax, i as u64, total);
         // Primero cuántos hay: una sola petición decide si vale la pena.
         let sonda = t.url(&format!("wp/v2/{tax}"), &[("per_page", "1".into()), ("_fields", "id".into())])?;
         if let Ok(r) = http.get(&sonda, auth).await {
@@ -166,6 +181,7 @@ pub async fn sincronizar_terminos(
             if page > 30 { break; } // salvaguarda: 3.000 términos por taxonomía
         }
     }
+    avisar("", total, total);
     Ok(out)
 }
 
@@ -208,7 +224,7 @@ pub fn ventanas_mensuales(desde_anio: i32, hasta_anio: i32) -> Vec<Ventana> {
 
 fn parametros(v: &Ventana, campos: &str, page: u32) -> Vec<(&'static str, String)> {
     let mut q: Vec<(&'static str, String)> = vec![
-        ("per_page", "100".into()),
+        ("per_page", POR_TANDA.to_string()),
         ("page", page.to_string()),
         ("orderby", "date".into()),
         ("order", "asc".into()),
@@ -227,7 +243,10 @@ pub async fn censar_ventana(
     ventana: &Ventana,
     taxonomias: &[String],
 ) -> Result<Lote> {
-    let mut campos = String::from("id,date,slug,link,title,author");
+    // `content` viaja con los metadatos. Es lo que convierte el censo en la
+    // única vez que se le pide el archivo al sitio: la extracción ya no vuelve
+    // a la red, lee de la base.
+    let mut campos = String::from("id,date,slug,link,title,author,content");
     for tax in taxonomias {
         campos.push(',');
         campos.push_str(tax);
@@ -281,6 +300,10 @@ pub async fn censar_ventana(
                 lote.anomalias.push(Anomalia { wp_id, kind: "sin_terminos".into(), detail: String::new() });
             }
 
+            if let Some(html) = texto(it, "content") {
+                lote.cuerpos.push((wp_id, html));
+            }
+
             lote.filas.push(FilaCenso {
                 wp_id,
                 date,
@@ -293,11 +316,13 @@ pub async fn censar_ventana(
             });
         }
 
-        if items.len() < 100 { break; }
+        if items.len() < POR_TANDA { break; }
         page += 1;
-        // Una ventana mensual con más de 50 páginas es un archivo anómalo o un
-        // filtro que el sitio ignora. Cortar evita un bucle infinito.
-        if page > 50 { break; }
+        // Una ventana mensual con más de cinco mil piezas es un archivo anómalo
+        // o un filtro que el sitio ignora. Cortar evita un bucle infinito. El
+        // tope se expresa en piezas y no en páginas para que no se mueva solo
+        // si cambia el tamaño de la tanda.
+        if page as usize * POR_TANDA > 5_000 { break; }
     }
 
     Ok(lote)
@@ -349,6 +374,21 @@ pub async fn rango_real(http: &Http, t: &Transport, auth: &Auth) -> Result<(i32,
 /// contenido sobre una submuestra aleatoria (que estima qué proporción del
 /// archivo usa bloques, cuántas notas son muy cortas y cuánto HTML está roto)
 /// y, más adelante, la descarga de los artículos que caen en la muestra.
+/// Cuántos artículos se piden —y se procesan— de una vez.
+///
+/// La extracción va por tandas de este tamaño: una sola petición trae los
+/// cuerpos y el extractor los consume acto seguido. Antes eran dos recorridos
+/// separados sobre el mismo lote, uno bajándolo entero y otro extrayéndolo
+/// entero, y el primero tenía que terminar antes de que empezara el segundo:
+/// en un archivo grande eso son miles de cuerpos en disco esperando a que
+/// carguen los modelos, y una corrida interrumpida a mitad dejaba descargado
+/// mucho más de lo que llegó a procesar.
+///
+/// Cuarenta es el mínimo que pidió la redacción y va sobrado por debajo del
+/// tope de cien de WordPress, que con el cuerpo incluido es una respuesta
+/// pesada.
+pub const POR_TANDA: usize = 40;
+
 pub async fn traer_contenido(
     http: &Http,
     t: &Transport,
@@ -356,7 +396,7 @@ pub async fn traer_contenido(
     ids: &[i64],
 ) -> Result<Vec<(i64, String)>> {
     let mut out = Vec::new();
-    for trozo in ids.chunks(50) {
+    for trozo in ids.chunks(POR_TANDA) {
         let lista = trozo.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
         let url = t.url(
             "wp/v2/posts",
@@ -414,6 +454,28 @@ mod tests {
     fn detecta_el_anio_danado_de_wordpress() {
         assert!(anio_plausible("2016-03-14T08:00:00"));
         assert!(!anio_plausible("-0001-11-30T00:00:00"));
+    }
+
+    #[test]
+    fn el_recorrido_pide_el_cuerpo_con_los_metadatos() {
+        /* El censo y la extracción pedían las mismas piezas al mismo servidor
+           en dos pasadas: una para censar y otra para bajar el cuerpo. Con el
+           cuerpo dentro de la misma respuesta, el archivo se pide una sola vez
+           y la extracción ya no toca la red. */
+        let v = Ventana {
+            etiqueta: "2016-03".into(),
+            desde: Some("2016-03-01T00:00:00".into()),
+            hasta: Some("2016-04-01T00:00:00".into()),
+        };
+        let q = parametros(&v, "id,date,slug,link,title,author,content,categories", 1);
+        let campos = q.iter().find(|(k, _)| *k == "_fields").unwrap().1.clone();
+        assert!(campos.contains("content"), "sin el cuerpo habría que volver a pedirlo");
+
+        // Y la página baja a la tanda: con el cuerpo dentro, cien piezas son
+        // varios MB contra un tiempo de espera de 45 s.
+        let por_pagina = q.iter().find(|(k, _)| *k == "per_page").unwrap().1.clone();
+        assert_eq!(por_pagina, POR_TANDA.to_string());
+        assert!(POR_TANDA >= 40, "la redacción pidió al menos cuarenta por petición");
     }
 
     #[test]

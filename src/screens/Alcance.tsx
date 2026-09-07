@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Boton, Glifo, Lienzo, Rotulo } from "../ui";
+import { Aviso, Boton, Encabezado, Lienzo, Razon, Rotulo } from "../ui";
 import { arbolCategorias, crearLote, estimarAlcance } from "../lib/ipc";
 import type { Alcance as AlcanceT, ArbolCategorias, Estimacion, NodoCategoria } from "../types";
 import type { EstadoApp } from "../App";
@@ -91,10 +91,7 @@ export default function Alcance({ estado }: { estado: EstadoApp }) {
   if (!arbol) {
     return (
       <Lienzo>
-        <Rotulo>Paso 4 · Alcance</Rotulo>
-        <p className="t-cuerpo" style={{ color: "var(--t3)", marginTop: 20 }}>
-          {error ?? "Leyendo las secciones del archivo…"}
-        </p>
+        <Encabezado paso="alcance" frase={error ?? "Leyendo las secciones del archivo…"} compacto />
       </Lienzo>
     );
   }
@@ -105,19 +102,19 @@ export default function Alcance({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo ancho={900}>
-      <Rotulo style={{ marginBottom: 12 }}>Paso 4 · Alcance</Rotulo>
-      <h1 className="t-display" style={{ margin: "0 0 14px" }}>Qué trozo del archivo procesamos</h1>
-      <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-11)", maxWidth: "58ch" }}>
-        Por secciones, como está organizado el medio. Así el avance es trazable: se sabe qué está
-        hecho y qué falta en términos que la redacción reconoce. Sin elegir nada, entra todo.
-      </p>
+      <Encabezado
+        paso="alcance"
+        frase="Marca secciones y acota años. Sin elegir nada, entra todo el archivo."
+        detalle={
+          <>
+            <Razon>Se elige por secciones, como está organizado el medio, para que el avance sea trazable: se sabe qué está hecho y qué falta en términos que la redacción reconoce.</Razon>
+            <Razon>Marcar una sección arrastra sus subsecciones: en WordPress un artículo regional no siempre lleva también la categoría madre.</Razon>
+            <Razon>No es una muestra estadística: es un alcance de trabajo. El cómputo estimado es tiempo de máquina, desatendido, que se puede detener y retomar.</Razon>
+          </>
+        }
+      />
 
-      {error && (
-        <div style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "12px 15px", background: "var(--error-fondo)", borderRadius: 8, marginBottom: "var(--esp-8)" }}>
-          <Glifo estado="error" size={11} />
-          <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.6 }}>{error}</span>
-        </div>
-      )}
+      {error && <Aviso estado="error">{error}</Aviso>}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr minmax(240px, 280px)", gap: "var(--esp-11)", alignItems: "start" }}>
         <div>
@@ -192,8 +189,11 @@ export default function Alcance({ estado }: { estado: EstadoApp }) {
           </div>
 
           <Boton onClick={crear} disabled={creando || !est || est.articulos === 0}>
-            {creando ? "Creando…" : "Crear el lote"}
+            {creando ? "Creando…" : "Crear el lote y calibrar"}
           </Boton>
+          <p className="t-menor" style={{ color: "var(--t3)", margin: "-14px 0 0", lineHeight: 1.6 }}>
+            Después: el extractor corre sobre los {nCalibrar} de calibración y tú lo corriges.
+          </p>
         </div>
       </div>
     </Lienzo>

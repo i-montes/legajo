@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
-  ConnectionRow, Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
+  ColaCategorias, ConexionGuardada,
+  Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
   Hallazgo, Identidad, LoteRow, Mencion, Modelos, NodoGrafo, PasoAutorizacion,
   PerfilArchivo, ProgresoCenso,
   ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
@@ -15,7 +16,9 @@ export const discoverSite = (input: string) =>
 export const saveConnection = (resolvedOrigin: string, label: string) =>
   invoke<number>("save_connection", { resolvedOrigin, label });
 
-export const listConnections = () => invoke<ConnectionRow[]>("list_connections");
+/** El medio conectado, o `null`. Legajo trabaja con un archivo a la vez. */
+export const conexionGuardada = () =>
+  invoke<ConexionGuardada | null>("conexion_guardada");
 
 // ── Pertenencia al sitio ─────────────────────────────────────────────────
 
@@ -86,14 +89,20 @@ export const avanceAnotacion = (loteId: number) =>
 // ── Extracción ───────────────────────────────────────────────────────────
 
 export const iniciarExtraccion = (
-  loteId: number, modelos: Modelos | null, soloCalibracion: boolean
-) => invoke<void>("iniciar_extraccion", { loteId, modelos, soloCalibracion });
+  loteId: number, modelos: Modelos | null, soloCalibracion: boolean,
+  categoria: number | null = null
+) => invoke<void>("iniciar_extraccion", { loteId, modelos, soloCalibracion, categoria });
 
 export const cancelarExtraccion = () => invoke<void>("cancelar_extraccion");
 export const extrayendo = () => invoke<boolean>("extrayendo");
 
-export const avanceExtraccion = (loteId: number, soloCalibracion: boolean) =>
-  invoke<[number, number]>("avance_extraccion", { loteId, soloCalibracion });
+export const avanceExtraccion = (
+  loteId: number, soloCalibracion: boolean, categoria: number | null = null
+) => invoke<[number, number]>("avance_extraccion", { loteId, soloCalibracion, categoria });
+
+/** La cola del paso 7: qué categorías tiene el lote y cuánto falta en cada una. */
+export const categoriasDelLote = (loteId: number) =>
+  invoke<ColaCategorias>("categorias_del_lote", { loteId });
 
 export const alProgresoExtraccion = (cb: (p: ProgresoExtraccion) => void): Promise<UnlistenFn> =>
   listen<ProgresoExtraccion>("extraccion:progreso", (e) => cb(e.payload));

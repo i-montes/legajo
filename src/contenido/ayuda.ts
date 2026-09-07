@@ -1,6 +1,5 @@
-export type Paso =
-  | "conexion" | "perfil" | "sanidad" | "alcance"
-  | "calibracion" | "revision" | "extraccion" | "grafo" | "fundamentos";
+import type { PasoNav } from "./pasos";
+export type { Paso } from "./pasos";
 
 export interface Regla {
   titulo: string;
@@ -8,19 +7,26 @@ export interface Regla {
 }
 
 export interface Ayuda {
-  paso: string;
-  titulo: string;
+  /** Qué es este paso, en dos frases. */
   que: string;
+  /** Qué se consigue al terminar, para saber cuándo está hecho. */
   meta: string;
+  /** Qué hace la persona aquí. Solo acciones; la razón de cada una va en `porque`. */
   como: string[];
+  /** Por qué el paso es así y no de otra forma. Se lee aparte, para quien lo
+   *  quiera: la mayoría de las veces basta con saber qué hacer. */
+  porque?: string[];
+  /** Qué pasa al terminar, para que nadie llegue al paso siguiente a ciegas. */
+  despues: string;
   /** Las decisiones que dos anotadores tienen que compartir para que el
    *  acuerdo entre ellos mida criterio y no memoria. */
   reglas?: Regla[];
 }
 
-/* Los textos de conexion, perfil y sanidad vienen literales del diseno.
-   Los cinco restantes se redactaron en el mismo registro, que el diseno dejo
-   sin escribir: explicar que es, que se busca y como hacerlo, sin jerga. */
+/* El registro es el mismo en los ocho: qué es, qué se busca, qué haces, qué
+   pasa después. Sin jerga. Las razones —por qué se pide el correo y no el
+   usuario, por qué se lee el archivo entero— van en un apartado propio: quien
+   solo quiere terminar no tiene que leerlas, y quien desconfía las encuentra. */
 /* Las reglas salieron de anotar artículos reales, no de un manual.
    Están aquí y no en la cabeza de nadie porque la doble anotación —dos personas
    sobre los mismos cien artículos— solo mide algo si las dos siguen el mismo
@@ -98,101 +104,123 @@ export const REGLAS: Regla[] = [
   },
 ];
 
-export const AYUDA: Record<Exclude<Paso, "fundamentos">, Ayuda> = {
+export const AYUDA: Record<PasoNav, Ayuda> = {
   conexion: {
-    paso: "Paso 1 de 8",
-    titulo: "Conexión con el WordPress del medio",
     que: "Identifica el sitio y comprueba, con una contraseña de aplicación, que el archivo es tuyo.",
     meta: "Que Legajo no toque el archivo de nadie sin que su dueño lo haya autorizado.",
     como: [
-      "Pega la dirección del sitio y el correo con el que entras a su WordPress. No hace falta el nombre de usuario: casi nadie lo sabe, y WordPress acepta el correo.",
-      "Legajo lee solo el índice del sitio: cómo se llama, qué versión tiene y dónde se crean sus contraseñas. No mira el archivo.",
-      "Crea una contraseña de aplicación en tu WordPress y pégala aquí. Es una clave aparte, solo para Legajo, que no es tu contraseña real y que revocas cuando quieras desde tu perfil.",
-      "Legajo comprueba contra el sitio que esa cuenta tiene permisos de edición. Solo entonces empieza a leer.",
+      "Pega la dirección del sitio y el correo con el que entras a su WordPress.",
+      "Crea una contraseña de aplicación en tu WordPress —el enlace te lleva— y pégala aquí.",
+      "Legajo comprueba contra el sitio que la cuenta tiene permisos de edición. Solo entonces empieza a leer.",
+    ],
+    porque: [
+      "Se pide el correo y no el nombre de usuario porque casi nadie sabe cuál es su usuario en WordPress, y WordPress acepta el correo.",
+      "Hasta que compruebes la contraseña, Legajo solo lee el índice del sitio: cómo se llama, qué versión tiene y dónde se crean sus contraseñas. No mira el archivo.",
+      "La contraseña de aplicación es una clave aparte, solo para Legajo. No es tu contraseña real y la revocas cuando quieras desde tu perfil.",
       "Leer un archivo público no exigiría nada de esto. Construir su grafo entero, sí: es la diferencia entre consultar y quedarse con él.",
     ],
+    despues: "La lectura del archivo arranca sola: el permiso ya está dado y no queda nada que decidir.",
   },
   perfil: {
-    paso: "Paso 2 de 8",
-    titulo: "Leer el archivo",
-    que: "Un recorrido por todo el archivo leyendo solo metadatos —fecha, sección, titular—, nunca el cuerpo.",
-    meta: "El universo del que después se recorta lo que se va a procesar.",
+    que: "Un recorrido por todo el archivo, trayéndose de cada pieza sus metadatos —fecha, sección, titular— y su texto, en la misma petición.",
+    meta: "El archivo entero en tu disco: el universo del que después se recorta lo que se va a procesar.",
     como: [
-      "Arranca solo: el permiso se dio en el paso anterior y no queda nada que decidir aquí.",
-      "Va por tramos mensuales y con pausas de cortesía entre peticiones, así que tarda unos minutos en un archivo grande.",
-      "Se guarda cada tramo al terminarlo. Detenerlo no pierde lo recorrido, y al volver retoma donde iba.",
-      "Cuando acaba, pasa solo a los hallazgos. Se puede volver aquí desde la barra lateral para mirar el reparto por años y secciones.",
+      "Nada. Arranca solo y, cuando termina, pasa solo a los hallazgos.",
+      "Si hace falta, «Detener». No pierde lo recorrido: cada tramo se guarda al terminarlo y al volver retoma donde iba.",
     ],
+    porque: [
+      "Va por tramos mensuales y con pausas de cortesía entre peticiones, al ritmo que el sitio aguanta. Como se trae el texto, tarda más que un recorrido de solo metadatos y ocupa disco.",
+      "Es la única vez que se le pide el archivo al sitio. Los pasos siguientes leen de tu disco y no vuelven a la red.",
+      "Se puede volver aquí desde la barra lateral para mirar el reparto por años y secciones, o para traer lo que el archivo publicó después.",
+    ],
+    despues: "Los hallazgos: qué tiene el archivo que convenga dejar fuera.",
   },
   sanidad: {
-    paso: "Paso 3 de 8",
-    titulo: "Sanidad del archivo",
-    que: "Hallazgos de calidad calculados sobre el censo —fechas dañadas, titulares repetidos, notas muy cortas— con ejemplos reales de tu instalación.",
+    que: "Hallazgos de calidad calculados sobre lo leído —fechas dañadas, titulares repetidos, notas muy cortas— con ejemplos reales de tu instalación.",
     meta: "Saber qué conviene dejar fuera antes de gastar cómputo en ello.",
     como: [
       "Abre cada hallazgo y mira los ejemplos: son artículos reales, no estimaciones.",
-      "Elige qué hacer con cada uno. Puedes cambiarlo después.",
+      "Elige qué hacer con cada uno. Los marcados con ▲ hay que decidirlos para seguir; el resto puede esperar.",
     ],
+    porque: [
+      "Son características del archivo, no errores del medio. Veinte años de migraciones dejan huellas, y es mejor verlas ahora que descubrirlas en el grafo.",
+    ],
+    despues: "Elegir el alcance: qué trozo del archivo se procesa.",
   },
   alcance: {
-    paso: "Paso 4 de 8",
-    titulo: "Qué trozo del archivo procesar",
     que: "La selección de secciones y años sobre los que va a trabajar el extractor. No es una muestra estadística: es un alcance de trabajo.",
     meta: "Un lote acotado y trazable, con su coste de cómputo conocido de antemano.",
     como: [
-      "Elige secciones en el árbol. Marcar una arrastra sus subsecciones: en WordPress un artículo regional no siempre lleva también la categoría madre.",
+      "Marca secciones en el árbol. Sin elegir nada, entra todo.",
       "Acota los años si quieres empezar por lo reciente y ampliar después.",
-      "Mira el cómputo estimado antes de crear el lote. Es tiempo de máquina, desatendido, pero conviene saberlo.",
-      "Los artículos de calibración salen de aquí, repartidos entre secciones.",
+      "Decide cuántos artículos se revisan para calibrar y crea el lote.",
     ],
+    porque: [
+      "Marcar una sección arrastra sus subsecciones: en WordPress un artículo regional no siempre lleva también la categoría madre.",
+      "El cómputo estimado es tiempo de máquina, desatendido. Se puede detener y retomar, pero conviene saberlo antes.",
+      "Los artículos de calibración salen de aquí, repartidos entre secciones, no tomados en bloque.",
+    ],
+    despues: "La calibración: el extractor corre sobre esos pocos artículos y tú lo corriges.",
   },
   calibracion: {
-    paso: "Paso 5 de 8",
-    titulo: "Enseñarle al extractor qué está haciendo mal",
-    que: "El modelo corre sobre un puñado de artículos, tú corriges, y con esas correcciones se recalcula cómo se usa: el corte de confianza de cada tipo y qué no debe proponer nunca.",
+    que: "El extractor corre sobre un puñado de artículos, tú corriges, y con esas correcciones se recalcula cómo se usa: el corte de confianza de cada tipo y qué no debe proponer nunca.",
     meta: "No descubrir a las cinco horas de cómputo que el extractor estaba etiquetando mal media cosa.",
     como: [
       "Elige los modelos. Con los que vienen por defecto se empieza bien.",
-      "Deja que extraiga sobre los artículos de calibración; la primera vez descarga los modelos y tarda.",
-      "Ve a revisar y corrige: borra lo que sobra, añade lo que falta, arregla los tipos.",
-      "Vuelve aquí y calcula. Verás el antes y el después por tipo, y podrás aplicarlo al lote.",
+      "Extrae sobre los artículos de calibración. La primera vez descarga los modelos y tarda.",
+      "Pasa a revisar y corrige. Al cerrar el último artículo vuelves aquí y la calibración se calcula sola.",
+      "Mira el antes y el después por tipo, y aplícala al lote.",
     ],
+    porque: [
+      "Es aritmética sobre las puntuaciones ya guardadas: el efecto se ve al instante y sin volver a pasar el modelo.",
+      "Extraer relaciones casi cuadruplica el tiempo por artículo. Sin ellas tendrás un índice de nombres, no un grafo; se puede dejar para una segunda pasada.",
+      "Bajar los modelos es lo único de la app que sale a la red, y trae pesos públicos: ningún texto de tu archivo se envía a ninguna parte.",
+    ],
+    despues: "La extracción sobre el resto del lote, con los cortes y el diccionario que salieron de tu revisión.",
   },
   revision: {
-    paso: "Paso 6 de 8",
-    titulo: "Revisar lo que propuso el extractor",
     que: "Corregir sobre lo ya marcado, no empezar de cero. Borrar lo que sobra, añadir lo que falta y unir las formas que nombran lo mismo.",
-    meta: "Corregir es tres o cuatro veces más rápido que marcar desde cero, y produce la misma información: qué falla el modelo y un diccionario de entidades.",
+    meta: "Qué falla el modelo y un diccionario de entidades. Corregir es tres o cuatro veces más rápido que marcar desde cero, y produce la misma información.",
     como: [
       "Lo punteado lo propuso la máquina; pulsarlo lo da por bueno. Lo que sobre se borra con ⌫.",
       "Selecciona texto y marca con 1—8 lo que el modelo no vio. Se marcan también sus repeticiones.",
       "Con dos marcas elegidas: «=» si nombran la misma cosa, «R» si son cosas distintas unidas por algo.",
-      "Marca lo que el texto afirma, no lo que tú sabes del asunto.",
+      "Cierra el artículo cuando esté. El reloj mide cuánto costó, y esa cifra es parte del resultado.",
     ],
+    porque: [
+      "Marca lo que el texto afirma, no lo que tú sabes del asunto. El grafo tiene que poder rastrear cada dato hasta una frase.",
+      "Las reglas de abajo salieron de anotar artículos reales. Están escritas porque dos personas sobre los mismos artículos solo miden criterio si siguen las mismas.",
+    ],
+    despues: "Con el último artículo cerrado, la calibración se calcula con tus correcciones.",
     reglas: REGLAS,
   },
   extraccion: {
-    paso: "Paso 7 de 8",
-    titulo: "Extracción sobre el lote entero",
-    que: "El modelo, ya calibrado, recorre todo el lote sin intervención tuya.",
-    meta: "Cobertura completa del alcance elegido, con los umbrales y el diccionario que salieron de tu revisión.",
+    que: "El extractor, ya calibrado, recorre la categoría que elijas sin intervención tuya.",
+    meta: "Cobertura del alcance elegido, sección por sección, con los umbrales y el diccionario de tu revisión.",
     como: [
-      "Lánzala y déjala correr. Es tiempo de máquina.",
-      "Detener no pierde trabajo: cada artículo se guarda al terminarlo.",
-      "Si la velocidad cae, suele ser el servidor del medio limitando peticiones durante la descarga.",
+      "Elige una categoría de la cola. Elegir una madre arrastra sus hijas.",
+      "Lánzala y déjala correr. Al terminar, la cola ofrece la siguiente.",
+      "«Detener» no pierde trabajo: cada artículo se guarda al terminarlo.",
     ],
+    porque: [
+      "El texto ya está en disco desde la lectura, así que esto es cómputo puro: no depende del servidor del medio ni de la red.",
+      "Se va por categorías, y no de golpe, para que el avance sea trazable en los términos que la redacción reconoce.",
+    ],
+    despues: "El grafo, que se puede mirar en cualquier momento con lo que ya haya extraído.",
   },
   grafo: {
-    paso: "Paso 8 de 8",
-    titulo: "El grafo",
     que: "El resultado: entidades, sus formas equivalentes y las relaciones entre ellas, sobre el lote procesado.",
     meta: "Un índice consultable del archivo, y la base de cualquier cosa que se construya encima.",
     como: [
       "Mira primero las entidades más frecuentes: son las que sostienen el grafo.",
-      "Las que aparecen una sola vez son la mayoría y aportan poco; no te preocupes por ellas todavía.",
-      "El grafo funde los nombres que marcaste iguales con = al revisar, y solo esos: si ves «Petro» y «Gustavo Petro» separados, es que falta declararlo.",
-      "El aviso de nombres parecidos señala los pares que probablemente sobren, pero no los une por su cuenta: una identidad inventada es peor que una repetida.",
+      "Revisa los pares de nombres parecidos. El grafo solo funde los que marcaste iguales con «=» al revisar.",
       "Exporta cuando quieras llevártelo a otra herramienta.",
     ],
+    porque: [
+      "Las entidades que aparecen una sola vez son la mayoría y aportan poco. Es lo normal en un archivo grande.",
+      "El aviso de nombres parecidos no los une por su cuenta: una identidad inventada es peor que una repetida.",
+      "El ✓ distingue lo que una persona confirmó de lo que solo propuso el modelo. No valen lo mismo como dato.",
+    ],
+    despues: "Nada obligatorio. Se puede ampliar el alcance y volver a extraer; el grafo crece con el lote.",
   },
 };

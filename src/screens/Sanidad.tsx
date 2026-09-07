@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Barra, Boton, Cargando, Glifo, Lienzo, Rotulo } from "../ui";
+import { Acciones, Barra, Boton, Cargando, Encabezado, Glifo, Lienzo, Razon, Rotulo } from "../ui";
 import { hallazgosArchivo } from "../lib/ipc";
 import type { Hallazgo } from "../types";
 import type { EstadoApp } from "../App";
@@ -20,7 +20,7 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
   if (hallazgos === null) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 3 · Sanidad del archivo</Rotulo>
+        <Encabezado paso="sanidad" frase={null} compacto />
         <Cargando
           titulo="Revisando lo que se leyó"
           pasos={[
@@ -43,12 +43,12 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
   if (hallazgos.length === 0) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 3 · Sanidad del archivo</Rotulo>
-        <h1 className="t-display" style={{ margin: "0 0 14px" }}>Sin hallazgos que decidir</h1>
-        <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-11)", maxWidth: "54ch" }}>
-          El censo no encontró fechas dañadas, titulares repetidos ni artículos sin sección. Es un
-          archivo inusualmente limpio: la muestra puede construirse sin reglas de exclusión.
-        </p>
+        <Encabezado
+          paso="sanidad"
+          titulo="Sin hallazgos que decidir"
+          frase="No hay fechas dañadas, titulares repetidos ni artículos sin sección. Es un archivo inusualmente limpio: el alcance se puede elegir sin reglas de exclusión."
+          compacto
+        />
         <Boton onClick={() => estado.avanzar(3, "alcance")}>Elegir el alcance</Boton>
       </Lienzo>
     );
@@ -56,14 +56,15 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo>
-      <Rotulo style={{ marginBottom: 12 }}>Paso 3 · Sanidad del archivo</Rotulo>
-      <h1 className="t-display" style={{ margin: "0 0 14px" }}>
-        {hallazgos.length === 1 ? "Una decisión antes de muestrear" : `${escrito(hallazgos.length)} decisiones antes de muestrear`}
-      </h1>
-      <p className="t-cuerpo" style={{ margin: "0 0 var(--esp-8)", color: "var(--t2)", maxWidth: "56ch" }}>
-        Son características del archivo, no errores del medio. Cada hallazgo abre ejemplos reales de
-        tu instalación y pide una decisión.
-      </p>
+      <Encabezado
+        paso="sanidad"
+        titulo={hallazgos.length === 1 ? "Una decisión antes de seguir" : `${escrito(hallazgos.length)} decisiones antes de seguir`}
+        frase="Cada hallazgo abre ejemplos reales de tu archivo y pide una decisión. Los marcados con ▲ hay que decidirlos; el resto puede esperar."
+        detalle={
+          <Razon>Son características del archivo, no errores del medio. Veinte años de migraciones dejan huellas —fechas que se perdieron, piezas importadas dos veces— y es mejor verlas ahora que descubrirlas en el grafo.</Razon>
+        }
+        compacto
+      />
 
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: "var(--esp-8)" }}>
         <div style={{ flex: 1 }}><Barra pct={(resueltos / hallazgos.length) * 100} /></div>
@@ -145,18 +146,17 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
         })}
       </div>
 
-      <div style={{ marginTop: "var(--esp-11)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+      <Acciones nota={
+        !bloqueantesResueltos
+          ? "Los hallazgos marcados con ▲ impiden seguir mientras no se decidan."
+          : completo
+          ? "Listo: el alcance se elige con estas reglas."
+          : `Puedes seguir: los ${hallazgos.length - resueltos} sin decidir no bloquean y quedan como pendientes.`
+      }>
         <Boton onClick={() => estado.avanzar(3, "alcance")} disabled={!bloqueantesResueltos}>
           Elegir el alcance
         </Boton>
-        <span className="t-menor" style={{ color: "var(--t3)", maxWidth: "44ch", lineHeight: 1.6 }}>
-          {!bloqueantesResueltos
-            ? "Los hallazgos marcados con ▲ impiden estratificar mientras no se decidan."
-            : completo
-            ? "Listo: la muestra puede construirse con estas reglas."
-            : `Puedes seguir: los ${hallazgos.length - resueltos} sin decidir no bloquean, pero quedan registrados como pendientes.`}
-        </span>
-      </div>
+      </Acciones>
     </Lienzo>
   );
 }

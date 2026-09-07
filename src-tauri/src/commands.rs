@@ -24,6 +24,23 @@ pub struct AppState {
     pub extraccion_cancelar: Arc<AtomicBool>,
 }
 
+/// Suelta una bandera de «hay algo corriendo» pase lo que pase.
+///
+/// El `store(false)` iba detrás del `await`, así que solo se ejecutaba si la
+/// tarea terminaba de forma ordenada. Si entraba en pánico, la bandera se
+/// quedaba encendida: el siguiente intento recibía «Ya hay un censo en marcha»,
+/// nadie emitía `censo:fin`, y la ventana se quedaba con el latido girando
+/// sobre una fase que ya no estaba ocurriendo. Detener tampoco servía, porque
+/// cancelar solo levanta un aviso que ninguna tarea iba a leer. En un `Drop`
+/// esto se cumple también cuando la tarea se desenrolla.
+struct Suelta(Arc<AtomicBool>);
+
+impl Drop for Suelta {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Corre trabajo bloqueante fuera del hilo principal.
 ///
 /// En Tauri un comando síncrono se ejecuta en el hilo de la interfaz. Una
@@ -85,14 +102,47 @@ pub fn save_connection(state: State<'_, AppState>, resolved_origin: String, labe
     )
 }
 
-#[tauri::command]
-pub async fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionRow>> {
-    let db = state.db.clone();
-    en_hilo(move || db.list_connections()).await
+/// El medio conectado, si lo hay, con su descubrimiento ya guardado.
+///
+/// Legajo trabaja con un archivo a la vez, así que esto es o uno o ninguno.
+/// Lleva el descubrimiento para que reabrir la app no le pregunte otra vez al
+/// sitio quién es: ya está en disco desde la primera conexión.
+#[derive(Serialize)]
+pub struct ConexionGuardada {
+    pub conexion: ConnectionRow,
+    pub sitio: Option<Discovery>,
+    /// Si ya se demostró la pertenencia al sitio. Sin esto la pantalla no
+    /// puede saber si aún falta la contraseña de aplicación o si lo único que
+    /// falta es continuar.
+    pub autorizado: bool,
 }
 
 #[tauri::command]
+pub async fn conexion_guardada(state: State<'_, AppState>) -> Result<Option<ConexionGuardada>> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        let Some((conexion, json)) = db.conexion_guardada()? else { return Ok(None) };
+        // Un descubrimiento ilegible —por un cambio de formato entre versiones—
+        // no puede impedir volver a entrar: se pierde el atajo, no el medio.
+        let sitio = json
+            .as_deref()
+            .and_then(|j| serde_json::from_str::<Discovery>(j).ok());
+        let autorizado = conexion.auth_method != "anonymous";
+        Ok(Some(ConexionGuardada { conexion, sitio, autorizado }))
+    })
+    .await
+}
+
+/// Olvida el medio y todo lo que colgaba de él.
+///
+/// Antes se pide a lo que esté corriendo que pare. Un censo o una extracción
+/// en marcha sobre el sitio que se acaba de borrar seguiría pidiéndole páginas
+/// a un servidor ajeno para escribirlas contra filas que ya no existen, y sus
+/// avisos llegarían a una pantalla que ya está mostrando otra cosa.
+#[tauri::command]
 pub fn delete_connection(state: State<'_, AppState>, id: i64) -> Result<()> {
+    state.censo_cancelar.store(true, Ordering::SeqCst);
+    state.extraccion_cancelar.store(true, Ordering::SeqCst);
     state.db.delete_connection(id)
 }
 
@@ -320,8 +370,8 @@ pub fn iniciar_censo(
     let cancelar = state.censo_cancelar.clone();
 
     tauri::async_runtime::spawn(async move {
+        let _suelta = Suelta(corriendo);
         let r = censar(&app, &http, &db, connection_id, &taxonomias, reiniciar, &cancelar).await;
-        corriendo.store(false, Ordering::SeqCst);
 
         let cancelado = cancelar.load(Ordering::SeqCst);
         let fin = match r {
@@ -384,9 +434,14 @@ async fn censar(
         );
     };
 
-    // 1 · Nombres de los términos.
-    avisar("terminos", "", 0, 0);
-    let terminos = census::sincronizar_terminos(http, &transporte, &auth, taxonomias).await?;
+    // 1 · Nombres de los términos. Cada taxonomía se anuncia por su nombre:
+    //     son varias peticiones a un servidor ajeno y sin decir cuál se está
+    //     pidiendo la fase entera parecía colgada.
+    avisar("terminos", "", 0, taxonomias.len() as u64);
+    let terminos = census::sincronizar_terminos(
+        http, &transporte, &auth, taxonomias,
+        |tax, hechas, total| avisar("terminos", tax, hechas, total),
+    ).await?;
     db.guardar_terminos(conn_id, &terminos.items)?;
     for (tax, n) in &terminos.omitidas {
         let _ = app.emit(
@@ -397,7 +452,9 @@ async fn censar(
         );
     }
 
-    // 2 · Recorrido por ventanas mensuales.
+    // 2 · Recorrido por ventanas mensuales. Preguntar desde cuándo hay archivo
+    //     son dos peticiones más, y también tenían que verse.
+    avisar("rango", "", 0, 0);
     let (desde, hasta) = census::rango_real(http, &transporte, &auth).await?;
     let ventanas = census::ventanas_mensuales(desde, hasta);
     let hechas = db.ventanas_hechas(conn_id)?;
@@ -459,6 +516,23 @@ async fn censar(
                 // así no compiten entre ellas por la base.
                 db.guardar_censo(conn_id, &lote.filas)?;
                 db.guardar_anomalias(conn_id, &lote.anomalias)?;
+
+                // El cuerpo llegó con los metadatos, así que se limpia y se
+                // guarda ahora. A partir de aquí el archivo está en disco: la
+                // extracción no vuelve a pedirle nada al sitio.
+                let limpios: Vec<(i64, String, contenido::Limpio)> = lote
+                    .cuerpos
+                    .into_iter()
+                    .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
+                    .collect();
+                db.guardar_articulos(conn_id, &limpios)?;
+                // Las mismas mediciones que antes salían de una submuestra de
+                // trescientos, ahora sobre todo lo recorrido: los hallazgos de
+                // calidad del paso 3 dejan de ser una estimación.
+                let medidas: Vec<(i64, contenido::Limpio)> =
+                    limpios.into_iter().map(|(id, _, l)| (id, l)).collect();
+                db.guardar_sondeo(conn_id, &medidas)?;
+
                 db.marcar_ventana(conn_id, &etiqueta, lote.filas.len())?;
             }
             Err(e) => {
@@ -490,26 +564,6 @@ async fn censar(
                 if fallidas.len() > 6 { "…" } else { "" }
             ),
         );
-    }
-
-    // 3 · Sondeo de contenido sobre una submuestra reproducible.
-    //     Lo que depende del cuerpo del artículo no puede salir del censo, y
-    //     bajar 48.000 cuerpos para estimarlo sería absurdo.
-    let ids = db.ids_para_sondeo(conn_id, 300, 20260905)?;
-    if !ids.is_empty() && !cancelar.load(Ordering::SeqCst) {
-        let n = ids.len() as u64;
-        let mut hechos = 0u64;
-        for trozo in ids.chunks(50) {
-            if cancelar.load(Ordering::SeqCst) { break; }
-            let cuerpos = census::traer_contenido(http, &transporte, &auth, trozo).await?;
-            let limpios: Vec<(i64, contenido::Limpio)> = cuerpos
-                .into_iter()
-                .map(|(id, html)| (id, contenido::limpiar(&html)))
-                .collect();
-            db.guardar_sondeo(conn_id, &limpios)?;
-            hechos += trozo.len() as u64;
-            avisar("sondeo", "contenido", hechos, n);
-        }
     }
 
     Ok(filas_totales)
@@ -774,7 +828,37 @@ pub async fn modelos_pendientes(
 
 // ── Extracción ───────────────────────────────────────────────────────────
 
-/// Lanza la extracción sobre un lote.
+/// Los términos de una rama, expandidos con sus descendientes.
+fn terminos_de_lote(db: &Db, lote_id: i64, elegidos: &[i64]) -> Result<Vec<i64>> {
+    let conn_id = db.conexion_de_lote(lote_id)?;
+    let tax = db.taxonomia_de_lote(lote_id)?;
+    legajo_core::alcance::expandir(db, conn_id, &tax, elegidos)
+}
+
+/// La cola de trabajo del paso 7: qué categorías tiene el lote y qué falta.
+#[tauri::command]
+pub async fn categorias_del_lote(
+    state: State<'_, AppState>, lote_id: i64,
+) -> Result<ColaCategorias> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        let categorias = db.categorias_del_lote(lote_id)?;
+        let (sueltos, sueltos_hechos) = db.sueltos_del_lote(lote_id)?;
+        Ok(ColaCategorias { categorias, sueltos, sueltos_hechos })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub struct ColaCategorias {
+    pub categorias: Vec<legajo_core::db::CategoriaLote>,
+    /// Artículos del lote sin ninguna categoría: no aparecen en la cola y hay
+    /// que poder verlos para saber por qué el lote no llega a cero.
+    pub sueltos: i64,
+    pub sueltos_hechos: i64,
+}
+
+/// Lanza la extracción sobre una categoría del lote.
 ///
 /// `solo_calibracion` limita al puñado de artículos que la persona va a revisar
 /// antes de soltar el extractor sobre el resto: es la etapa de corrección que
@@ -786,6 +870,9 @@ pub fn iniciar_extraccion(
     lote_id: i64,
     modelos: Option<extraccion::Modelos>,
     solo_calibracion: bool,
+    // La categoría elegida en el paso 7. `None` es el lote entero, que es lo
+    // que necesita la calibración.
+    categoria: Option<i64>,
 ) -> Result<()> {
     if state.extrayendo.swap(true, Ordering::SeqCst) {
         return Err(Error::Other("Ya hay una extracción en marcha.".into()));
@@ -800,9 +887,22 @@ pub fn iniciar_extraccion(
     let recursos = app.path().resource_dir().ok();
 
     tauri::async_runtime::spawn(async move {
-        let r = extraer(&app, &http, &db, lote_id, &modelos, solo_calibracion,
-                        recursos.as_deref(), &cancelar).await;
-        corriendo.store(false, Ordering::SeqCst);
+        let _suelta = Suelta(corriendo);
+        // Elegir una categoría madre arrastra sus hijas: es como está
+        // organizado el archivo y como se eligió el alcance. Va dentro de la
+        // tarea y no antes porque toca SQLite, y en Tauri un comando síncrono
+        // corre en el hilo de la ventana.
+        let r = match categoria {
+            Some(t) => terminos_de_lote(&db, lote_id, &[t]),
+            None => Ok(Vec::new()),
+        };
+        let r = match r {
+            Ok(terminos) => {
+                extraer(&app, &http, &db, lote_id, &modelos, solo_calibracion,
+                        &terminos, recursos.as_deref(), &cancelar).await
+            }
+            Err(e) => Err(e),
+        };
         let cancelado = cancelar.load(Ordering::SeqCst);
         let fin = match r {
             Ok(n) => FinCenso { ok: !cancelado, cancelado, error: None, filas: n },
@@ -828,9 +928,17 @@ pub async fn avance_extraccion(
     state: State<'_, AppState>,
     lote_id: i64,
     solo_calibracion: bool,
+    categoria: Option<i64>,
 ) -> Result<(i64, i64)> {
     let db = state.db.clone();
-    en_hilo(move || db.avance_extraccion(lote_id, solo_calibracion)).await
+    en_hilo(move || {
+        let terminos = match categoria {
+            Some(t) => terminos_de_lote(&db, lote_id, &[t])?,
+            None => Vec::new(),
+        };
+        db.avance_extraccion(lote_id, solo_calibracion, &terminos)
+    })
+    .await
 }
 
 #[derive(Clone, Serialize)]
@@ -855,6 +963,10 @@ async fn extraer(
     lote_id: i64,
     modelos: &extraccion::Modelos,
     solo_calibracion: bool,
+    // Ya expandida con las hijas. Vacía significa el lote entero, que es lo que
+    // usa la calibración: sus doce artículos están repartidos entre secciones a
+    // propósito y recortarlos por categoría los dejaría sin representar.
+    terminos: &[i64],
     recursos: Option<&std::path::Path>,
     cancelar: &AtomicBool,
 ) -> Result<i64> {
@@ -870,70 +982,99 @@ async fn extraer(
 
     let conn_id = db.conexion_de_lote(lote_id)?;
 
-    // 1 · Lo que falte por descargar. El censo solo trajo metadatos.
-    let faltan = db.lote_sin_contenido(lote_id, solo_calibracion)?;
-    if !faltan.is_empty() {
-        let transporte = db.transporte(conn_id)?;
-        let auth = db.credencial(conn_id)?;
-        let total = faltan.len() as u64;
-        let mut hechos = 0u64;
-        avisar("descargando", 0, total, 0, 0, 0, 0, "");
-        for trozo in faltan.chunks(50) {
-            if cancelar.load(Ordering::SeqCst) { return Ok(0); }
-            let cuerpos = census::traer_contenido(http, &transporte, &auth, trozo).await?;
-            let filas: Vec<(i64, String, contenido::Limpio)> = cuerpos
-                .into_iter()
-                .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
-                .collect();
-            db.guardar_articulos(conn_id, &filas)?;
-            hechos += trozo.len() as u64;
-            avisar("descargando", hechos, total, 0, 0, 0, 0, "");
-        }
+    // 1 · Qué falta por procesar. Solo identificadores: el cuerpo se trae
+    //     dentro del bucle, tanda a tanda, y no antes.
+    let pendientes = db.pendientes_del_lote(lote_id, solo_calibracion, terminos)?;
+    let total = pendientes.len() as u64;
+    if pendientes.is_empty() {
+        return Ok(0);
     }
 
-    // 2 · El extractor.
+    // 2 · El extractor, antes de bajar nada. Cargar los modelos tarda unos
+    //     segundos y puede fallar; descubrirlo después de haber descargado
+    //     cuarenta cuerpos sería trabajo tirado y una espera sin explicación.
     let (python, guion) = extraccion::localizar(recursos)?;
-    avisar("arrancando", 0, 0, 0, 0, 0, 0, &python.display().to_string());
+    avisar("arrancando", 0, total, 0, 0, 0, 0, &python.display().to_string());
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
 
-    avisar("cargando", 0, 0, 0, 0, 0, 0, &modelos.gliner);
+    avisar("cargando", 0, total, 0, 0, 0, 0, &modelos.gliner);
     let ms_carga = sc.cargar(modelos).await?;
     let nota = if sc.glirel_activo { "" } else { "sin relaciones: GLiREL no cargó" };
-    avisar("cargado", 0, 0, 0, 0, 0, ms_carga, nota);
+    avisar("cargado", 0, total, 0, 0, 0, ms_carga, nota);
 
-    // 3 · El recorrido. Los umbrales de la calibración, si ya la hubo.
+    // 3 · El recorrido, por tandas. Cada vuelta baja lo que le falte a su tanda
+    //     y lo extrae acto seguido: una sola pasada sobre el lote en vez de
+    //     dos, y lo descargado no se acumula esperando a que empiece el modelo.
     let cal = db.calibracion(lote_id)?.unwrap_or_default();
     let predicados: Vec<String> = if modelos.relaciones {
         legajo_core::extraccion::predicados_modelo()
     } else {
         vec![]
     };
+    let transporte = db.transporte(conn_id)?;
+    let auth = db.credencial(conn_id)?;
 
-    let pendientes = db.pendientes_extraccion_lote(lote_id, solo_calibracion)?;
-    let total = pendientes.len() as u64;
     let mut hechos = 0u64;
     let mut entidades = 0i64;
 
-    for (wp_id, texto) in pendientes {
+    for tanda in pendientes.chunks(census::POR_TANDA) {
         if cancelar.load(Ordering::SeqCst) { break; }
-        let parrafos: Vec<String> = texto
-            .split("\n\n")
-            .filter(|p| !p.trim().is_empty())
-            .map(String::from)
-            .collect();
 
-        match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
-            Ok((ents, rels, ms)) => {
-                let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
-                let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;
-                entidades += n;
-                hechos += 1;
-                avisar("extrayendo", hechos, total, wp_id, n, nr, ms, "");
-            }
-            Err(e) => {
-                // Un artículo que falla no puede tumbar la corrida.
-                hechos += 1;
-                avisar("extrayendo", hechos, total, wp_id, 0, 0, 0, &e.to_string());
+        // El caché de cuerpos es del sitio, no del lote: los de calibración ya
+        // están, y también los de un artículo que comparte dos categorías.
+        let faltan = db.sin_cuerpo(conn_id, tanda)?;
+        if !faltan.is_empty() {
+            avisar("descargando", hechos, total, 0, 0, 0, 0, &faltan.len().to_string());
+            let cuerpos = census::traer_contenido(http, &transporte, &auth, &faltan).await?;
+            let filas: Vec<(i64, String, contenido::Limpio)> = cuerpos
+                .into_iter()
+                .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
+                .collect();
+            db.guardar_articulos(conn_id, &filas)?;
+        }
+
+        if cancelar.load(Ordering::SeqCst) { break; }
+
+        let textos = db.textos_de(conn_id, tanda)?;
+
+        // Los que siguen sin cuerpo después de pedirlo no lo van a tener: el
+        // sitio los borró, los dejó privados o devolvió el contenido vacío.
+        // Se dan por procesados en vez de devolverlos a la cola, porque volver
+        // a pedirlos en cada corrida es bajar lo mismo para nada y deja una
+        // categoría sin poder llegar a cero.
+        let con_texto: std::collections::HashSet<i64> = textos.iter().map(|(id, _)| *id).collect();
+        let vacios: Vec<i64> = tanda.iter().copied().filter(|i| !con_texto.contains(i)).collect();
+        if !vacios.is_empty() {
+            db.marcar_extraidos(lote_id, &vacios)?;
+            hechos += vacios.len() as u64;
+            avisar("extrayendo", hechos, total, vacios[0], 0, 0, 0,
+                   &format!("{} sin cuerpo recuperable", vacios.len()));
+        }
+
+        for (wp_id, texto) in textos {
+            if cancelar.load(Ordering::SeqCst) { break; }
+            let parrafos: Vec<String> = texto
+                .split("\n\n")
+                .filter(|p| !p.trim().is_empty())
+                .map(String::from)
+                .collect();
+
+            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
+                Ok((ents, rels, ms)) => {
+                    let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
+                    let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;
+                    // Procesado es procesado, haya rendido entidades o no.
+                    db.marcar_extraidos(lote_id, &[wp_id])?;
+                    entidades += n;
+                    hechos += 1;
+                    avisar("extrayendo", hechos, total, wp_id, n, nr, ms, "");
+                }
+                Err(e) => {
+                    // Un artículo que falla no puede tumbar la corrida, y
+                    // tampoco se marca: al volver a lanzar se reintenta.
+                    hechos += 1;
+                    avisar("extrayendo", hechos, total, wp_id, 0, 0, 0, &e.to_string());
+                }
             }
         }
     }

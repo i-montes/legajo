@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
+import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
 import {
-  alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceExtraccion,
-  alProgresoModelo, calibrar, cancelarExtraccion, catalogoModelos, iniciarExtraccion,
-  modelosPendientes, prepararModelos,
+  alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceAnotacion, avanceExtraccion,
+  alProgresoModelo, calibracionGuardada, calibrar, cancelarExtraccion, catalogoModelos,
+  iniciarExtraccion, modelosPendientes, prepararModelos,
 } from "../lib/ipc";
 import type { CatalogoModelos, Modelos, OpcionModelo, ProgresoExtraccion, ProgresoModelo, ResultadoCalibracion } from "../types";
 import type { EstadoApp } from "../App";
@@ -19,10 +19,21 @@ const etiquetaTipo = (k: string) => TIPOS.find((t) => t.k === k)?.etiqueta ?? k;
 
 type Fase = "elegir" | "extrayendo" | "revisar" | "resultado";
 
+/* Las cuatro etapas del paso, a la vista. La calibración es un ida y vuelta
+   —se extrae aquí, se corrige en el paso 6, se vuelve aquí a calcular— y sin
+   un mapa la gente no sabía si le faltaba algo o ya había terminado. */
+const ETAPAS: [Fase, string][] = [
+  ["elegir", "Modelos"],
+  ["extrayendo", "Extraer"],
+  ["revisar", "Revisar"],
+  ["resultado", "Ajustar"],
+];
+
 export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
   const [fase, setFase] = useState<Fase>("elegir");
   const [catalogo, setCatalogo] = useState<CatalogoModelos | null>(null);
+
   /* Lo que le falta a la combinación elegida. Se consulta antes de dejar
      extraer: descubrirlo a mitad de la corrida, después de esperar la carga,
      es lo que le pasó a alguien de verdad y lo que esto existe para evitar. */
@@ -39,6 +50,9 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const [res, setRes] = useState<ResultadoCalibracion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aplicada, setAplicada] = useState(false);
+  /* Cuántos artículos de calibración cerró la persona en el paso 6. Decide qué
+     se ofrece al volver: con cero, ir a revisar; con alguno, calcular. */
+  const [revisados, setRevisados] = useState(0);
 
   const mirarCatalogo = useCallback(() => {
     catalogoModelos().then(setCatalogo).catch(() => {});
@@ -81,13 +95,47 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
     }
   }, [modelos, mirarCatalogo]);
 
+  const calcular = useCallback(async (): Promise<ResultadoCalibracion | null> => {
+    if (loteId == null) return null;
+    try {
+      const r = await calibrar(loteId);
+      setRes(r);
+      setFase("resultado");
+      /* Lo que se ve acaba de calcularse; hasta que se pulse «aplicar», el lote
+         sigue con lo de antes. Se corrige más abajo cuando coincide con lo
+         guardado. */
+      setAplicada(false);
+      return r;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  }, [loteId]);
+
+  /* Al llegar se mira en qué punto del ida y vuelta está el lote. Si ya hay
+     artículos revisados, la calibración se calcula sola: es aritmética sobre
+     lo guardado y no hay nada que decidir antes de verla. Antes había que
+     encontrar un botón secundario que decía «Ya revisé». */
   useEffect(() => {
     if (loteId == null) return;
-    avanceExtraccion(loteId, true).then(([h]) => {
+    const lote = loteId;
+    void (async () => {
+      const [[h], [rev], guardada] = await Promise.all([
+        avanceExtraccion(lote, true),
+        avanceAnotacion(lote).catch(() => [0, 0] as [number, number]),
+        calibracionGuardada(lote).catch(() => null),
+      ]);
       setHechos(h);
-      if (h > 0) setFase("revisar");
-    }).catch(() => {});
-  }, [loteId]);
+      setRevisados(rev);
+      if (h > 0 && rev > 0) {
+        const r = await calcular();
+        // Si lo recién calculado es lo que ya usa el lote, no hay nada que aplicar.
+        if (r && guardada && JSON.stringify(r.calibracion) === JSON.stringify(guardada)) setAplicada(true);
+      } else if (h > 0) {
+        setFase("revisar");
+      }
+    })().catch(() => {});
+  }, [loteId, calcular]);
 
   useEffect(() => {
     const un1 = alProgresoExtraccion((p) => {
@@ -115,16 +163,6 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
     }
   }
 
-  const calcular = useCallback(async () => {
-    if (loteId == null) return;
-    try {
-      setRes(await calibrar(loteId));
-      setFase("resultado");
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [loteId]);
-
   async function aplicar() {
     if (loteId == null || !res) return;
     await aplicarCalibracion(loteId, res.calibracion).catch((e) => setError(String(e)));
@@ -134,11 +172,12 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   if (loteId == null) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>Paso 5 · Calibración</Rotulo>
-        <h1 className="t-display" style={{ margin: "0 0 14px" }}>Falta elegir el alcance</h1>
-        <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-8)", maxWidth: "50ch" }}>
-          La calibración corre sobre un lote. Vuelve al paso anterior y crea uno.
-        </p>
+        <Encabezado
+          paso="calibracion"
+          titulo="Falta elegir el alcance"
+          frase="La calibración corre sobre un lote. Vuelve al paso anterior y crea uno."
+          compacto
+        />
         <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al alcance</Boton>
       </Lienzo>
     );
@@ -146,23 +185,31 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo ancho={880}>
-      <Rotulo style={{ marginBottom: 12 }}>Paso 5 · Calibración</Rotulo>
-      <h1 className="t-display" style={{ margin: "0 0 14px" }}>
-        Enseñarle al extractor qué está haciendo mal
-      </h1>
-      <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-11)", maxWidth: "60ch" }}>
-        Antes de soltarlo sobre miles de artículos, corre sobre un puñado y tú corriges. Con esas
-        correcciones se recalcula el corte de confianza de cada tipo y se aprende qué no debe
-        proponer. Es aritmética sobre las puntuaciones ya guardadas, así que el efecto se ve al
-        instante y sin volver a pasar el modelo.
-      </p>
+      <Encabezado
+        paso="calibracion"
+        titulo={
+          fase === "extrayendo" ? "Extrayendo sobre los artículos de calibración"
+          : fase === "revisar" ? "Ahora te toca a ti"
+          : fase === "resultado" ? "Qué cambia con tus correcciones"
+          : undefined
+        }
+        frase={
+          fase === "elegir" ? "Elige los modelos y suelta el extractor sobre los artículos de calibración. Con los que vienen por defecto se empieza bien."
+          : fase === "extrayendo" ? "Son pocos artículos; lo que tarda es cargar los modelos la primera vez."
+          : fase === "revisar" ? "Corrige lo que propuso el extractor en el paso de revisión. Al cerrar el último artículo, vuelves aquí y la calibración se calcula sola."
+          : "El corte de confianza de cada tipo y lo que dejará de proponer, calculados sobre tus correcciones."
+        }
+        detalle={
+          <>
+            <Razon>Antes de soltar el extractor sobre miles de artículos, corre sobre un puñado y tú corriges. Con esas correcciones se recalcula el corte de confianza de cada tipo y se aprende qué no debe proponer nunca.</Razon>
+            <Razon>Es aritmética sobre las puntuaciones ya guardadas: el efecto se ve al instante y sin volver a pasar el modelo.</Razon>
+          </>
+        }
+      />
 
-      {error && (
-        <div style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "12px 15px", background: "var(--error-fondo)", borderRadius: 8, marginBottom: "var(--esp-8)" }}>
-          <Glifo estado="error" size={11} />
-          <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{error}</span>
-        </div>
-      )}
+      <Etapas actual={fase} />
+
+      {error && <Aviso estado="error">{error}</Aviso>}
 
       {fase === "elegir" && catalogo && (
         <>
@@ -193,6 +240,7 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
             </div>
           </div>
           {faltan.length > 0 ? (
+
             <div style={{ padding: "14px 16px", background: "var(--hundida)", borderRadius: 10 }}>
               <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>
                 <Glifo estado="advertencia" size={11} />
@@ -274,17 +322,26 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
             <div style={{ display: "flex", gap: 10, alignItems: "baseline", marginBottom: 8 }}>
               <Glifo estado="exito" size={11} />
               <span style={{ fontSize: 15, fontWeight: 500 }}>
-                {num(hechos)} artículos extraídos. Ahora te toca a ti.
+                {revisados > 0
+                  ? `${num(revisados)} de ${num(hechos)} artículos revisados.`
+                  : `${num(hechos)} artículos extraídos, ninguno revisado todavía.`}
               </span>
             </div>
             <p className="t-cuerpo" style={{ color: "var(--t2)", margin: 0, maxWidth: "58ch" }}>
-              Ve al paso de revisión, corrige lo que el extractor propuso —borra lo que sobra, añade
-              lo que falta— y vuelve aquí. Con quince artículos revisados ya hay señal suficiente.
+              {revisados > 0
+                ? "Ya hay señal para calcular. Cuantos más revises, más fiable sale el corte de los tipos raros —montos, leyes, eventos—."
+                : "Borra lo que sobra, añade lo que falta, arregla los tipos. Con quince artículos revisados ya hay señal suficiente."}
             </p>
           </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <Boton onClick={() => estado.avanzar(5, "revision")}>Ir a revisar</Boton>
-            <Boton variante="secundario" onClick={calcular}>Ya revisé · calcular la calibración</Boton>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+            {revisados > 0 ? (
+              <>
+                <Boton onClick={calcular}>Calcular la calibración</Boton>
+                <Boton variante="secundario" onClick={() => estado.avanzar(5, "revision")}>Seguir revisando</Boton>
+              </>
+            ) : (
+              <Boton onClick={() => estado.avanzar(5, "revision")}>Ir a revisar</Boton>
+            )}
           </div>
         </div>
       )}
@@ -355,22 +412,44 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
                 </p>
               )}
 
-              <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-                <Boton onClick={aplicar} disabled={aplicada}>
-                  {aplicada ? "Calibración aplicada" : "Aplicar al lote"}
-                </Boton>
-                {aplicada && (
-                  <Boton variante="secundario" onClick={() => estado.avanzar(6, "extraccion")}>
+              <Acciones nota={aplicada ? "El lote ya usa estos cortes y este diccionario." : "Hasta que la apliques, el lote sigue con los cortes por defecto."}>
+                {aplicada ? (
+                  <Boton onClick={() => estado.avanzar(6, "extraccion")}>
                     Extraer sobre el resto del lote
                   </Boton>
+                ) : (
+                  <Boton onClick={aplicar}>Aplicar al lote</Boton>
                 )}
-                <Boton variante="enlace" onClick={() => setFase("revisar")}>revisar más artículos</Boton>
-              </div>
+                <Boton variante="enlace" onClick={() => estado.avanzar(5, "revision")}>revisar más artículos</Boton>
+              </Acciones>
             </>
           )}
         </div>
       )}
     </Lienzo>
+  );
+}
+
+function Etapas({ actual }: { actual: Fase }) {
+  const idx = ETAPAS.findIndex(([f]) => f === actual);
+  return (
+    <ol aria-label="Etapas de la calibración" style={{ listStyle: "none", margin: "0 0 var(--esp-8)", padding: 0, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      {ETAPAS.map(([f, nombre], i) => {
+        const hecha = i < idx;
+        const ahora = i === idx;
+        return (
+          <li key={f} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px", borderRadius: 999, fontSize: 12.5, background: ahora ? "var(--hundida)" : "transparent", color: ahora ? "var(--t1)" : hecha ? "var(--t2)" : "var(--t3)", fontWeight: ahora ? 500 : 400 }}>
+              <span aria-hidden style={{ fontSize: 10, color: hecha ? "var(--exito)" : ahora ? "var(--acento)" : "var(--t3)" }}>
+                {hecha ? "✓" : ahora ? "●" : "○"}
+              </span>
+              {nombre}
+            </span>
+            {i < ETAPAS.length - 1 && <span aria-hidden style={{ color: "var(--borde-fuerte)", fontSize: 11 }}>›</span>}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

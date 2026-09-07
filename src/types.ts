@@ -74,6 +74,14 @@ export interface PasoAutorizacion {
   origen: string;
 }
 
+/** El medio conectado, con su descubrimiento ya guardado en disco. */
+export interface ConexionGuardada {
+  conexion: ConnectionRow;
+  sitio: Discovery | null;
+  /** Si ya se demostró la pertenencia al sitio con una contraseña de aplicación. */
+  autorizado: boolean;
+}
+
 export interface ConnectionRow {
   id: number;
   label: string;
@@ -138,7 +146,7 @@ export interface Hallazgo {
 }
 
 export interface ProgresoCenso {
-  fase: "terminos" | "censo" | "sondeo" | "descarga";
+  fase: "terminos" | "rango" | "censo";
   ventana: string;
   hechos: number;
   total: number;
@@ -284,6 +292,25 @@ export interface ArbolCategorias {
   sin_fecha: number;
   anio_min: number | null;
   anio_max: number | null;
+}
+
+/** Una categoría del lote con cuánto lleva extraído. Es la cola del paso 7. */
+export interface CategoriaLote {
+  term_id: number;
+  nombre: string;
+  slug: string;
+  parent: number;
+  /** Artículos del lote que llevan esta categoría. */
+  total: number;
+  extraidos: number;
+  pendientes: number;
+}
+
+export interface ColaCategorias {
+  categorias: CategoriaLote[];
+  /** Artículos del lote sin ninguna categoría: no salen en la cola. */
+  sueltos: number;
+  sueltos_hechos: number;
 }
 
 export interface Alcance {

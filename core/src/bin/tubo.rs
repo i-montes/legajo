@@ -1,5 +1,5 @@
-//! Recorre el tubo entero contra el archivo real: alcance → lote → descarga →
-//! spaCy + GLiNER + GLiREL → base de datos → calibración.
+//! Recorre el tubo entero contra el archivo real: alcance → lote → tandas de
+//! descarga y extracción → base de datos → calibración.
 //!
 //! Es la comprobación que la ventana no puede dar: que las ocho etapas encajan
 //! sobre datos de verdad y que lo extraído queda donde la revisión lo busca.
@@ -27,55 +27,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("1 · alcance      {total} artículos en el subárbol");
 
     let lote_id = alcance::crear_lote(&db, conn_id, "ensayo del tubo", &al, n_cal)?;
-    let (_, pend) = db.avance_extraccion(lote_id)?;
-    println!("2 · lote {lote_id}       {pend} artículos, {n_cal} para calibrar");
+    let (_, en_lote) = db.avance_extraccion(lote_id, false, &[])?;
+    println!("2 · lote {lote_id}       {en_lote} artículos, {n_cal} para calibrar");
 
-    // 2 · Descargar solo el conjunto de calibración.
-    let faltan = db.lote_sin_contenido(lote_id, true)?;
-    if !faltan.is_empty() {
-        let t = db.transporte(conn_id)?;
-        let cuerpos = census::traer_contenido(&http, &t, &Auth::None, &faltan).await?;
-        let filas: Vec<_> = cuerpos.into_iter()
-            .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
-            .collect();
-        db.guardar_articulos(conn_id, &filas)?;
-        println!("3 · descarga     {} cuerpos", filas.len());
-    } else {
-        println!("3 · descarga     ya estaban en caché");
-    }
-
-    // 3 · El extractor: un solo proceso con los tres modelos.
+    // 2 · El extractor: un solo proceso con los tres modelos. Se arranca antes
+    //     de bajar nada, igual que en la app: si los modelos no cargan, no
+    //     tiene sentido haber descargado cuerpos.
     let (python, guion) = extraccion::localizar(None)?;
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
     let modelos = extraccion::Modelos::default();
     let ms = sc.cargar(&modelos).await?;
-    println!("4 · modelos      {} · spaCy {} · GLiREL {} · {:.1}s",
+    println!("3 · modelos      {} · spaCy {} · GLiREL {} · {:.1}s",
              modelos.gliner, modelos.spacy,
              if sc.glirel_activo { "sí" } else { "NO" }, ms as f64 / 1000.0);
 
+    // 3 · Descarga y extracción en el mismo bucle, por tandas. Es lo que corre
+    //     la app: una petición trae la tanda y el extractor la consume acto
+    //     seguido, en vez de bajar el lote entero y luego recorrerlo otra vez.
     let cal = db.calibracion(lote_id)?.unwrap_or_default();
     let predicados = extraccion::predicados_modelo();
-    let pendientes = db.pendientes_extraccion_lote(lote_id, true)?;
-    println!("5 · extracción   {} artículos", pendientes.len());
+    let t = db.transporte(conn_id)?;
+    let pendientes = db.pendientes_del_lote(lote_id, true, &[])?;
+    println!("4 · extracción   {} artículos en tandas de {}",
+             pendientes.len(), census::POR_TANDA);
 
     let (mut ents_tot, mut rels_tot, mut ms_tot) = (0i64, 0i64, 0u64);
-    for (wp_id, texto) in &pendientes {
-        let parrafos: Vec<String> = texto.split("\n\n")
-            .filter(|p| !p.trim().is_empty()).map(String::from).collect();
-        match sc.procesar(*wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
-            Ok((ents, rels, ms)) => {
-                let n = db.guardar_extraidas(lote_id, *wp_id, &ents)?;
-                let nr = db.guardar_relaciones_extraidas(lote_id, *wp_id, &rels)?;
-                ents_tot += n; rels_tot += nr; ms_tot += ms;
-                println!("     {wp_id}  {:>3} par · {n:>3} ent · {nr:>2} rel · {ms} ms",
-                         parrafos.len());
+    let mut hechos = 0usize;
+    for tanda in pendientes.chunks(census::POR_TANDA) {
+        let faltan = db.sin_cuerpo(conn_id, tanda)?;
+        if !faltan.is_empty() {
+            let cuerpos = census::traer_contenido(&http, &t, &Auth::None, &faltan).await?;
+            let filas: Vec<_> = cuerpos.into_iter()
+                .map(|(id, html)| { let l = contenido::limpiar(&html); (id, html, l) })
+                .collect();
+            db.guardar_articulos(conn_id, &filas)?;
+            println!("     tanda de {}: {} cuerpos bajados", tanda.len(), filas.len());
+        }
+
+        for (wp_id, texto) in db.textos_de(conn_id, tanda)? {
+            let parrafos: Vec<String> = texto.split("\n\n")
+                .filter(|p| !p.trim().is_empty()).map(String::from).collect();
+            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
+                Ok((ents, rels, ms)) => {
+                    let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
+                    let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;
+                    db.marcar_extraidos(lote_id, &[wp_id])?;
+                    ents_tot += n; rels_tot += nr; ms_tot += ms; hechos += 1;
+                    println!("     {wp_id}  {:>3} par · {n:>3} ent · {nr:>2} rel · {ms} ms",
+                             parrafos.len());
+                }
+                Err(e) => println!("     {wp_id}  falló: {e}"),
             }
-            Err(e) => println!("     {wp_id}  falló: {e}"),
         }
     }
     sc.cerrar().await;
 
-    let por_art = if pendientes.is_empty() { 0 } else { ms_tot as usize / pendientes.len() };
+    let por_art = if hechos == 0 { 0 } else { ms_tot as usize / hechos };
     println!("\n   {ents_tot} entidades · {rels_tot} relaciones · {por_art} ms/artículo");
     println!("   el archivo entero: {:.1} h", total as f64 * por_art as f64 / 3_600_000.0);
 

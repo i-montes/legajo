@@ -83,8 +83,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::discover_site,
             commands::save_connection,
-            commands::list_connections,
             commands::delete_connection,
+            commands::conexion_guardada,
             commands::guardar_sesion,
             commands::cargar_sesion,
             commands::olvidar_sesion,
@@ -128,6 +128,7 @@ pub fn run() {
             commands::cancelar_extraccion,
             commands::extrayendo,
             commands::avance_extraccion,
+            commands::categorias_del_lote,
         ])
         .run(tauri::generate_context!())
         .expect("no se pudo iniciar Legajo");

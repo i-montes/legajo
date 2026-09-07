@@ -2,8 +2,8 @@
 //!
 //! Todo lo que sale de aquí se calcula en local sobre la base ya descargada: no
 //! hay una sola petición de red. Lo que depende del cuerpo de los artículos se
-//! marca como estimación, porque procede del sondeo sobre una submuestra y no
-//! del archivo entero.
+//! marca como estimación solo si el sondeo no llegó a cubrirlo todo, que es el
+//! caso de los archivos censados antes de que el censo bajara los cuerpos.
 
 use crate::db::Db;
 use crate::error::Result;
@@ -66,7 +66,13 @@ pub struct Hallazgo {
     pub clave: String,
     pub titulo: String,
     pub conteo: i64,
-    /// Viene del sondeo sobre una submuestra, no del recuento exacto.
+    /// Viene de una submuestra y no del recuento exacto.
+    ///
+    /// Desde que el censo trae el cuerpo con los metadatos, el sondeo cubre
+    /// todo lo recorrido y esto queda en falso: son cuentas, no estimaciones.
+    /// Sigue existiendo porque un archivo censado por una versión anterior
+    /// tiene medido solo un puñado, y decir «12.400» sobre trescientos
+    /// artículos mirados sería inventar precisión.
     pub estimado: bool,
     /// Impide muestrear mientras no se decida.
     pub bloquea: bool,
@@ -302,7 +308,7 @@ pub fn hallazgos(db: &Db, conn_id: i64) -> Result<Vec<Hallazgo>> {
                 out.push(Hallazgo {
                     clave: "html_roto".into(),
                     titulo: "HTML roto o shortcodes huérfanos".into(),
-                    conteo: est, estimado: true, bloquea: false,
+                    conteo: est, estimado: s.n < total, bloquea: false,
                     detalle: format!(
                         "Restos de plugins retirados o etiquetas sin cerrar. El texto se recupera con una heurística, pero puede perder pies de foto y citas.{sc}"
                     ),
@@ -321,7 +327,7 @@ pub fn hallazgos(db: &Db, conn_id: i64) -> Result<Vec<Hallazgo>> {
                 out.push(Hallazgo {
                     clave: "notas_cortas".into(),
                     titulo: "Notas muy cortas".into(),
-                    conteo: est, estimado: true, bloquea: false,
+                    conteo: est, estimado: s.n < total, bloquea: false,
                     detalle: "Menos de 120 palabras: breves de agenda, resultados y avisos. Rinden pocas entidades por artículo y encarecen la curación.".into(),
                     consecuencia: None,
                     ejemplos: ejemplos(c,

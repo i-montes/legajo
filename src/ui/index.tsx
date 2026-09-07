@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { pasoDe, rotuloPaso, type PasoNav } from "../contenido/pasos";
 
 /* ── Glifos ────────────────────────────────────────────────────────────────
    El sistema usa forma ademas de color para el estado, para que un daltonico
@@ -254,6 +256,105 @@ export function Lienzo({ children, ancho = 760 }: { children: ReactNode; ancho?:
       <div style={{ maxWidth: ancho, margin: "0 auto", padding: "var(--esp-14) var(--esp-8) var(--esp-16)" }}>
         {children}
       </div>
+    </div>
+  );
+}
+
+/* ── Encabezado de paso ────────────────────────────────────────────────────
+   Cada pantalla abría con un rótulo escrito a mano, un titular y un párrafo
+   de cuatro o cinco líneas que mezclaba qué hacer con por qué se hace así.
+   El párrafo se saltaba entero: demasiado largo para leerlo antes de actuar,
+   y demasiado importante para no leerlo nunca.
+
+   Ahora el encabezado tiene tres alturas: el rótulo sale de `pasos.ts`; el
+   titular lo pone la pantalla según su estado; y debajo va una sola frase con
+   lo que ocurre aquí. La razón larga, si la hay, se pliega detrás de «por qué
+   así»: quien solo quiere seguir no la ve, quien desconfía la encuentra.     */
+export function Encabezado({
+  paso,
+  titulo,
+  frase,
+  detalle,
+  compacto,
+}: {
+  paso: PasoNav;
+  /** Sustituye al titular por defecto del paso cuando el estado lo pide. */
+  titulo?: ReactNode;
+  /** Sustituye a la frase por defecto. `null` la quita. */
+  frase?: ReactNode | null;
+  /** La razón larga, plegada. Uno o varios párrafos. */
+  detalle?: ReactNode;
+  /** Menos aire debajo: para estados de espera y vacíos. */
+  compacto?: boolean;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const def = pasoDe(paso)!;
+  const fraseFinal = frase === undefined ? def.frase : frase;
+  return (
+    <header style={{ marginBottom: compacto ? "var(--esp-8)" : "var(--esp-11)" }}>
+      <div className="t-rotulo" style={{ marginBottom: 12 }}>{rotuloPaso(paso)}</div>
+      <h1 className="t-display" style={{ margin: 0 }}>{titulo ?? def.titulo}</h1>
+      {fraseFinal && (
+        <p className="t-cuerpo" style={{ margin: "14px 0 0", color: "var(--t2)", maxWidth: "58ch" }}>
+          {fraseFinal}
+          {detalle && (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={() => setAbierto((v) => !v)}
+                aria-expanded={abierto}
+                style={{ appearance: "none", background: "transparent", border: 0, padding: 0, cursor: "pointer", font: "inherit", color: "var(--t3)", textDecoration: "underline", textDecorationColor: "var(--borde-fuerte)", textUnderlineOffset: 3 }}
+              >
+                {abierto ? "menos" : "¿por qué así?"}
+              </button>
+            </>
+          )}
+        </p>
+      )}
+      {detalle && abierto && (
+        <div style={{ marginTop: 14, paddingLeft: 14, borderLeft: "2px solid var(--borde)", maxWidth: "58ch", display: "flex", flexDirection: "column", gap: 10 }}>
+          {detalle}
+        </div>
+      )}
+    </header>
+  );
+}
+
+/** Un párrafo del detalle plegado. */
+export function Razon({ children }: { children: ReactNode }) {
+  return <p className="t-menor" style={{ margin: 0, color: "var(--t2)", lineHeight: 1.7 }}>{children}</p>;
+}
+
+/* ── Acciones al pie de un paso ────────────────────────────────────────────
+   El botón que avanza va siempre al final, separado por una raya, con la
+   nota que dice qué se lleva o qué queda pendiente. Antes cada pantalla lo
+   colocaba a su manera —a veces arriba, a veces sin raya— y había que
+   buscarlo. Se dibuja solo cuando hay algo que pulsar: un botón apagado
+   ocupa el sitio de una acción y no es ninguna. */
+export function Acciones({ children, nota, raya = true }: { children: ReactNode; nota?: ReactNode; raya?: boolean }) {
+  return (
+    <div style={{ marginTop: "var(--esp-11)", paddingTop: raya ? "var(--esp-6)" : 0, borderTop: raya ? "1px solid var(--borde)" : 0, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+      {children}
+      {nota && (
+        <span className="t-menor" style={{ color: "var(--t3)", maxWidth: "46ch", lineHeight: 1.6 }}>{nota}</span>
+      )}
+    </div>
+  );
+}
+
+/* ── Aviso en línea ────────────────────────────────────────────────────────
+   Un fallo, una advertencia o una nota, con su glifo. Las pantallas lo
+   escribían cada una a mano con los mismos doce estilos. */
+export function Aviso({ estado, children }: { estado: Estado; children: ReactNode }) {
+  const fondo: Record<Estado, string> = {
+    exito: "var(--exito-fondo)", advertencia: "var(--advertencia-fondo)",
+    error: "var(--error-fondo)", neutro: "var(--hundida)",
+  };
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "12px 15px", background: fondo[estado], borderRadius: 8, marginBottom: "var(--esp-8)" }}>
+      <Glifo estado={estado} size={11} />
+      <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.65, whiteSpace: "pre-wrap", maxWidth: "62ch" }}>{children}</span>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Barra, Boton, Cargando, Glifo, Latido, Lienzo, Rotulo } from "../ui";
+import { Acciones, Aviso, Barra, Boton, Cargando, Encabezado, Latido, Lienzo, Razon, Rotulo } from "../ui";
 import {
   alFinCenso, alProgresoCenso, cancelarCenso, censoCorriendo,
   iniciarCenso, perfilArchivo, sondearArchivo,
@@ -142,6 +142,10 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   /* Lo que el archivo creció desde que se leyó. No es trabajo pendiente: es una
      noticia sobre el archivo, y merece otra palabra. */
   const nuevos = completo && totalRemoto != null ? Math.max(0, totalRemoto - censado) : 0;
+  /* Un archivo censado por una versión anterior tiene medido solo un puñado de
+     cuerpos, y ahí las cifras que dependen del texto siguen siendo estimaciones.
+     Desde que el censo baja el cuerpo con los metadatos, están todas contadas. */
+  const parcial = perfil?.sondeo != null && perfil.sondeo.n < censado;
 
   /* Cuánto falta, en tiempo. Se calcula sobre el ritmo del último minuto y no
      sobre el promedio desde el principio: si el sitio empieza a frenar, un
@@ -173,6 +177,29 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   }
 
 
+  /* La ventana se creía en marcha aunque en Rust no corriera nada.
+     `corriendo` solo se apagaba al recibir `censo:fin`, así que una tarea que
+     muriera sin emitirlo dejaba el latido girando para siempre: «Detener» no
+     servía —cancelar solo levanta un aviso que ninguna tarea iba a leer— y el
+     rearranque automático estaba bloqueado por `censoArrancado`. Preguntarle a
+     Rust cada pocos segundos cura cualquier desajuste, venga de donde venga. */
+  useEffect(() => {
+    if (!corriendo) return;
+    const t = setInterval(() => {
+      censoCorriendo().then((vivo) => {
+        if (vivo || desmontado.current) return;
+        setCorriendo(false);
+        setProgreso(null);
+        // Y se permite volver a intentarlo: si nadie está leyendo el archivo,
+        // el arranque automático tiene que poder ocurrir otra vez.
+        censoArrancado.current = false;
+        cargar();
+      }).catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corriendo]);
+
   /* Leer el archivo no es una decisión que valga la pena poner a votación: se
      acaba de dar permiso para ello, y no hay nada que elegir. Arranca solo. */
   useEffect(() => {
@@ -201,9 +228,7 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   if (sondeando) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>
-          Paso 2 · {sitio.resolved_origin.replace(/^https?:\/\//, "")}
-        </Rotulo>
+        <Encabezado paso="perfil" titulo="Antes de leer, preguntar" frase={null} compacto />
         <Cargando
           titulo="Preguntándole a tu WordPress qué hay dentro"
           pasos={[
@@ -221,13 +246,7 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   if (sinPermiso && totalRemoto == null) {
     return (
       <Lienzo>
-        <Rotulo style={{ marginBottom: 12 }}>
-          Paso 2 · {sitio.resolved_origin.replace(/^https?:\/\//, "")}
-        </Rotulo>
-        <h1 className="t-display" style={{ margin: "0 0 14px" }}>Falta el permiso del sitio</h1>
-        <p className="t-cuerpo" style={{ margin: "0 0 var(--esp-8)", color: "var(--t2)", maxWidth: "52ch" }}>
-          {sinPermiso}
-        </p>
+        <Encabezado paso="perfil" titulo="Falta el permiso del sitio" frase={sinPermiso} compacto />
         <Boton onClick={estado.retroceder}>Volver a la conexión</Boton>
       </Lienzo>
     );
@@ -235,35 +254,34 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
 
   return (
     <Lienzo>
-      <Rotulo style={{ marginBottom: 12 }}>
-        Paso 2 · {sitio.resolved_origin.replace(/^https?:\/\//, "")}
-      </Rotulo>
-      <h1 className="t-display" style={{ margin: "0 0 14px" }}>
-        {completo ? "Esto es lo que hay dentro de tu archivo." : "Leer el archivo entero"}
-      </h1>
-      <p className="t-cuerpo" style={{ margin: "0 0 var(--esp-11)", color: "var(--t2)", maxWidth: "54ch" }}>
-        {completo
+      <Encabezado
+        paso="perfil"
+        titulo={completo ? "Esto es lo que hay dentro de tu archivo" : corriendo ? "Leyendo el archivo" : undefined}
+        frase={completo
           ? "Legajo lo leyó preguntándole a tu propio WordPress. Nada de esto salió de tu computador."
           : totalRemoto != null
-            ? `Legajo recorre las ${num(totalRemoto)} piezas leyendo solo sus metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que hace posible muestrear con criterio.`
-            : "Legajo recorre el archivo leyendo solo metadatos —fecha, sección, titular—, nunca el cuerpo. Es lo que hace posible elegir después qué procesar con criterio."}
-      </p>
+            ? `${num(totalRemoto)} piezas, a tu disco, con su texto. Es la única vez que se le pide el archivo al sitio.`
+            : undefined}
+        detalle={
+          <>
+            <Razon>Va por tramos mensuales y con pausas de cortesía entre peticiones, al ritmo que el sitio aguanta. Como se trae el texto y no solo los metadatos, tarda más y ocupa disco.</Razon>
+            <Razon>De aquí en adelante todo se lee de tu disco: los pasos siguientes no vuelven a la red. Detener no pierde lo recorrido, y al volver retoma donde iba.</Razon>
+          </>
+        }
+      />
 
-      {error && (
-        <div style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "12px 15px", background: "var(--error-fondo)", borderRadius: 8, marginBottom: "var(--esp-8)" }}>
-          <Glifo estado="error" size={11} />
-          <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.6 }}>{error}</span>
-        </div>
-      )}
+      {error && <Aviso estado="error">{error}</Aviso>}
 
       {corriendo && progreso && (
         <div style={{ marginBottom: "var(--esp-11)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <Latido />
             <span className="t-ui">
-              {progreso.fase === "terminos" && "Trayendo los nombres de las secciones"}
-              {progreso.fase === "censo" && `Recorriendo el archivo · ${progreso.ventana}`}
-              {progreso.fase === "sondeo" && "Sondeando el contenido de una submuestra"}
+              {progreso.fase === "terminos" && (progreso.ventana
+                ? `Trayendo los nombres de «${progreso.ventana}»`
+                : "Trayendo los nombres de las secciones")}
+              {progreso.fase === "rango" && "Preguntando desde cuándo hay archivo"}
+              {progreso.fase === "censo" && `Descargando el archivo · ${progreso.ventana}`}
             </span>
             <div style={{ flex: 1 }} />
             <span className="t-mono" style={{ color: "var(--t3)" }}>
@@ -368,19 +386,19 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
                   const cuota = (top.n / perfil.censado) * 100;
                   const unaVez = perfil.secciones.filter((s) => s.n <= 1).length;
                   return cuota > 35
-                    ? `«${top.nombre}» concentra el ${pct1(cuota)} % del archivo: conviene revisar si es una sección editorial o un cajón de sastre antes de estratificar por aquí.`
-                    : `La mayor es «${top.nombre}» con el ${pct1(cuota)} %. ${unaVez > 0 ? `${unaVez} términos aparecen una sola vez y no sirven para estratificar.` : "El reparto es utilizable para estratificar."}`;
+                    ? `«${top.nombre}» concentra el ${pct1(cuota)} % del archivo: conviene mirar si es una sección editorial o un cajón de sastre antes de elegir el alcance por aquí.`
+                    : `La mayor es «${top.nombre}» con el ${pct1(cuota)} %. ${unaVez > 0 ? `${unaVez} términos aparecen una sola vez y no sirven para acotar nada.` : "El reparto sirve para elegir el alcance por secciones."}`;
                 })()}
               </Acto>
             )}
 
             {perfil.sondeo && (
               <>
-                <Acto cifra={`${pct1(perfil.sondeo.pct_bloques)} %`} titulo="escrito con el editor de bloques" estimado>
+                <Acto cifra={`${pct1(perfil.sondeo.pct_bloques)} %`} titulo="escrito con el editor de bloques" estimado={parcial}>
                   El resto es HTML plano heredado, donde el destaque y el pie de foto no se
                   distinguen del cuerpo y necesitan más revisión humana por artículo.
                 </Acto>
-                <Acto cifra={num(perfil.sondeo.palabras_p50)} titulo="palabras en el artículo mediano" estimado>
+                <Acto cifra={num(perfil.sondeo.palabras_p50)} titulo="palabras en el artículo mediano" estimado={parcial}>
                   Nueve de cada diez quedan por debajo de {num(perfil.sondeo.palabras_p90)}.
                   {perfil.sondeo.pct_cortas > 0 &&
                     ` El ${pct1(perfil.sondeo.pct_cortas)} % baja de 120 palabras: rinden pocas entidades y encarecen la curación.`}
@@ -398,10 +416,13 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
 
           {perfil.sondeo && (
             <p className="t-menor" style={{ color: "var(--t3)", marginTop: "var(--esp-8)", maxWidth: "58ch", lineHeight: 1.7 }}>
-              Lo marcado como estimación sale de un sondeo sobre {perfil.sondeo.n} artículos
-              elegidos al azar de forma reproducible. Lo que depende del cuerpo del artículo no
-              cabe en el censo: bajar {num(perfil.censado)} cuerpos para calcularlo costaría horas
-              y no cambiaría la decisión.
+              {parcial
+                ? `Lo marcado como estimación sale de un sondeo sobre ${perfil.sondeo.n} artículos
+                   elegidos al azar de forma reproducible: este archivo se censó con una versión
+                   que no bajaba los cuerpos. Vuelve a lanzar la lectura para medirlos todos.`
+                : `Todo esto está contado sobre las ${num(perfil.sondeo.n)} piezas del archivo, no
+                   estimado sobre una muestra: el texto llegó con los metadatos en la misma
+                   petición, así que medirlo entero no costó nada.`}
             </p>
           )}
 
@@ -410,12 +431,12 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
               de una acción y no es ninguna —invita a pulsarlo y no explica por
               qué no responde—, así que no se enseña hasta que sirve. */}
           {!corriendo && (
-            <div style={{ marginTop: "var(--esp-11)", paddingTop: "var(--esp-6)", borderTop: "1px solid var(--borde)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <Acciones>
               <Boton onClick={() => estado.avanzar(2, "sanidad")}>
-                Continuar a la sanidad del archivo
+                Ver los hallazgos
               </Boton>
               <Boton variante="enlace" onClick={() => censar(true)}>volver a leer el archivo desde cero</Boton>
-            </div>
+            </Acciones>
           )}
         </>
       )}

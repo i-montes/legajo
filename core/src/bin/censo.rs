@@ -25,7 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         d.capabilities.total_posts.map(|x| x as i64), "{}")?;
 
     println!("── términos");
-    let terms = census::sincronizar_terminos(&http, &d.transport, &Auth::None, &tax).await?;
+    let terms = census::sincronizar_terminos(
+        &http, &d.transport, &Auth::None, &tax,
+        |tax, i, n| if !tax.is_empty() { println!("   {}/{n} · {tax}", i + 1) },
+    ).await?;
     db.guardar_terminos(conn_id, &terms.items)?;
     println!("   {} términos en {:?}", terms.items.len(), t0.elapsed());
     for (t, n) in &terms.omitidas {
@@ -38,14 +41,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut filas = 0usize;
     let mut anom = 0usize;
+    let mut cuerpos = 0usize;
     let mut fallidas = 0usize;
     for (i, v) in ventanas.iter().enumerate() {
         match census::censar_ventana(&http, &d.transport, &Auth::None, v, &tax).await {
             Ok(lote) => {
                 filas += lote.filas.len();
                 anom += lote.anomalias.len();
+                cuerpos += lote.cuerpos.len();
                 db.guardar_censo(conn_id, &lote.filas)?;
                 db.guardar_anomalias(conn_id, &lote.anomalias)?;
+                // El texto llegó con los metadatos: se limpia y se guarda aquí
+                // mismo, igual que en la app.
+                let limpios: Vec<(i64, String, contenido::Limpio)> = lote.cuerpos
+                    .into_iter()
+                    .map(|(id, h)| { let l = contenido::limpiar(&h); (id, h, l) })
+                    .collect();
+                db.guardar_articulos(conn_id, &limpios)?;
+                let medidas: Vec<_> = limpios.into_iter().map(|(id, _, l)| (id, l)).collect();
+                db.guardar_sondeo(conn_id, &medidas)?;
                 db.marcar_ventana(conn_id, &v.etiqueta, lote.filas.len())?;
             }
             Err(e) => { fallidas += 1; println!("   ! {} falló: {e}", v.etiqueta); }
@@ -56,16 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if fallidas > 0 { println!("   {fallidas} tramos sin leer, reintentables al reanudar"); }
-    println!("   censadas {filas} filas, {anom} anomalías en {:?}", t0.elapsed());
-
-    println!("── sondeo de contenido");
-    let ids = db.ids_para_sondeo(conn_id, 150, 20260905)?;
-    for trozo in ids.chunks(50) {
-        let cuerpos = census::traer_contenido(&http, &d.transport, &Auth::None, trozo).await?;
-        let limpios: Vec<_> = cuerpos.into_iter().map(|(id, h)| (id, contenido::limpiar(&h))).collect();
-        db.guardar_sondeo(conn_id, &limpios)?;
-    }
-    println!("   {} artículos sondeados · {:?}", ids.len(), t0.elapsed());
+    println!("   censadas {filas} filas, {cuerpos} cuerpos, {anom} anomalías en {:?}", t0.elapsed());
 
     // El eje de secciones tiene que ser una taxonomía cuyos nombres se hayan
     // descargado; las omitidas por tamaño darían un reparto vacío.

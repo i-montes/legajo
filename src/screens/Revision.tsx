@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Barra, Boton, Glifo, Latido, Lienzo, Rotulo } from "../ui";
+import { Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo, predicadosPara } from "../contenido/tipos";
 import {
   apuntarTiempo, avanceAnotacion, cargarAnotacion, cerrarArticulo, descartarTiempo, guardarAnotacion,
@@ -454,26 +454,34 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   if (filas.length === 0) {
     return (
       <Lienzo>
-        <h2 className="t-display" style={{ fontSize: 26, margin: "0 0 12px" }}>No hay muestra todavía</h2>
-        <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 0 var(--esp-8)", maxWidth: "46ch" }}>
-          Vuelve al paso de muestreo, sortea una muestra y descárgala.
-        </p>
-        <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al muestreo</Boton>
+        <Encabezado
+          paso="revision"
+          titulo="No hay nada que revisar todavía"
+          frase="La revisión corre sobre los artículos de calibración de un lote. Vuelve al alcance, crea el lote y deja que el extractor pase por ellos."
+          compacto
+        />
+        <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al alcance</Boton>
       </Lienzo>
     );
   }
   if (!fila) {
     const seg = Math.max(1, hechos);
+    /* El cierre del último artículo devuelve a la calibración, que es adonde
+       van las correcciones: allí se calcula sola. Antes este botón saltaba a la
+       extracción y la calibración quedaba sin calcular ni aplicar, con la
+       revisión hecha y el extractor corriendo igual que antes de hacerla. */
     return (
       <Lienzo>
         <div style={{ textAlign: "center", paddingTop: "var(--esp-16)" }}>
-          <h2 className="t-display" style={{ fontSize: 28, margin: "0 0 12px" }}>Muestra anotada</h2>
+          <div className="t-rotulo" style={{ marginBottom: 12 }}>Paso 6 de 8 · Revisión</div>
+          <h2 className="t-display" style={{ fontSize: 28, margin: "0 0 12px" }}>Revisión terminada</h2>
           <p className="t-cuerpo" style={{ color: "var(--t2)", margin: "0 auto var(--esp-8)", maxWidth: "46ch" }}>
-            Cerraste los {seg} artículos de la muestra. El tiempo de cada uno quedó guardado en este
-            computador: es lo que convierte el diagnóstico en una cifra de coste real.
+            Cerraste los {seg} artículos de calibración. Con tus correcciones se recalcula cómo se
+            usa el extractor, y el tiempo de cada uno quedó guardado: es lo que convierte el
+            diagnóstico en una cifra de coste real.
           </p>
-          <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
-            <Boton onClick={() => estado.avanzar(5, "extraccion")}>Continuar a la extracción</Boton>
+          <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", alignItems: "center" }}>
+            <Boton onClick={() => estado.avanzar(4, "calibracion")}>Calcular la calibración</Boton>
             <Boton variante="enlace" onClick={() => setI(0)}>volver al primero</Boton>
           </div>
         </div>

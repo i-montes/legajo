@@ -142,6 +142,22 @@ pub struct LoteRow {
     pub calibrado: bool,
 }
 
+/// Una categoría dentro de un lote, con cuánto lleva extraído.
+///
+/// Alimenta la cola del paso 7: qué queda por procesar, cuánto, y en qué orden
+/// conviene atacarlo.
+#[derive(Debug, Clone, Serialize)]
+pub struct CategoriaLote {
+    pub term_id: i64,
+    pub nombre: String,
+    pub slug: String,
+    pub parent: i64,
+    /// Artículos del lote que llevan esta categoría.
+    pub total: i64,
+    pub extraidos: i64,
+    pub pendientes: i64,
+}
+
 /// Una fila de la muestra con todo lo necesario para anotarla.
 #[derive(Debug, Serialize)]
 pub struct FilaAnotable {
@@ -692,6 +708,14 @@ impl Db {
         Self::asegurar_columna(&conn, "tiempos", "valido", "INTEGER NOT NULL DEFAULT 1")?;
         Self::asegurar_columna(&conn, "lote_articulos", "seccion", "TEXT")?;
         Self::asegurar_columna(&conn, "lote_articulos", "calibra", "INTEGER NOT NULL DEFAULT 0")?;
+        // Haber pasado por el extractor y haber dado entidades son cosas
+        // distintas. Mientras «hecho» se dedujo de tener filas en `extraidas`,
+        // un articulo del que el modelo no sacaba nada volvia a la cola en cada
+        // corrida: se bajaba y se procesaba una y otra vez sin que la cuenta de
+        // pendientes bajara nunca. Con la extraccion por categorias eso deja de
+        // ser un desperdicio invisible y pasa a ser una categoria que no puede
+        // llegar a cero.
+        Self::asegurar_columna(&conn, "lote_articulos", "extraido_at", "TEXT")?;
         for (t, c) in [("lotes", "taxonomia TEXT"), ("lotes", "terminos_json TEXT NOT NULL DEFAULT '[]'"),
                        ("lotes", "desde_anio INTEGER"), ("lotes", "hasta_anio INTEGER"),
                        ("lotes", "calibracion_json TEXT")] {
@@ -712,7 +736,22 @@ impl Db {
         // certeza de que existen.
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS census_title_key ON census(connection_id, title_key);
-             CREATE INDEX IF NOT EXISTS lote_art_cal ON lote_articulos(lote_id, calibra);",
+             CREATE INDEX IF NOT EXISTS lote_art_cal ON lote_articulos(lote_id, calibra);
+             CREATE INDEX IF NOT EXISTS lote_art_hecho ON lote_articulos(lote_id, extraido_at);
+             CREATE INDEX IF NOT EXISTS census_terms_term
+               ON census_terms(connection_id, taxonomy, term_id);",
+        )?;
+
+        // Una base anterior lleva el trabajo hecho anotado solo en `extraidas`.
+        // Sin esto, actualizar la app mandaría a rehacer todo lo ya extraído,
+        // que en un archivo grande son horas. Solo rellena lo que está vacío,
+        // así que a partir de la segunda vez no hace nada.
+        conn.execute(
+            "UPDATE lote_articulos SET extraido_at = datetime('now')
+             WHERE extraido_at IS NULL AND EXISTS (
+               SELECT 1 FROM extraidas e
+               WHERE e.lote_id = lote_articulos.lote_id AND e.wp_id = lote_articulos.wp_id)",
+            [],
         )?;
         Ok(())
     }
@@ -788,6 +827,28 @@ impl Db {
         discovery_json: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
+
+        // Legajo trabaja con un archivo a la vez. Dos sitios en la misma base
+        // significan dos censos, dos juegos de lotes y dos grafos compartiendo
+        // una `sesion` que solo sabe apuntar a uno: al reabrir, la app volvería
+        // a un trabajo a medias sin decir de cuál de los dos. Cambiar de medio
+        // es empezar de nuevo, y eso se pide explícitamente olvidando el
+        // guardado, con lo que se pierde dicho de antemano.
+        let mut st = conn.prepare(
+            "SELECT resolved_origin FROM connections WHERE resolved_origin <> ?1 LIMIT 1")?;
+        let otro: Option<String> = st
+            .query_map([resolved_origin], |r| r.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .next();
+        drop(st);
+        if let Some(o) = otro {
+            return Err(crate::error::Error::Other(format!(
+                "Ya hay un medio conectado: {}. Legajo trabaja con un archivo a la vez; \
+                 para conectar otro hay que olvidar primero el guardado, y eso borra \
+                 su censo, sus lotes y las correcciones que lleve encima.",
+                o.replace("https://", "").replace("http://", ""))));
+        }
+
         conn.execute(
             r#"
             INSERT INTO connections
@@ -821,34 +882,6 @@ impl Db {
         Ok(id)
     }
 
-    pub fn list_connections(&self) -> Result<Vec<ConnectionRow>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            r#"SELECT id, label, resolved_origin, transport_label, site_name,
-                      total_posts, auth_method, created_at, last_used_at
-               FROM connections ORDER BY last_used_at DESC"#,
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(ConnectionRow {
-                    id: r.get(0)?,
-                    label: r.get(1)?,
-                    resolved_origin: r.get(2)?,
-                    transport_label: r.get(3)?,
-                    site_name: r.get(4)?,
-                    total_posts: r.get(5)?,
-                    auth_method: r.get(6)?,
-                    created_at: r.get(7)?,
-                    last_used_at: r.get(8)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-
-    /// Recupera el transporte guardado de una conexión.
-    /// Guarda el sondeo hecho ya con credencial.
     pub fn actualizar_sondeo(&self, id: i64, d: &crate::Discovery) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1047,19 +1080,6 @@ impl Db {
         }
         tx.commit()?;
         Ok(())
-    }
-
-    /// Ids del censo elegidos al azar de forma reproducible, para el sondeo.
-    pub fn ids_para_sondeo(&self, conn_id: i64, n: usize, semilla: i64) -> Result<Vec<i64>> {
-        let conn = self.conn.lock().unwrap();
-        // El orden depende de la semilla, no del azar del motor: dos ejecuciones
-        // con la misma semilla sondean exactamente los mismos articulos.
-        let mut st = conn.prepare(
-            "SELECT wp_id FROM census WHERE connection_id = ?1
-             ORDER BY (wp_id * 2654435761 + ?2) % 1000003 LIMIT ?3",
-        )?;
-        let it = st.query_map(rusqlite::params![conn_id, semilla, n as i64], |r| r.get::<_, i64>(0))?;
-        Ok(it.filter_map(|r| r.ok()).collect())
     }
 
     // ── Lotes ────────────────────────────────────────────────────────────
@@ -1841,6 +1861,174 @@ impl Db {
         Ok(v)
     }
 
+    // ── Extracción por categorías ────────────────────────────────────────
+
+    /// Los artículos del lote que aún no han pasado por el extractor,
+    /// opcionalmente limitados a una rama del árbol de categorías.
+    ///
+    /// Devuelve solo identificadores y no exige cuerpo descargado, al revés que
+    /// la versión anterior. Con la extracción por tandas el cuerpo se trae
+    /// dentro del mismo bucle que extrae, así que exigirlo aquí dejaría fuera
+    /// justo a los que faltan por bajar: la consulta devolvería vacío y no
+    /// habría nada que procesar.
+    ///
+    /// `terminos` ya viene expandido con los descendientes: elegir una
+    /// categoría madre arrastra sus hijas, que es como está organizado el
+    /// archivo y como se eligió en el paso de alcance.
+    pub fn pendientes_del_lote(
+        &self, lote_id: i64, solo_calibracion: bool, terminos: &[i64],
+    ) -> Result<Vec<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
+        // Los términos son enteros ya tipados, no texto del usuario.
+        let rama = if terminos.is_empty() {
+            String::new()
+        } else {
+            let ids = terminos.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+            format!(
+                " AND EXISTS (SELECT 1 FROM census_terms x
+                              WHERE x.connection_id = d.connection_id AND x.wp_id = s.wp_id
+                                AND x.taxonomy = d.taxonomia AND x.term_id IN ({ids}))")
+        };
+        let mut st = conn.prepare(&format!(
+            "SELECT s.wp_id FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
+             WHERE s.lote_id = ?1 {filtro} AND s.extraido_at IS NULL {rama}
+             ORDER BY s.wp_id"))?;
+        let v = st.query_map([lote_id], |r| r.get::<_, i64>(0))?.filter_map(|r| r.ok()).collect();
+        Ok(v)
+    }
+
+    /// Cuáles de estos artículos no tienen todavía el cuerpo en caché.
+    ///
+    /// El caché de cuerpos es del sitio y no del lote, así que una tanda puede
+    /// llegar con parte del trabajo hecho: los doce de calibración ya se
+    /// bajaron en el paso 5, y un artículo que esté en dos categorías se bajó
+    /// al extraer la primera.
+    pub fn sin_cuerpo(&self, conn_id: i64, ids: &[i64]) -> Result<Vec<i64>> {
+        if ids.is_empty() { return Ok(Vec::new()); }
+        let conn = self.conn.lock().unwrap();
+        let lista = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let mut st = conn.prepare(&format!(
+            "SELECT wp_id FROM articles
+             WHERE connection_id = ?1 AND wp_id IN ({lista})
+               AND text_plain IS NOT NULL AND text_plain <> ''"))?;
+        let tienen: std::collections::HashSet<i64> = st
+            .query_map([conn_id], |r| r.get::<_, i64>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        // Se conserva el orden de lo pedido: la tanda se pide por identificador
+        // ascendente y la petición al sitio sale igual.
+        Ok(ids.iter().copied().filter(|i| !tienen.contains(i)).collect())
+    }
+
+    /// Los cuerpos ya limpios de una tanda, en el orden en que se pidieron.
+    pub fn textos_de(&self, conn_id: i64, ids: &[i64]) -> Result<Vec<(i64, String)>> {
+        if ids.is_empty() { return Ok(Vec::new()); }
+        let conn = self.conn.lock().unwrap();
+        let lista = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let mut st = conn.prepare(&format!(
+            "SELECT wp_id, text_plain FROM articles
+             WHERE connection_id = ?1 AND wp_id IN ({lista})
+               AND text_plain IS NOT NULL AND text_plain <> ''
+             ORDER BY wp_id"))?;
+        let v = st
+            .query_map([conn_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    /// Deja constancia de que estos artículos ya pasaron por el extractor.
+    ///
+    /// Se marca aunque no hayan dado ninguna entidad: haber sido procesado y
+    /// haber rendido algo son cosas distintas, y confundirlas es lo que dejaba
+    /// artículos dando vueltas en la cola para siempre.
+    pub fn marcar_extraidos(&self, lote_id: i64, ids: &[i64]) -> Result<()> {
+        if ids.is_empty() { return Ok(()); }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut st = tx.prepare(
+                "UPDATE lote_articulos SET extraido_at = datetime('now')
+                 WHERE lote_id = ?1 AND wp_id = ?2")?;
+            for id in ids {
+                st.execute(rusqlite::params![lote_id, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Las categorías presentes en un lote, con cuánto llevan hecho.
+    ///
+    /// Es la cola de trabajo del paso 7: de aquí sale qué queda por extraer y
+    /// en qué orden conviene atacarlo. Un artículo que lleva dos categorías
+    /// cuenta en las dos, porque en WordPress una nota regional suele llevar la
+    /// subcategoría y la madre; se extrae una sola vez y al hacerlo baja el
+    /// pendiente de ambas.
+    pub fn categorias_del_lote(&self, lote_id: i64) -> Result<Vec<CategoriaLote>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT t.term_id, t.name, t.slug, t.parent,
+                    COUNT(*),
+                    SUM(CASE WHEN s.extraido_at IS NOT NULL THEN 1 ELSE 0 END)
+             FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
+             JOIN census_terms x ON x.connection_id = d.connection_id
+                                AND x.wp_id = s.wp_id AND x.taxonomy = d.taxonomia
+             JOIN terms t ON t.connection_id = d.connection_id
+                         AND t.taxonomy = x.taxonomy AND t.term_id = x.term_id
+             WHERE s.lote_id = ?1
+             GROUP BY t.term_id
+             ORDER BY COUNT(*) - SUM(CASE WHEN s.extraido_at IS NOT NULL THEN 1 ELSE 0 END) DESC,
+                      t.name")?;
+        let v = st
+            .query_map([lote_id], |r| {
+                let total: i64 = r.get(4)?;
+                let hechos: i64 = r.get(5)?;
+                Ok(CategoriaLote {
+                    term_id: r.get(0)?, nombre: r.get(1)?, slug: r.get(2)?, parent: r.get(3)?,
+                    total, extraidos: hechos, pendientes: total - hechos,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    /// Artículos del lote que no caen en ninguna categoría de la taxonomía.
+    ///
+    /// Existen —el censo los marca como `sin_terminos`— y si la cola solo
+    /// mostrara categorías quedarían fuera del recorrido sin que nadie lo
+    /// notara: el lote nunca llegaría a cero y no habría dónde ver por qué.
+    pub fn sueltos_del_lote(&self, lote_id: i64) -> Result<(i64, i64)> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN s.extraido_at IS NOT NULL THEN 1 ELSE 0 END)
+             FROM lote_articulos s
+             JOIN lotes d ON d.id = s.lote_id
+             WHERE s.lote_id = ?1 AND NOT EXISTS (
+               SELECT 1 FROM census_terms x
+               WHERE x.connection_id = d.connection_id AND x.wp_id = s.wp_id
+                 AND x.taxonomy = d.taxonomia)",
+            [lote_id],
+            |r| Ok((r.get(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?)
+    }
+
+    /// La taxonomía sobre la que se definió el lote.
+    ///
+    /// Cae en `categories` si el lote es de una versión anterior que no la
+    /// guardaba: es la que usa el árbol de secciones y la única que existía.
+    pub fn taxonomia_de_lote(&self, lote_id: i64) -> Result<String> {
+        let conn = self.conn.lock().unwrap();
+        let t: Option<String> = conn
+            .query_row("SELECT taxonomia FROM lotes WHERE id = ?1", [lote_id], |r| r.get(0))
+            .unwrap_or(None);
+        Ok(t.filter(|s| !s.is_empty()).unwrap_or_else(|| "categories".into()))
+    }
+
     pub fn conexion_de_lote(&self, lote_id: i64) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row("SELECT connection_id FROM lotes WHERE id = ?1", [lote_id], |r| r.get(0))?)
@@ -1864,7 +2052,7 @@ impl Db {
         Ok(v)
     }
 
-    /// Cuántos artículos lleva extraídos y cuántos son en total.
+    /// Cuántos artículos lleva procesados y cuántos son en total.
     ///
     /// `solo_calibracion` tiene que ser el mismo con el que corre la
     /// extracción. Cuando no lo era, la barra se quedaba clavada: el
@@ -1877,19 +2065,37 @@ impl Db {
     /// El total tampoco puede exigir cuerpo descargado: la extracción los
     /// descarga sobre la marcha, así que contar solo los que ya están haría que
     /// la barra creciera y menguara al mismo tiempo.
-    pub fn avance_extraccion(&self, lote_id: i64, solo_calibracion: bool) -> Result<(i64, i64)> {
+    ///
+    /// Lo hecho se cuenta por `extraido_at` y no por tener filas en
+    /// `extraidas`. Un artículo del que el modelo no saca ninguna entidad está
+    /// procesado igual, y contarlo como pendiente dejaba la barra sin poder
+    /// llegar al final por una razón que no era un fallo.
+    ///
+    /// `terminos` limita la cuenta a una rama del árbol, para que la barra
+    /// hable de la categoría que se está extrayendo y no del lote entero.
+    pub fn avance_extraccion(
+        &self, lote_id: i64, solo_calibracion: bool, terminos: &[i64],
+    ) -> Result<(i64, i64)> {
         let conn = self.conn.lock().unwrap();
         let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
-        let hechos: i64 = conn.query_row(
-            &format!(
-                "SELECT COUNT(DISTINCT e.wp_id) FROM extraidas e
-                 JOIN lote_articulos s ON s.lote_id = e.lote_id AND s.wp_id = e.wp_id
-                 WHERE e.lote_id = ?1 {filtro}"),
-            [lote_id], |r| r.get(0))?;
-        let total: i64 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM lote_articulos s WHERE s.lote_id = ?1 {filtro}"),
-            [lote_id], |r| r.get(0))?;
-        Ok((hechos, total))
+        let rama = if terminos.is_empty() {
+            String::new()
+        } else {
+            let ids = terminos.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+            format!(
+                " AND EXISTS (SELECT 1 FROM census_terms x
+                              WHERE x.connection_id = d.connection_id AND x.wp_id = s.wp_id
+                                AND x.taxonomy = d.taxonomia AND x.term_id IN ({ids}))")
+        };
+        let fila = |extra: &str| -> Result<i64> {
+            Ok(conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM lote_articulos s
+                     JOIN lotes d ON d.id = s.lote_id
+                     WHERE s.lote_id = ?1 {filtro} {rama} {extra}"),
+                [lote_id], |r| r.get(0))?)
+        };
+        Ok((fila("AND s.extraido_at IS NOT NULL")?, fila("")?))
     }
 
     // ── Sesion ───────────────────────────────────────────────────────────
@@ -1972,9 +2178,82 @@ impl Db {
         }
     }
 
-    pub fn delete_connection(&self, id: i64) -> Result<()> {
+    /// La única conexión guardada, con el descubrimiento tal cual quedó.
+    ///
+    /// Devuelve también el JSON del sondeo para que reabrir la app no tenga que
+    /// volver a preguntarle al sitio quién es: son seis peticiones a un
+    /// servidor ajeno para averiguar algo que ya está en disco.
+    pub fn conexion_guardada(&self) -> Result<Option<(ConnectionRow, Option<String>)>> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM connections WHERE id = ?1", [id])?;
+        let mut st = conn.prepare(
+            "SELECT id, label, resolved_origin, transport_label, site_name, total_posts,
+                    auth_method, created_at, last_used_at, discovery_json
+             FROM connections ORDER BY id LIMIT 1")?;
+        let fila = st
+            .query_map([], |r| {
+                Ok((
+                    ConnectionRow {
+                        id: r.get(0)?, label: r.get(1)?, resolved_origin: r.get(2)?,
+                        transport_label: r.get(3)?, site_name: r.get(4)?,
+                        total_posts: r.get(5)?, auth_method: r.get(6)?,
+                        created_at: r.get(7)?, last_used_at: r.get(8)?,
+                    },
+                    r.get::<_, Option<String>>(9)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .next();
+        Ok(fila)
+    }
+
+    /// Olvida un sitio y todo lo que se supo de él.
+    ///
+    /// Borrar la fila de `connections` dispara las cascadas, y hoy todas las
+    /// tablas cuelgan de ahí —directamente o a través de `lotes`—. Pero eso es
+    /// una propiedad del esquema, no una garantía: basta que alguien añada una
+    /// tabla y olvide la clave foránea para que queden restos de un archivo
+    /// que el usuario cree borrado. Como Legajo trabaja con un medio a la vez,
+    /// cuando se va el último no puede sobrevivir ni una fila: lo que quede es
+    /// basura de una cascada que no saltó, y se barre. Las tablas se leen del
+    /// propio esquema, así que esto no se queda viejo al añadir una.
+    ///
+    /// Después se compacta el fichero. SQLite marca las páginas como libres
+    /// pero no las devuelve al disco ni las sobrescribe: sin esto, el texto de
+    /// un archivo entero —que ahora son gigabytes, desde que el censo se trae
+    /// los cuerpos— seguiría legible dentro del fichero después de «borrarlo».
+    pub fn delete_connection(&self, id: i64) -> Result<()> {
+        {
+            let mut conn = self.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM connections WHERE id = ?1", [id])?;
+
+            let quedan: i64 =
+                tx.query_row("SELECT COUNT(*) FROM connections", [], |r| r.get(0))?;
+            if quedan == 0 {
+                let mut st = tx.prepare(
+                    "SELECT name FROM sqlite_master
+                     WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")?;
+                let tablas: Vec<String> = st
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                drop(st);
+                for t in tablas {
+                    // El nombre viene del esquema, no de fuera.
+                    tx.execute(&format!("DELETE FROM {t}"), [])?;
+                }
+            }
+            tx.commit()?;
+        }
+
+        // VACUUM no puede correr dentro de una transacción, y necesita el
+        // candado libre de la escritura anterior. El volcado posterior no es
+        // opcional: en modo WAL el fichero se reconstruye a través del diario,
+        // así que sin checkpoint el `.sqlite` conserva las páginas viejas —con
+        // el texto de los artículos legible dentro— y el `-wal` guarda una
+        // copia más. Truncar deja los dos limpios.
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
 }
@@ -1992,16 +2271,142 @@ mod tests {
     }
 
     #[test]
-    fn guarda_lista_y_borra_conexiones() {
+    fn olvidar_el_sitio_no_deja_ni_una_fila() {
+        /* «Eliminar el sitio» tiene que llevarse todo. Hoy cada tabla cuelga de
+           `connections` por cascada, pero eso es una propiedad del esquema y no
+           una garantía: basta una tabla nueva sin clave foránea para que queden
+           restos de un archivo que el usuario cree borrado. Esta prueba llena
+           todas las tablas y exige que después no quede nada; y como recorre el
+           esquema en vez de una lista escrita a mano, una tabla nueva que se
+           olvide de limpiar hace fallar la prueba sola. */
+        let (db, path) = db_temporal("sin-rastro");
+
+        let conn_id = db.upsert_connection(
+            "La Silla", "https://www.lasillavacia.com", "{}", "REST directo",
+            Some("La Silla Vacia"), Some(84_343), r#"{"x":1}"#).unwrap();
+        db.guardar_sesion(Some(conn_id), "perfil", 1, None, Some(1)).unwrap();
+
+        db.con(|c| {
+            c.execute_batch(&format!("
+                INSERT INTO lotes (id, connection_id, label, taxonomia)
+                  VALUES (1, {conn_id}, 'lote', 'categories');
+                INSERT INTO census (connection_id, wp_id, date, date_valid, title, title_key)
+                  VALUES ({conn_id}, 10, '2016-01-01', 1, 't', 't');
+                INSERT INTO census_terms (connection_id, wp_id, taxonomy, term_id)
+                  VALUES ({conn_id}, 10, 'categories', 5);
+                INSERT INTO census_windows (connection_id, label, rows)
+                  VALUES ({conn_id}, '2016-01', 1);
+                INSERT INTO terms (connection_id, taxonomy, term_id, name, slug, parent, count)
+                  VALUES ({conn_id}, 'categories', 5, 'Nacional', 'nacional', 0, 1);
+                INSERT INTO anomalies (connection_id, wp_id, kind, detail)
+                  VALUES ({conn_id}, 10, 'sin_titulo', '');
+                INSERT INTO articles (connection_id, wp_id, html_raw, text_plain, word_count)
+                  VALUES ({conn_id}, 10, '<p>secreto</p>', 'secreto', 1);
+                INSERT INTO content_probe (connection_id, wp_id, words, blocks, broken, shortcodes)
+                  VALUES ({conn_id}, 10, 1, 0, 0, '');
+                INSERT INTO jobs (connection_id, kind, state) VALUES ({conn_id}, 'censo', 'listo');
+                INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, 10);
+                INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo)
+                  VALUES (1, 10, 'm1', 0, 0, 5, 'Petro', 'persona');
+                INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
+                  VALUES (1, 10, 0, 0, 5, 'Petro', 'persona', 0.9);
+                INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado, cuando)
+                  VALUES (1, 10, 'r1', 'm1', 'm2', 'aliado de', 'vigente');
+                INSERT INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score)
+                  VALUES (1, 10, 0, 'a', 'b', 'aliado de', 0.8);
+                INSERT INTO resoluciones (lote_id, clave, a_nombre, b_nombre, tipo, decision, confianza)
+                  VALUES (1, 'k', 'A', 'B', 'persona', 'misma', 0.9);
+                INSERT INTO tiempos (lote_id, wp_id, segundos, menciones, orden)
+                  VALUES (1, 10, 30, 2, 1);
+            "))?;
+            Ok(())
+        }).unwrap();
+
+        let tablas = |db: &Db| -> Vec<String> {
+            db.con(|c| {
+                let mut st = c.prepare(
+                    "SELECT name FROM sqlite_master
+                     WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+                let v = st.query_map([], |r| r.get::<_, String>(0))?
+                    .filter_map(|r| r.ok()).collect();
+                Ok(v)
+            }).unwrap()
+        };
+        let cuenta = |db: &Db, t: &str| -> i64 {
+            db.con(|c| Ok(c.query_row(
+                &format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get::<_, i64>(0))?)).unwrap()
+        };
+
+        // Si la prueba dejara una tabla vacía no estaría comprobando nada sobre
+        // ella, y el borrado podría dejarla sucia sin que nadie se enterara.
+        let todas = tablas(&db);
+        for t in &todas {
+            assert!(cuenta(&db, t) > 0, "la prueba dejó «{t}» vacía: no comprueba nada sobre ella");
+        }
+
+        db.delete_connection(conn_id).unwrap();
+
+        for t in &todas {
+            let n = cuenta(&db, t);
+            assert_eq!(n, 0, "«{t}» conservó {n} filas del sitio olvidado");
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn olvidar_el_sitio_saca_su_texto_del_fichero() {
+        /* SQLite marca las páginas borradas como libres pero no las sobrescribe
+           ni devuelve el espacio: sin compactar, el cuerpo de los artículos se
+           sigue leyendo con un editor hexadecimal después de haberlo «borrado».
+           Desde que el censo se trae los cuerpos eso son gigabytes del archivo
+           de un medio, en un programa cuya promesa es que ese archivo no sale
+           de aquí. */
+        let (db, path) = db_temporal("sin-rastro-en-disco");
+        let conn_id = db.upsert_connection(
+            "La Silla", "https://www.lasillavacia.com", "{}", "REST directo",
+            None, None, "{}").unwrap();
+        db.con(|c| {
+            c.execute(
+                "INSERT INTO articles (connection_id, wp_id, html_raw, text_plain, word_count)
+                 VALUES (?1, 10, '<p>zanahoria-testigo</p>', 'zanahoria-testigo', 1)",
+                [conn_id])?;
+            // El fichero está en WAL: sin volcar, lo escrito vive en el `-wal`
+            // y leer el `.sqlite` no probaría nada.
+            c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+            Ok(())
+        }).unwrap();
+
+        let testigo = b"zanahoria-testigo";
+        let dentro = |p: &std::path::Path| -> bool {
+            std::fs::read(p).map(|v| v.windows(testigo.len()).any(|w| w == testigo)).unwrap_or(false)
+        };
+        assert!(dentro(&path), "el montaje no sirve: el texto ni siquiera llegó al fichero");
+
+        db.delete_connection(conn_id).unwrap();
+
+        let wal = path.with_extension("sqlite-wal");
+        assert!(!dentro(&path), "el texto del archivo sigue en el fichero tras olvidarlo");
+        assert!(!dentro(&wal), "el texto del archivo sigue en el diario tras olvidarlo");
+
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn solo_puede_haber_un_medio_conectado() {
+        /* Legajo trabaja con un archivo a la vez. Dos sitios en la misma base
+           serían dos censos, dos juegos de lotes y dos grafos compartiendo una
+           `sesion` que solo sabe apuntar a uno. Cambiar de medio es empezar de
+           nuevo, y se pide explícitamente olvidando el guardado. */
         let (db, path) = db_temporal("conexiones");
 
         let id = db
             .upsert_connection("La Silla", "https://www.lasillavacia.com", r#"{"kind":"direct_pretty","origin":"https://www.lasillavacia.com"}"#, "REST directo", Some("La Silla Vacia"), Some(84_343), "{}")
             .unwrap();
 
-        let rows = db.list_connections().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].total_posts, Some(84_343));
+        let (fila, _) = db.conexion_guardada().unwrap().expect("hay un medio");
+        assert_eq!(fila.total_posts, Some(84_343));
 
         // Reconectar al mismo sitio actualiza en vez de duplicar: es la razon de
         // que resolved_origin sea UNIQUE y de que se resuelva tras redirecciones.
@@ -2009,13 +2414,24 @@ mod tests {
             .upsert_connection("La Silla Vacia", "https://www.lasillavacia.com", "{}", "REST directo", None, Some(84_400), "{}")
             .unwrap();
         assert_eq!(id, id2);
-        let rows = db.list_connections().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].label, "La Silla Vacia");
-        assert_eq!(rows[0].total_posts, Some(84_400));
+        let (fila, _) = db.conexion_guardada().unwrap().unwrap();
+        assert_eq!(fila.label, "La Silla Vacia");
+        assert_eq!(fila.total_posts, Some(84_400));
 
+        // Pero otro sitio distinto no entra mientras este siga guardado.
+        let otro = db.upsert_connection(
+            "Otro medio", "https://otromedio.co", "{}", "REST directo", None, None, "{}");
+        assert!(otro.is_err(), "un segundo medio no puede convivir con el primero");
+        let msg = otro.unwrap_err().to_string();
+        assert!(msg.contains("lasillavacia.com"),
+                "el error tiene que decir cuál está ocupando el sitio: {msg}");
+
+        // Olvidar el guardado deja la puerta abierta al siguiente.
         db.delete_connection(id).unwrap();
-        assert!(db.list_connections().unwrap().is_empty());
+        assert!(db.conexion_guardada().unwrap().is_none());
+        db.upsert_connection(
+            "Otro medio", "https://otromedio.co", "{}", "REST directo", None, None, "{}")
+            .expect("con la base limpia sí entra");
 
         let _ = std::fs::remove_file(path);
     }
@@ -2288,7 +2704,8 @@ mod tests {
             c.execute_batch(
                 "INSERT INTO connections (id, label, resolved_origin, transport_json,
                    transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
-                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');",
+                 INSERT INTO lotes (id, connection_id, label, taxonomia)
+                   VALUES (1, 1, 'l', 'categories');",
             )?;
             for wp in 1..=50 {
                 c.execute(
@@ -2300,22 +2717,107 @@ mod tests {
                     "INSERT INTO articles (connection_id, wp_id, html_raw, text_plain, word_count)
                      VALUES (1, ?1, '<p>x</p>', 'x', 1)", [wp])?;
             }
-            // Extraidos: los cuatro de calibracion y uno mas del resto.
-            for wp in [1, 2, 3, 4, 30] {
-                c.execute(
-                    "INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
-                     VALUES (1, ?1, 0, 0, 1, 'x', 'persona', 0.9)", [wp])?;
-            }
             Ok(())
         }).unwrap();
 
+        // Procesados: los cuatro de calibracion y uno mas del resto.
+        db.marcar_extraidos(1, &[1, 2, 3, 4, 30]).unwrap();
+
         // En calibración: los cuatro marcados, y los cuatro hechos.
-        assert_eq!(db.avance_extraccion(1, true).unwrap(), (4, 4),
+        assert_eq!(db.avance_extraccion(1, true, &[]).unwrap(), (4, 4),
                    "la calibración tiene que poder llegar al 100 %");
 
         // En el lote entero: los cincuenta, con cinco hechos.
-        assert_eq!(db.avance_extraccion(1, false).unwrap(), (5, 50),
+        assert_eq!(db.avance_extraccion(1, false, &[]).unwrap(), (5, 50),
                    "el total es el lote, no los cuerpos que haya en caché");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn un_articulo_sin_entidades_cuenta_como_procesado() {
+        /* Mientras «hecho» se dedujo de tener filas en `extraidas`, un artículo
+           del que el modelo no sacaba nada volvía a la cola en cada corrida: se
+           bajaba y se procesaba otra vez sin que el pendiente bajara nunca. Con
+           la extracción por categorías eso deja de ser un desperdicio invisible
+           y pasa a ser una categoría que no puede llegar a cero. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-vacios.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label, taxonomia)
+                   VALUES (1, 1, 'l', 'categories');
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1,10),(1,11);",
+            )?;
+            Ok(())
+        }).unwrap();
+
+        // El 10 rinde una entidad; el 11 no rinde ninguna, pero pasó igual.
+        db.con(|c| {
+            c.execute(
+                "INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
+                 VALUES (1, 10, 0, 0, 1, 'x', 'persona', 0.9)", [])?;
+            Ok(())
+        }).unwrap();
+        db.marcar_extraidos(1, &[10, 11]).unwrap();
+
+        assert_eq!(db.avance_extraccion(1, false, &[]).unwrap(), (2, 2),
+                   "procesado y haber rendido entidades son cosas distintas");
+        assert!(db.pendientes_del_lote(1, false, &[]).unwrap().is_empty(),
+                "el que no dio nada no puede volver a la cola");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn la_cola_reparte_el_lote_por_categorias() {
+        /* La extracción va categoría por categoría, así que la cola tiene que
+           decir cuánto queda en cada una. Un artículo que lleva la subcategoría
+           y la madre —entre el 64 % y el 93 % de las veces en WordPress— cuenta
+           en las dos y se extrae una sola vez: al hacerlo baja el pendiente de
+           ambas, que es la única lectura honesta de un árbol solapado. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-cola.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label, taxonomia)
+                   VALUES (1, 1, 'l', 'categories');
+                 INSERT INTO terms (connection_id, taxonomy, term_id, name, slug, parent, count)
+                   VALUES (1,'categories',5,'Nacional','nacional',0,0),
+                          (1,'categories',7,'Bogotá','bogota',5,0);
+                 -- El 100 lleva las dos; el 101 solo la madre; el 102 ninguna.
+                 INSERT INTO census_terms (connection_id, wp_id, taxonomy, term_id)
+                   VALUES (1,100,'categories',5),(1,100,'categories',7),
+                          (1,101,'categories',5);
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1,100),(1,101),(1,102);",
+            )?;
+            Ok(())
+        }).unwrap();
+
+        let cola = db.categorias_del_lote(1).unwrap();
+        let de = |id: i64| cola.iter().find(|c| c.term_id == id).unwrap().clone();
+        assert_eq!((de(5).total, de(5).pendientes), (2, 2), "Nacional lleva los dos");
+        assert_eq!((de(7).total, de(7).pendientes), (1, 1), "Bogotá solo el compartido");
+        assert_eq!(db.sueltos_del_lote(1).unwrap(), (1, 0),
+                   "el que no tiene categoría no puede desaparecer de la cuenta");
+
+        // Extraer Bogotá se lleva por delante el compartido, y Nacional lo nota.
+        assert_eq!(db.pendientes_del_lote(1, false, &[7]).unwrap(), vec![100]);
+        db.marcar_extraidos(1, &[100]).unwrap();
+        let cola = db.categorias_del_lote(1).unwrap();
+        let de = |id: i64| cola.iter().find(|c| c.term_id == id).unwrap().clone();
+        assert_eq!(de(7).pendientes, 0, "Bogotá queda hecha");
+        assert_eq!(de(5).pendientes, 1, "y a Nacional le baja el suyo");
+        assert_eq!(db.avance_extraccion(1, false, &[5]).unwrap(), (1, 2),
+                   "la barra habla de la rama que se está extrayendo");
 
         let _ = std::fs::remove_file(path);
     }

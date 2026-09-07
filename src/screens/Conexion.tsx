@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Boton, Campo, Cargando, Glifo, Rotulo } from "../ui";
 import {
-  cargarSesion, deleteConnection, discoverSite, duenio, listConnections,
+  cargarSesion, conexionGuardada, deleteConnection, discoverSite, duenio,
   pasoAutorizacion, probarCredencial, saveConnection, sondearArchivo,
   alFaseConexion,
 } from "../lib/ipc";
-import type { ConnectionRow, Discovery, Identidad, PasoAutorizacion, SesionRecuperada } from "../types";
+import type { ConexionGuardada, Discovery, Identidad, PasoAutorizacion, SesionRecuperada } from "../types";
 import type { EstadoApp } from "../App";
+import { nombreEnFrase, pasoDe, type Paso } from "../contenido/pasos";
 
 type Fase = "reposo" | "verificando" | "conectado" | "error";
 
@@ -75,21 +76,23 @@ function instalacion(d: Discovery): string {
 export default function Conexion({
   estado,
   onConectado,
-  onAyuda,
 }: {
   estado: EstadoApp;
   onConectado: (d: Discovery, id: number) => void;
-  onAyuda: () => void;
 }) {
   const [url, setUrl] = useState("");
   const [correo, setCorreo] = useState("");
   const [fase, setFase] = useState<Fase>("reposo");
   const [hallazgo, setHallazgo] = useState<Discovery | null>(estado.sitio);
   const [error, setError] = useState<ErrorConexion | null>(null);
-  const [verRecientes, setVerRecientes] = useState(false);
-  const [porBorrar, setPorBorrar] = useState<number | null>(null);
+  const [porBorrar, setPorBorrar] = useState(false);
   const [conexionId, setConexionId] = useState<number | null>(null);
-  const [recientes, setRecientes] = useState<ConnectionRow[]>([]);
+  /* El medio conectado. Legajo trabaja con un archivo a la vez: hay uno o no
+     hay ninguno, y cambiarlo es olvidar el anterior con todo lo que lleve
+     encima. Antes esto era una lista de sitios guardados, y pulsar uno lo
+     reconectaba sin ofrecer ninguna forma de seguir adelante. */
+  const [guardado, setGuardado] = useState<ConexionGuardada | null>(null);
+  const [cargandoGuardado, setCargandoGuardado] = useState(true);
   const [sesion, setSesion] = useState<SesionRecuperada | null>(null);
   /* Segunda etapa: probar que quien conecta pertenece al sitio. Leer un archivo
      público no necesita credenciales, pero quedarse con él entero para hacer su
@@ -112,10 +115,13 @@ export default function Conexion({
   const [comoSacarla, setComoSacarla] = useState(false);
 
 
-  const cargarRecientes = useCallback(() => {
-    listConnections().then(setRecientes).catch(() => setRecientes([]));
+  const cargarGuardado = useCallback(() => {
+    conexionGuardada()
+      .then(setGuardado)
+      .catch(() => setGuardado(null))
+      .finally(() => setCargandoGuardado(false));
   }, []);
-  useEffect(cargarRecientes, [cargarRecientes]);
+  useEffect(cargarGuardado, [cargarGuardado]);
 
   /* Si hay trabajo a medias, lo primero que se ve es la forma de volver a él.
      Sin esto, reabrir la app parecía obligar a empezar de cero aunque el censo,
@@ -131,6 +137,27 @@ export default function Conexion({
       .catch(() => {});
   }, []);
 
+  /* La salida hacia adelante desde un medio ya conectado.
+     Faltaba entera: al pulsar un sitio guardado se le volvía a preguntar quién
+     era, se pintaba el visto de «el sitio confirma la cuenta» y ahí acababa
+     todo, porque el único camino al paso siguiente estaba dentro de comprobar
+     la contraseña de aplicación —y esa ya estaba comprobada—. */
+  async function continuar() {
+    if (!guardado) return;
+    if (!guardado.sitio) {
+      // El descubrimiento guardado no se pudo leer: toca volver a preguntar.
+      await conectar(guardado.conexion.resolved_origin);
+      return;
+    }
+    onConectado(guardado.sitio, guardado.conexion.id);
+    setConexionId(guardado.conexion.id);
+    if (sesion && sesion.paso !== "conexion") {
+      estado.avanzar(sesion.progreso, sesion.paso as Paso);
+    } else {
+      estado.avanzar(1, "perfil");
+    }
+  }
+
   async function conectar(destino?: string) {
     const valor = (destino ?? url).trim();
     if (!valor) return;
@@ -145,7 +172,7 @@ export default function Conexion({
       const id = await saveConnection(d.resolved_origin, d.site_name ?? "");
       setConexionId(id);
       onConectado(d, id);
-      cargarRecientes();
+      cargarGuardado();
       // La dirección donde crear la contraseña sale del índice del propio
       // sitio, así que solo puede pedirse una vez conectados.
       pasoAutorizacion(d.resolved_origin).then(setAutorizacion).catch(() => setAutorizacion(null));
@@ -192,28 +219,88 @@ export default function Conexion({
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", padding: "48px 32px" }}>
       <div style={{ width: "100%", maxWidth: 440 }}>
+        <div className="t-rotulo" style={{ marginBottom: 12 }}>Paso 1 de 8 · Conexión</div>
         <h1 style={{ fontFamily: "var(--font-serif-display)", fontWeight: 500, fontVariationSettings: "var(--fraunces-display)", fontSize: 34, lineHeight: 1.15, letterSpacing: "-.4px", margin: "0 0 10px" }}>
-          Conecta el archivo
+          {pasoDe("conexion")!.titulo}
         </h1>
-        <p style={{ margin: "0 0 40px", fontSize: 14.5, lineHeight: 1.6, color: "var(--t2)", maxWidth: "34ch" }}>
-          Diagnostica el archivo de tu medio. La dirección del sitio y el correo con el que
-          entras a su WordPress.
+        <p style={{ margin: "0 0 40px", fontSize: 14.5, lineHeight: 1.6, color: "var(--t2)", maxWidth: "36ch" }}>
+          {guardado && fase !== "conectado"
+            ? "Hay un archivo conectado en este computador."
+            : "La dirección del sitio y el correo con el que entras a su WordPress. Legajo averigua el resto."}
         </p>
 
-        {sesion && (
-          <div style={{ marginBottom: "var(--esp-8)", padding: "16px 18px", borderRadius: 10, background: "var(--acento-suave)", border: "1px solid var(--acento)" }}>
-            <Rotulo style={{ marginBottom: 8 }}>Trabajo a medias</Rotulo>
-            <p style={{ margin: "0 0 14px", fontSize: 14, lineHeight: 1.6, color: "var(--t1)" }}>
-              Dejaste {sesion.etiqueta ?? "un archivo"} en{" "}
-              <strong style={{ fontWeight: 500 }}>{NOMBRES[sesion.paso] ?? sesion.paso}</strong>.
-              Todo sigue guardado: el censo, el lote, lo extraído y tus correcciones.
+        {/* El medio conectado. Es lo primero y casi lo único que se ve cuando
+            ya hay uno: la app trabaja con un archivo a la vez, así que la
+            pantalla de conexión deja de ser un formulario y pasa a ser la
+            puerta de vuelta al trabajo. Antes esto era una lista de sitios
+            guardados donde pulsar uno lo reconectaba y no ofrecía ninguna
+            forma de seguir: se llegaba y no se podía salir. */}
+        {guardado && fase !== "conectado" && (
+          <div style={{ marginBottom: "var(--esp-8)", padding: "18px 20px", borderRadius: 10, background: "var(--acento-suave)", border: "1px solid var(--acento)" }}>
+            <Rotulo style={{ marginBottom: 10 }}>
+              {sesion ? "Trabajo a medias" : "Medio conectado"}
+            </Rotulo>
+            <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 4, color: "var(--t1)" }}>
+              {guardado.conexion.site_name ?? guardado.conexion.label}
+            </div>
+            <div className="t-menor" style={{ color: "var(--t2)", marginBottom: 14 }}>
+              {guardado.conexion.resolved_origin.replace(/^https?:\/\//, "")}
+              {guardado.conexion.total_posts
+                ? ` · ${guardado.conexion.total_posts.toLocaleString("es-CO")} artículos`
+                : ""}
+              {guardado.autorizado ? " · cuenta comprobada" : " · sin comprobar la cuenta"}
+            </div>
+
+            <p style={{ margin: "0 0 16px", fontSize: 13.5, lineHeight: 1.65, color: "var(--t1)", maxWidth: "44ch" }}>
+              {sesion
+                ? <>Dejaste este archivo en <strong style={{ fontWeight: 500 }}>{nombreEnFrase(sesion.paso)}</strong>. Todo sigue guardado: lo leído, el lote, lo extraído y tus correcciones.</>
+                : "Todo lo que hayas leído de este archivo sigue en tu disco."}
             </p>
-            <Boton onClick={() => estado.avanzar(sesion.progreso, sesion.paso as never)}>
-              Continuar donde ibas
-            </Boton>
+
+            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              <Boton onClick={continuar}>
+                {sesion ? "Continuar donde ibas" : "Continuar"}
+              </Boton>
+              <Boton variante="enlace" onClick={() => setPorBorrar(!porBorrar)}>
+                conectar otro medio
+              </Boton>
+            </div>
+
+            {/* Cambiar de medio arrastra el censo, los lotes y las
+                correcciones: son horas de trabajo y la base las borra en
+                cascada. Por eso se dice qué se va, en vez de un «¿seguro?»
+                que no informa de nada. */}
+            {porBorrar && (
+              <div style={{ margin: "16px 0 0", padding: "12px 14px", borderRadius: 8, background: "var(--error-fondo)" }}>
+                <p style={{ margin: "0 0 12px", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)", maxWidth: "44ch" }}>
+                  Legajo trabaja con un archivo a la vez. Conectar otro medio borra
+                  de <strong style={{ fontWeight: 500 }}>{guardado.conexion.label}</strong> su
+                  censo{guardado.conexion.total_posts ? ` de ${guardado.conexion.total_posts.toLocaleString("es-CO")} artículos` : ""},
+                  los cuerpos descargados, sus lotes y las correcciones que hayas hecho
+                  sobre ellos. No se puede deshacer.
+                </p>
+                <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+                  <Boton variante="secundario" onClick={async () => {
+                    await deleteConnection(guardado.conexion.id).catch(() => {});
+                    setPorBorrar(false);
+                    setGuardado(null);
+                    setSesion(null);
+                    setHallazgo(null);
+                    setFase("reposo");
+                    cargarGuardado();
+                  }}>Borrar y conectar otro</Boton>
+                  <Boton variante="enlace" onClick={() => setPorBorrar(false)}>cancelar</Boton>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
+        {/* El formulario solo aparece cuando no hay nada conectado. Dejarlo a
+            la vista invitaría a escribir una dirección que la base va a
+            rechazar por haber ya un medio guardado. */}
+        {!guardado && !cargandoGuardado && (
+        <>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Campo
             etiqueta="Dirección del sitio"
@@ -248,6 +335,8 @@ export default function Conexion({
             </Boton>
             <div style={{ height: 14 }} />
           </div>
+        )}
+        </>
         )}
 
         {fase === "verificando" && (
@@ -385,7 +474,7 @@ export default function Conexion({
                         "Baja hasta «Contraseñas de aplicación», al final de la página.",
                         "Escribe un nombre que reconozcas —«Legajo» sirve— y pulsa «Añadir nueva».",
                         "WordPress enseña la contraseña una sola vez, en grupos de cuatro letras. Cópiala entera.",
-                        "Pégala aquí junto a tu usuario. Los espacios dan igual.",
+                        "Pégala aquí. Los espacios dan igual.",
                       ].map((paso, i) => (
                         <li key={i} style={{ fontSize: 12.5, lineHeight: 1.65, color: "var(--t2)" }}>{paso}</li>
                       ))}
@@ -432,16 +521,32 @@ export default function Conexion({
               )}
             </div>
 
-            {/* No hay botón para continuar: confirmar la contraseña es el único
-                permiso que faltaba, y en cuanto se da, la app sigue sola. Un
-                botón aquí solo pediría confirmar dos veces lo mismo. */}
+            {/* Confirmar la contraseña por primera vez lleva sola al paso
+                siguiente, así que ahí no hace falta botón. Pero al volver a un
+                medio ya comprobado no hay nada que confirmar, y sin esto la
+                pantalla se quedaba sin ninguna salida. */}
+            {identidad && (
+              <div style={{ marginBottom: 16 }}>
+                <Boton onClick={() => {
+                  if (conexionId != null && hallazgo) onConectado(hallazgo, conexionId);
+                  if (sesion && sesion.paso !== "conexion") {
+                    estado.avanzar(sesion.progreso, sesion.paso as Paso);
+                  } else {
+                    estado.avanzar(1, "perfil");
+                  }
+                }}>
+                  {sesion && sesion.paso !== "conexion" ? "Continuar donde ibas" : "Continuar"}
+                </Boton>
+              </div>
+            )}
+
             {!identidad && (
               <p className="t-menor" style={{ color: "var(--t3)", margin: "0 0 12px", maxWidth: "44ch", lineHeight: 1.6 }}>
                 Legajo no lee tu archivo hasta que compruebes que es tuyo. Hasta aquí solo ha
                 leído el índice del sitio: cómo se llama y dónde creas tus contraseñas.
               </p>
             )}
-            <Boton variante="enlace" onClick={onAyuda}>qué pasa en el siguiente paso</Boton>
+            <Boton variante="enlace" onClick={estado.ayuda}>qué pasa en el siguiente paso</Boton>
           </div>
         )}
 
@@ -462,67 +567,8 @@ export default function Conexion({
             <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--exito)", display: "block" }} />
             El archivo nunca sale de este computador.
           </span>
-          {recientes.length > 0 && (
-            <Boton variante="enlace" onClick={() => setVerRecientes(!verRecientes)}>
-              {verRecientes
-                ? "ocultar sitios guardados"
-                : `${recientes.length} ${recientes.length === 1 ? "sitio guardado" : "sitios guardados"}`}
-            </Boton>
-          )}
         </div>
 
-        {verRecientes && (
-          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 1 }}>
-            {recientes.map((r) => (
-              <div
-                key={r.id}
-                style={{ display: "flex", alignItems: "baseline", gap: 8, borderRadius: 6, padding: "0 4px 0 0" }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hundida)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <button
-                  onClick={() => conectar(r.resolved_origin)}
-                  style={{ flex: 1, minWidth: 0, appearance: "none", background: "transparent", border: 0, padding: "9px 10px", textAlign: "left", cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 14, alignItems: "baseline", color: "var(--t1)" }}
-                >
-                  <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
-                  <span style={{ fontSize: 11.5, color: "var(--t3)", flex: "0 0 auto" }}>
-                    {r.total_posts ? `${r.total_posts.toLocaleString("es-CO")} artículos` : r.resolved_origin}
-                  </span>
-                </button>
-                {/* Borrar arrastra el censo, los lotes y las correcciones de ese
-                    sitio: son horas de trabajo y la base las borra en cascada.
-                    Por eso se pide confirmar diciendo qué se va, en vez de un
-                    «¿seguro?» que no informa de nada. */}
-                <button
-                  onClick={() => setPorBorrar(porBorrar === r.id ? null : r.id)}
-                  title="Olvidar este sitio"
-                  style={{ appearance: "none", background: "transparent", border: 0, color: porBorrar === r.id ? "var(--error)" : "var(--t3)", cursor: "pointer", fontSize: 13, padding: "0 4px", lineHeight: 1 }}
-                >×</button>
-              </div>
-            ))}
-            {porBorrar != null && (() => {
-              const r = recientes.find((x) => x.id === porBorrar);
-              if (!r) return null;
-              return (
-                <div style={{ margin: "6px 0 0", padding: "11px 12px", borderRadius: 8, background: "var(--error-fondo)" }}>
-                  <p style={{ margin: "0 0 10px", fontSize: 12.5, lineHeight: 1.6, color: "var(--t1)", maxWidth: "44ch" }}>
-                    Olvidar <strong style={{ fontWeight: 500 }}>{r.label}</strong> borra también
-                    su censo{r.total_posts ? ` de ${r.total_posts.toLocaleString("es-CO")} artículos` : ""},
-                    sus lotes y las correcciones que hayas hecho sobre ellos. No se puede deshacer.
-                  </p>
-                  <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                    <Boton variante="secundario" onClick={async () => {
-                      await deleteConnection(r.id).catch(() => {});
-                      setPorBorrar(null);
-                      cargarRecientes();
-                    }}>Olvidar el sitio</Boton>
-                    <Boton variante="enlace" onClick={() => setPorBorrar(null)}>cancelar</Boton>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -537,14 +583,5 @@ function Dato({ k, children }: { k: string; children: React.ReactNode }) {
   );
 }
 
-const NOMBRES: Record<string, string> = {
-  perfil: "el perfil del archivo",
-  sanidad: "la sanidad del archivo",
-  muestreo: "el diseño de la muestra",
-  anotacion: "la anotación",
-  extraccion: "la extracción",
-  resolucion: "la resolución de entidades",
-  reporte: "el reporte",
-};
 
 const anio = (d: string | null) => (d && /^\d{4}/.test(d) ? d.slice(0, 4) : "?");
