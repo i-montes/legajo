@@ -3,6 +3,12 @@
 .env.*
 !.env.example
 
+# La clave con la que se firman las actualizaciones. Vive en ~/.tauri y en los
+# secretos del repositorio en GitHub, nunca aqui: quien la tenga puede publicar
+# una actualizacion que todas las instalaciones aceptaran como legitima.
+*.key
+!*.key.pub
+
 # Rust / Tauri
 # target/ está en la raíz porque el proyecto es un workspace de Cargo.
 target/

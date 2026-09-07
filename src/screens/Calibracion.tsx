@@ -3,15 +3,33 @@ import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon
 import { TIPOS, colorTipo } from "../contenido/tipos";
 import {
   alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceAnotacion, avanceExtraccion,
-  alProgresoModelo, calibracionGuardada, calibrar, cancelarExtraccion, catalogoModelos,
-  iniciarExtraccion, modelosPendientes, prepararModelos,
+  alProgresoEntorno, alProgresoModelo, calibracionGuardada, calibrar, cancelarExtraccion,
+  catalogoModelos, entornoEstado, instalarEntorno, iniciarExtraccion, modelosPendientes,
+  prepararModelos,
 } from "../lib/ipc";
-import type { CatalogoModelos, Modelos, OpcionModelo, ProgresoExtraccion, ProgresoModelo, ResultadoCalibracion } from "../types";
+import type {
+  CatalogoModelos, EstadoEntorno, Modelos, OpcionModelo, ProgresoEntorno, ProgresoExtraccion,
+  ProgresoModelo, ResultadoCalibracion,
+} from "../types";
 import type { EstadoApp } from "../App";
 
 /** Los gigas se leen; los cuatro dígitos de megas, no. */
 const peso = (mb?: number) =>
   mb == null ? "descargar" : mb >= 1000 ? `${(mb / 1000).toFixed(1).replace(".", ",")} GB` : `${mb} MB`;
+
+/* Cada fase de la instalación, dicha en castellano. Son veinte minutos: una
+   sola línea que no cambie nunca se lee como app colgada. */
+const rotuloFase = (p: ProgresoEntorno | null) => {
+  if (!p) return "Empezando";
+  switch (p.fase) {
+    case "bajando": return `Bajando ${p.detalle}`;
+    case "verificando": return "Comprobando la huella del paquete";
+    case "extrayendo": return "Desempaquetando el intérprete";
+    case "creando": return "Creando el entorno";
+    case "instalando": return `Instalando ${p.detalle}`;
+    default: return "Terminando";
+  }
+};
 
 const num = (n: number) => n.toLocaleString("es-CO");
 const dec = (n: number, d = 2) => n.toFixed(d).replace(".", ",");
@@ -33,7 +51,15 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
   const [fase, setFase] = useState<Fase>("elegir");
   const [catalogo, setCatalogo] = useState<CatalogoModelos | null>(null);
-
+  /* Si el extractor está instalado en esta máquina. El instalador de Legajo no
+     lo trae dentro —son 1,4 GB y encarecerían cada actualización— así que la
+     primera vez hay que traerlo. Se pregunta aquí, que es el primer paso que lo
+     necesita, y antes de dejar elegir modelos: sin intérprete no se puede ni
+     saber qué modelos hay, y ese fallo llegaba como un «no encuentro el
+     extractor» en medio de la pantalla de elección. */
+  const [entorno, setEntorno] = useState<EstadoEntorno | null>(null);
+  const [progEntorno, setProgEntorno] = useState<ProgresoEntorno | null>(null);
+  const [instalando, setInstalando] = useState(false);
   /* Lo que le falta a la combinación elegida. Se consulta antes de dejar
      extraer: descubrirlo a mitad de la corrida, después de esperar la carga,
      es lo que le pasó a alguien de verdad y lo que esto existe para evitar. */
@@ -68,6 +94,34 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
     const off = alProgresoModelo(setBajando);
     return () => { void off.then((f) => f()); };
   }, []);
+
+  const mirarEntorno = useCallback(() => {
+    entornoEstado().then(setEntorno).catch(() => setEntorno(null));
+  }, []);
+  useEffect(mirarEntorno, [mirarEntorno]);
+
+  useEffect(() => {
+    const off = alProgresoEntorno(setProgEntorno);
+    return () => { void off.then((f) => f()); };
+  }, []);
+
+  /* Al terminar de instalar se vuelve a preguntar por los modelos. Antes no se
+     podía: consultarlos necesita el intérprete que acaba de aparecer. */
+  const instalarExtractor = useCallback(async () => {
+    setError(null);
+    setInstalando(true);
+    try {
+      await instalarEntorno();
+      mirarEntorno();
+      catalogoModelos().then(setCatalogo).catch(() => {});
+      setFaltan(await modelosPendientes(modelos).catch(() => []));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setInstalando(false);
+      setProgEntorno(null);
+    }
+  }, [mirarEntorno, modelos]);
 
   /* `faltan` llega como «spacy:es_core_news_lg»; el tamaño está en el catálogo,
      que es donde vive el dato. */
@@ -239,7 +293,51 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
               </p>
             </div>
           </div>
-          {faltan.length > 0 ? (
+          {entorno && !entorno.listo ? (
+            <div style={{ padding: "14px 16px", background: "var(--hundida)", borderRadius: 10 }}>
+              <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>
+                <Glifo estado="advertencia" size={11} />
+                <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "60ch" }}>
+                  {entorno.instalado && entorno.instalado !== entorno.sello
+                    ? "El extractor cambió de dependencias en esta versión y hay que rehacerlo"
+                    : "El extractor todavía no está en este computador"}
+                  {entorno.mb > 0 ? `: ${peso(entorno.mb)} de descarga` : ""}. Se instala una vez
+                  y se queda: las actualizaciones de Legajo son unos pocos megas y no vuelven
+                  a traerlo. Por eso no viene dentro del instalador.
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 22, marginBottom: 13 }}>
+                <span className="t-mono" style={{ fontSize: 11.5, color: "var(--t2)" }}>
+                  python · {entorno.python}  {peso(32)}
+                </span>
+                <span className="t-mono" style={{ fontSize: 11.5, color: "var(--t2)" }}>
+                  torch · spacy · gliner · glirel  {peso(1400)}
+                </span>
+              </div>
+              {instalando ? (
+                <div style={{ paddingLeft: 22 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+                    <Latido />
+                    <span className="t-menor" style={{ color: "var(--t2)" }}>
+                      {rotuloFase(progEntorno)}
+                    </span>
+                  </div>
+                  {/* Solo la descarga del intérprete sabe su tamaño. pip no lo
+                      dice, así que ahí se muestra qué está trayendo y no una
+                      barra inventada. */}
+                  {progEntorno?.total ? (
+                    <div style={{ marginTop: 9, maxWidth: 320 }}>
+                      <Barra pct={(progEntorno.bytes / progEntorno.total) * 100} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div style={{ paddingLeft: 22 }}>
+                  <Boton onClick={instalarExtractor}>Instalar el extractor</Boton>
+                </div>
+              )}
+            </div>
+          ) : faltan.length > 0 ? (
 
             <div style={{ padding: "14px 16px", background: "var(--hundida)", borderRadius: 10 }}>
               <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>

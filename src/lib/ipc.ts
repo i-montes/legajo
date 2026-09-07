@@ -3,9 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
   ColaCategorias, ConexionGuardada,
-  Discovery, EntradaLexico, Estimacion, FilaAnotable, FinCenso,
+  Discovery, EntradaLexico, EstadoEntorno, Estimacion, FilaAnotable, FinCenso,
   Hallazgo, Identidad, LoteRow, Mencion, Modelos, NodoGrafo, PasoAutorizacion,
-  PerfilArchivo, ProgresoCenso,
+  PerfilArchivo, ProgresoCenso, ProgresoEntorno,
   ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
   SesionRecuperada, SinNombrar,
 } from "../types";
@@ -166,6 +166,17 @@ export const prepararModelos = (modelos: Modelos) =>
 
 export const alProgresoModelo = (cb: (p: ProgresoModelo) => void): Promise<UnlistenFn> =>
   listen<ProgresoModelo>("modelos:progreso", (e) => cb(e.payload));
+
+// ── La capa de ejecución del extractor ───────────────────────────────────
+
+/** Si el extractor está instalado en esta máquina, y cuánto costaría si no. */
+export const entornoEstado = () => invoke<EstadoEntorno>("entorno_estado");
+
+/** Instala intérprete y librerías. Idempotente: si ya está, vuelve enseguida. */
+export const instalarEntorno = () => invoke<string>("instalar_entorno");
+
+export const alProgresoEntorno = (cb: (p: ProgresoEntorno) => void): Promise<UnlistenFn> =>
+  listen<ProgresoEntorno>("entorno:progreso", (e) => cb(e.payload));
 
 // ── Calibración ──────────────────────────────────────────────────────────
 

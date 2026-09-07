@@ -64,8 +64,18 @@ fn colocar_ventana(app: &tauri::App) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut b = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    // La capa de actualizacion. Va aparte y con cfg porque en movil no existe,
+    // y porque asi el resto del arranque no depende de que este.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        b = b
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    b
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             app.manage(AppState {
@@ -116,6 +126,8 @@ pub fn run() {
             commands::catalogo_modelos,
             commands::preparar_modelos,
             commands::modelos_pendientes,
+            commands::entorno_estado,
+            commands::instalar_entorno,
             commands::grafo_resumen,
             commands::grafo_entidades,
             commands::grafo_relaciones,

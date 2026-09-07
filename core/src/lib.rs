@@ -11,6 +11,7 @@ pub mod census;
 pub mod contenido;
 pub mod db;
 pub mod discovery;
+pub mod entorno;
 pub mod error;
 pub mod extraccion;
 pub mod http;

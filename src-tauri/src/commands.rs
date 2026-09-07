@@ -24,6 +24,19 @@ pub struct AppState {
     pub extraccion_cancelar: Arc<AtomicBool>,
 }
 
+/// Los dos sitios donde puede vivir el extractor en esta instalación.
+///
+/// Los guiones viajan con la app y se renuevan al actualizar; el intérprete y
+/// las librerías viven en el directorio de datos y no se tocan. Se arma aquí,
+/// una vez, porque lo necesitan cinco comandos y olvidarse del segundo camino
+/// en uno de ellos daría un «no encuentro el extractor» solo en ese comando.
+fn rutas(app: &AppHandle) -> extraccion::Rutas {
+    extraccion::Rutas {
+        recursos: app.path().resource_dir().ok(),
+        datos: app.path().app_data_dir().ok(),
+    }
+}
+
 /// Suelta una bandera de «hay algo corriendo» pase lo que pase.
 ///
 /// El `store(false)` iba detrás del `await`, así que solo se ejecutaba si la
@@ -776,8 +789,7 @@ pub async fn lotes(state: State<'_, AppState>, connection_id: i64) -> Result<Vec
 /// extracción. Eso le pasó a alguien de verdad.
 #[tauri::command]
 pub async fn catalogo_modelos(app: AppHandle) -> Result<serde_json::Value> {
-    let recursos = app.path().resource_dir().ok();
-    let est = extraccion::estado_modelos(recursos.as_deref())
+    let est = extraccion::estado_modelos(&rutas(&app))
         .await
         .unwrap_or_default();
     Ok(extraccion::catalogo_con_estado(&est))
@@ -800,13 +812,13 @@ pub async fn preparar_modelos(
     app: AppHandle,
     modelos: extraccion::Modelos,
 ) -> Result<usize> {
-    let recursos = app.path().resource_dir().ok();
-    let est = extraccion::estado_modelos(recursos.as_deref()).await?;
+    let r = rutas(&app);
+    let est = extraccion::estado_modelos(&r).await?;
     let pendientes = extraccion::faltan(&est, &modelos);
     let n = pendientes.len();
 
     let app2 = app.clone();
-    extraccion::preparar(recursos.as_deref(), &pendientes, move |evento, modelo, tamano| {
+    extraccion::preparar(&r, &pendientes, move |evento, modelo, tamano| {
         let _ = app2.emit("modelos:progreso", ProgresoModelo {
             evento: evento.into(), modelo: modelo.into(), tamano: tamano.into(),
         });
@@ -821,9 +833,56 @@ pub async fn modelos_pendientes(
     app: AppHandle,
     modelos: extraccion::Modelos,
 ) -> Result<Vec<String>> {
-    let recursos = app.path().resource_dir().ok();
-    let est = extraccion::estado_modelos(recursos.as_deref()).await?;
+    let est = extraccion::estado_modelos(&rutas(&app)).await?;
     Ok(extraccion::faltan(&est, &modelos))
+}
+
+// ── La capa de ejecución del extractor ───────────────────────────────────
+
+/// Si el extractor está instalado en esta máquina, y cuánto costaría si no.
+///
+/// El instalador de Legajo no lo trae dentro: son 1,4 GB de torch, spaCy y
+/// GLiNER, y meterlos en el paquete haría que cada actualización de la app
+/// costase giga y medio. La razón larga está en `core/src/entorno.rs`.
+#[tauri::command]
+pub async fn entorno_estado(app: AppHandle) -> Result<legajo_core::entorno::Estado> {
+    let r = rutas(&app);
+    let datos = r.datos.clone().ok_or_else(|| {
+        Error::Other("no se pudo encontrar el directorio de datos de la app".into())
+    })?;
+    let req = extraccion::requisitos(&r).ok_or_else(|| {
+        Error::Other(
+            "falta la lista de dependencias del extractor (sidecar/requirements.txt). \
+             La instalación de Legajo está incompleta."
+                .into(),
+        )
+    })?;
+    legajo_core::entorno::estado(&datos, &req)
+}
+
+/// Instala el intérprete de Python y las librerías del extractor.
+///
+/// Es idempotente: si ya está, vuelve enseguida sin bajar nada.
+#[tauri::command]
+pub async fn instalar_entorno(app: AppHandle) -> Result<String> {
+    let r = rutas(&app);
+    let datos = r.datos.clone().ok_or_else(|| {
+        Error::Other("no se pudo encontrar el directorio de datos de la app".into())
+    })?;
+    let req = extraccion::requisitos(&r).ok_or_else(|| {
+        Error::Other(
+            "falta la lista de dependencias del extractor (sidecar/requirements.txt). \
+             La instalación de Legajo está incompleta."
+                .into(),
+        )
+    })?;
+
+    let app2 = app.clone();
+    let py = legajo_core::entorno::instalar(&datos, &req, move |p| {
+        let _ = app2.emit("entorno:progreso", p);
+    })
+    .await?;
+    Ok(py.display().to_string())
 }
 
 // ── Extracción ───────────────────────────────────────────────────────────
@@ -884,7 +943,7 @@ pub fn iniciar_extraccion(
     let corriendo = state.extrayendo.clone();
     let cancelar = state.extraccion_cancelar.clone();
     let modelos = modelos.unwrap_or_default();
-    let recursos = app.path().resource_dir().ok();
+    let rutas = rutas(&app);
 
     tauri::async_runtime::spawn(async move {
         let _suelta = Suelta(corriendo);
@@ -899,7 +958,7 @@ pub fn iniciar_extraccion(
         let r = match r {
             Ok(terminos) => {
                 extraer(&app, &http, &db, lote_id, &modelos, solo_calibracion,
-                        &terminos, recursos.as_deref(), &cancelar).await
+                        &terminos, &rutas, &cancelar).await
             }
             Err(e) => Err(e),
         };
@@ -967,7 +1026,7 @@ async fn extraer(
     // usa la calibración: sus doce artículos están repartidos entre secciones a
     // propósito y recortarlos por categoría los dejaría sin representar.
     terminos: &[i64],
-    recursos: Option<&std::path::Path>,
+    rutas: &extraccion::Rutas,
     cancelar: &AtomicBool,
 ) -> Result<i64> {
     let avisar = |fase: &str, hechos: u64, total: u64, wp: i64, ents: i64, rels: i64, ms: u64, detalle: &str| {
@@ -993,7 +1052,7 @@ async fn extraer(
     // 2 · El extractor, antes de bajar nada. Cargar los modelos tarda unos
     //     segundos y puede fallar; descubrirlo después de haber descargado
     //     cuarenta cuerpos sería trabajo tirado y una espera sin explicación.
-    let (python, guion) = extraccion::localizar(recursos)?;
+    let (python, guion) = extraccion::localizar(rutas)?;
     avisar("arrancando", 0, total, 0, 0, 0, 0, &python.display().to_string());
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
 

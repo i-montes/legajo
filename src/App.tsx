@@ -5,6 +5,7 @@ import {
   type Paso, type PasoNav,
 } from "./contenido/pasos";
 import Splash from "./ui/Splash";
+import Actualizacion from "./ui/Actualizacion";
 import Conexion from "./screens/Conexion";
 import Perfil from "./screens/Perfil";
 import Sanidad from "./screens/Sanidad";
@@ -151,6 +152,9 @@ export default function App() {
   return (
     <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)", overflow: "hidden" }}>
       {splash && <Splash onFin={() => setSplash(false)} />}
+      {/* Fuera de la cabecera y de las pantallas: la cabecera no existe en los
+          tres primeros pasos y el aviso tiene que poder verse en los ocho. */}
+      {!splash && <Actualizacion />}
       {conCromo && (
         <header style={{ flex: "0 0 auto", height: 38, display: "flex", alignItems: "center", gap: 16, padding: "0 14px", background: "var(--superficie)", borderBottom: "1px solid var(--borde)", userSelect: "none" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

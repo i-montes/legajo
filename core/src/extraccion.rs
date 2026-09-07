@@ -98,8 +98,8 @@ pub struct EstadoModelos {
     pub hf: Vec<String>,
 }
 
-pub async fn estado_modelos(raiz_recursos: Option<&Path>) -> Result<EstadoModelos> {
-    let (python, guion) = localizar(raiz_recursos)?;
+pub async fn estado_modelos(r: &Rutas) -> Result<EstadoModelos> {
+    let (python, guion) = localizar(r)?;
     let preparador = guion.with_file_name("preparar.py");
     let salida = Command::new(&python)
         .arg("-u")
@@ -167,7 +167,7 @@ pub fn faltan(est: &EstadoModelos, m: &Modelos) -> Vec<String> {
 /// pesos de modelos de repositorios públicos. Ningún texto del archivo se envía
 /// a ninguna parte.
 pub async fn preparar<F>(
-    raiz_recursos: Option<&Path>,
+    r: &Rutas,
     pendientes: &[String],
     mut avisar: F,
 ) -> Result<()>
@@ -177,7 +177,7 @@ where
     if pendientes.is_empty() {
         return Ok(());
     }
-    let (python, guion) = localizar(raiz_recursos)?;
+    let (python, guion) = localizar(r)?;
     let preparador = guion.with_file_name("preparar.py");
 
     let mut hijo = Command::new(&python)
@@ -332,32 +332,102 @@ pub fn clave_de(etiqueta: &str) -> String {
         .unwrap_or(e)
 }
 
-/// Dónde están el intérprete y el guion.
+/// Dónde buscar el extractor en esta instalación.
 ///
-/// En desarrollo salen del propio repositorio; empaquetada, del directorio de
-/// recursos que Tauri deja junto al binario. Las variables de entorno mandan
-/// sobre todo, para poder apuntar a otro entorno sin recompilar.
-pub fn localizar(raiz_recursos: Option<&Path>) -> Result<(PathBuf, PathBuf)> {
-    if let (Ok(py), Ok(sc)) = (std::env::var("LEGAJO_PYTHON"), std::env::var("LEGAJO_SIDECAR")) {
-        return Ok((PathBuf::from(py), PathBuf::from(sc)));
-    }
+/// Son dos sitios distintos porque son dos capas con vidas distintas: los
+/// guiones de Python viajan dentro de la app y se renuevan con cada
+/// actualización; el intérprete y las librerías viven en el directorio de datos
+/// y sobreviven a todas. Ver `entorno.rs` para por qué.
+#[derive(Debug, Clone, Default)]
+pub struct Rutas {
+    /// Lo que Tauri deja junto al binario: los `.py` y el `requirements.txt`.
+    pub recursos: Option<PathBuf>,
+    /// El directorio de datos de la app, donde se instala la capa de ejecución.
+    pub datos: Option<PathBuf>,
+}
 
-    let mut candidatos: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if let Some(r) = raiz_recursos {
-        candidatos.push((r.join("sidecar/.venv/bin/python"), r.join("sidecar/legajo_ner.py")));
-        candidatos.push((r.join("sidecar/legajo_ner"), r.join("sidecar/legajo_ner.py")));
+impl Rutas {
+    /// En desarrollo y por línea de comandos no hay ni una ni otra: el
+    /// repositorio hace de las dos.
+    pub fn del_repo() -> Self {
+        Self::default()
+    }
+}
+
+/// Los directorios que podrían tener los guiones del extractor, en orden.
+fn dirs_sidecar(r: &Rutas) -> Vec<PathBuf> {
+    let mut ds = Vec::new();
+    if let Some(x) = &r.recursos {
+        ds.push(x.join("sidecar"));
     }
     // Desarrollo: se sube desde el ejecutable hasta encontrar el repositorio.
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().map(Path::to_path_buf);
         for _ in 0..5 {
             let Some(d) = dir.clone() else { break };
-            candidatos.push((d.join(".venv/bin/python"), d.join("sidecar/legajo_ner.py")));
+            ds.push(d.join("sidecar"));
             dir = d.parent().map(Path::to_path_buf);
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidatos.push((cwd.join(".venv/bin/python"), cwd.join("sidecar/legajo_ner.py")));
+        ds.push(cwd.join("sidecar"));
+    }
+    ds
+}
+
+/// El guion del extractor. `preparar.py` se busca a su lado.
+fn guion(r: &Rutas) -> Option<PathBuf> {
+    dirs_sidecar(r)
+        .into_iter()
+        .map(|d| d.join("legajo_ner.py"))
+        .find(|p| p.exists())
+}
+
+/// El `requirements.txt` que describe la capa de ejecución.
+///
+/// Es el mismo archivo en desarrollo y empaquetado, y de su contenido sale el
+/// sello de la capa: si cambia, la capa se rehace.
+pub fn requisitos(r: &Rutas) -> Option<PathBuf> {
+    dirs_sidecar(r)
+        .into_iter()
+        .map(|d| d.join("requirements.txt"))
+        .find(|p| p.exists())
+}
+
+/// Dónde están el intérprete y el guion.
+///
+/// El orden es deliberado. Las variables de entorno mandan sobre todo, para
+/// poder apuntar a otro entorno sin recompilar. Después va la capa instalada en
+/// el directorio de datos, que es lo que tiene una app empaquetada. Después el
+/// entorno que viniera dentro de los recursos, para un paquete que se haya
+/// armado con todo dentro. Y al final el repositorio, que es lo que hay en
+/// desarrollo.
+pub fn localizar(r: &Rutas) -> Result<(PathBuf, PathBuf)> {
+    if let (Ok(py), Ok(sc)) = (std::env::var("LEGAJO_PYTHON"), std::env::var("LEGAJO_SIDECAR")) {
+        return Ok((PathBuf::from(py), PathBuf::from(sc)));
+    }
+
+    let g = guion(r);
+
+    // La capa instalada aparte. El intérprete sale del directorio de datos y el
+    // guion de los recursos: cada uno de su capa, que es todo el punto.
+    if let (Some(datos), Some(req), Some(g)) = (&r.datos, requisitos(r), g.clone()) {
+        if let Some(py) = crate::entorno::instalado(datos, &req) {
+            return Ok((py, g));
+        }
+    }
+
+    let mut candidatos: Vec<(PathBuf, PathBuf)> = Vec::new();
+    if let Some(x) = &r.recursos {
+        candidatos.push((x.join("sidecar/.venv/bin/python"), x.join("sidecar/legajo_ner.py")));
+        candidatos.push((x.join("sidecar/legajo_ner"), x.join("sidecar/legajo_ner.py")));
+    }
+    for d in dirs_sidecar(r) {
+        // `d` es el directorio `sidecar`; el entorno de desarrollo está a su
+        // lado, en la raíz del repositorio.
+        if let Some(raiz) = d.parent() {
+            candidatos.push((raiz.join(".venv/bin/python"), d.join("legajo_ner.py")));
+        }
     }
 
     for (py, sc) in candidatos {
@@ -366,8 +436,9 @@ pub fn localizar(raiz_recursos: Option<&Path>) -> Result<(PathBuf, PathBuf)> {
         }
     }
     Err(Error::Other(
-        "No encuentro el entorno de Python del extractor. Créalo con \
-         `python3 -m venv .venv && .venv/bin/pip install -r sidecar/requirements.txt`."
+        "El extractor no está instalado en este computador. En la app se instala desde el \
+         paso «Calibración»; en desarrollo, con `python3 -m venv .venv && \
+         .venv/bin/pip install -r sidecar/requirements.txt`."
             .into(),
     ))
 }

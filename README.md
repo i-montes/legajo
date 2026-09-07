@@ -117,6 +117,112 @@ Copia `.env.example` y registra tu propia app **Native** en
 [developer.wordpress.org/apps](https://developer.wordpress.com/apps/) con las URLs
 de retorno `http://127.0.0.1:8765/callback` y `http://localhost:8765/callback`.
 
+## Instalador y actualizaciones
+
+Legajo se distribuye en **dos capas con vidas distintas**, y esa separación es la
+que hace que actualizar sea barato:
+
+| Capa | Qué lleva | Peso | Cómo llega | Se renueva |
+|---|---|---|---|---|
+| La app | Binario de Rust, la interfaz y los `.py` del extractor | 3,6 MB | Instalador (`.dmg`, `.msi`, `.AppImage`, `.deb`) | Sola, con el updater |
+| La ejecución | CPython portátil + torch, spaCy, GLiNER, GLiREL | ~1,4 GB | La instala la app en el paso 5, una vez | Solo si cambian las dependencias |
+| Los modelos | Pesos de GLiNER, GLiREL y spaCy | ~1,5 GB | Los baja el paso 5, una vez | Nunca |
+
+Las dos últimas viven en el directorio de datos de la app y **las
+actualizaciones no las tocan**. El `.dmg` de 0.1.0 mide 3,6 MB medidos. Si el
+extractor fuese dentro del paquete, cada corrección de un botón costaría giga y
+medio de descarga; a ese precio nadie
+actualiza y se queda con la versión del primer día, que es justo lo que la capa
+de actualización existe para evitar. El razonamiento completo y los hashes del
+intérprete están en [`core/src/entorno.rs`](core/src/entorno.rs).
+
+El sello de la capa de ejecución sale del contenido de
+`sidecar/requirements.txt`: si alguien sube la versión de torch, la capa se
+rehace sola en cada máquina y la anterior se borra. No hay que acordarse de
+avisarlo en ningún otro sitio.
+
+### Construir el instalador
+
+```bash
+# En local, para la máquina en la que estás.
+# El bundler quiere la clave, no su ruta: `TAURI_SIGNING_PRIVATE_KEY_PATH` lo
+# entiende el subcomando `signer` pero no el empaquetador, y sin la clave el
+# build llega hasta el final y falla al firmar.
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/legajo-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+pnpm tauri build --bundles app,dmg          # macOS
+pnpm tauri build --bundles nsis             # Windows
+pnpm tauri build --bundles appimage,deb     # Linux
+```
+
+Sale en `target/<objetivo>/release/bundle/`. Junto al instalador aparece el
+`.tar.gz`/`.zip` con su `.sig`: eso es lo que consume el updater, no el
+instalador.
+
+### Publicar una versión
+
+El release lo arma CI, no una máquina de nadie:
+
+```bash
+# La versión vive en tauri.conf.json y en los Cargo.toml
+git tag v0.1.1 && git push --tags
+```
+
+[`.github/workflows/publicar.yml`](.github/workflows/publicar.yml) construye las
+cuatro plataformas, firma los paquetes y deja en el release un `latest.json` que
+es lo que la app consulta. **El release se crea como borrador**: subir los
+instaladores y encender la actualización para todo el mundo son dos decisiones
+distintas, y la segunda se toma a mano publicando el release. Hasta entonces
+nadie recibe el aviso.
+
+En la app, el aviso aparece como una tarjeta discreta abajo a la derecha, nunca
+como un diálogo: la versión instalada sigue funcionando y no hay nada urgente
+que interrumpir. Antes de reiniciar se comprueba que no haya un censo ni una
+extracción en marcha —las dos corren en este proceso y ninguna sobrevive a que
+se cierre—, y si hay algo corriendo se dice qué es en vez de desactivar un botón
+sin explicación. Si no se puede consultar si hay versión nueva —sin red, el
+endpoint caído— no se dice nada: que Legajo no haya podido hablar con GitHub no
+es un problema de quien está catalogando un archivo.
+
+### Las claves de firma
+
+La app rechaza cualquier actualización que no venga firmada con la clave cuya
+pública está en `tauri.conf.json`. La privada **no está en el repositorio** y no
+debe estarlo: quien la tenga puede publicar una actualización que todas las
+instalaciones aceptarán como legítima.
+
+```bash
+# Generar el par (ya hecho una vez; regenerarlo invalida las instalaciones existentes)
+pnpm tauri signer generate -w ~/.tauri/legajo-updater.key
+```
+
+En GitHub hacen falta dos secretos del repositorio:
+
+| Secreto | Qué es |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | El contenido de `~/.tauri/legajo-updater.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Su contraseña; vacío si se generó sin ella |
+
+Guarda una copia de la privada fuera de la máquina. Perderla obliga a
+reinstalar a mano en cada computador que ya tenga Legajo, porque ninguna
+actualización firmada con una clave nueva será aceptada por las instalaciones
+viejas.
+
+### macOS: el paquete no está firmado con Apple
+
+No hay certificado de Apple Developer todavía, así que el `.dmg` no está firmado
+ni notarizado y Gatekeeper lo marca de procedencia desconocida: **el primer
+arranque exige clic derecho › Abrir**. Las actualizaciones posteriores no vuelven
+a pedirlo. Cuando haya certificado, se firma añadiendo al build:
+
+```bash
+export APPLE_SIGNING_IDENTITY="Developer ID Application: … (TEAMID)"
+export APPLE_ID="…" APPLE_PASSWORD="…" APPLE_TEAM_ID="…"   # notarización
+```
+
+y `bundle.macOS.signingIdentity` en `tauri.conf.json`. La firma del updater es
+otra cosa y es independiente: ya está.
+
 ## Pruebas
 
 Las pruebas que importan son las que corren contra sitios que no son el nuestro:

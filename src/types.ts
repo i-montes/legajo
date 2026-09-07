@@ -356,6 +356,40 @@ export interface OpcionModelo {
   mb?: number;
 }
 
+/** Si el extractor (Python, torch, spaCy, GLiNER) está instalado en esta máquina.
+ *
+ *  No viene dentro del instalador: son 1,4 GB, y meterlos en el paquete haría
+ *  que cada actualización de la app costase giga y medio. Ver `core/src/entorno.rs`.
+ */
+export interface EstadoEntorno {
+  /** Se puede extraer. */
+  listo: boolean;
+  /** La capa que pide esta versión de la app. */
+  sello: string;
+  /** La que hay en disco, si hay alguna. Distinta de `sello` significa que las
+   *  dependencias cambiaron y la capa hay que rehacerla. */
+  instalado: string | null;
+  /** Megas por bajar. Cero si ya está. */
+  mb: number;
+  python: string;
+}
+
+export interface ProgresoEntorno {
+  /** `bajando`, `verificando`, `extrayendo`, `creando`, `instalando`, `listo`. */
+  fase: string;
+  detalle: string;
+  bytes: number;
+  total: number;
+}
+
+/** Una versión nueva de la app, ya comprobada su firma. */
+export interface Actualizacion {
+  version: string;
+  /** Notas de la publicación, si el release las trae. */
+  notas: string | null;
+  fecha: string | null;
+}
+
 export interface ProgresoModelo {
   evento: string;
   modelo: string;

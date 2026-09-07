@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2 · El extractor: un solo proceso con los tres modelos. Se arranca antes
     //     de bajar nada, igual que en la app: si los modelos no cargan, no
     //     tiene sentido haber descargado cuerpos.
-    let (python, guion) = extraccion::localizar(None)?;
+    let (python, guion) = extraccion::localizar(&extraccion::Rutas::del_repo())?;
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
     let modelos = extraccion::Modelos::default();
     let ms = sc.cargar(&modelos).await?;
