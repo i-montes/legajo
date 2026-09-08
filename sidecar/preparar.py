@@ -67,24 +67,18 @@ def instalar_spacy(nombre):
     return 0
 
 
-def instalar_hf(nombre, clase):
+def instalar_hf(nombre):
     """Trae un modelo de Hugging Face al caché local.
 
-    GLiNER y GLiREL bajan sus pesos la primera vez que se usan. Que eso pase
-    durante la primera extracción hace que parezca colgada cuando en realidad
-    está bajando un giga.
+    GLiNER baja sus pesos la primera vez que se usa. Que eso pase durante la
+    primera extracción hace que parezca colgada cuando en realidad está bajando
+    un giga.
     """
-    decir(ok=True, evento="bajando", modelo=nombre, tamano="~1 GB")
+    decir(ok=True, evento="bajando", modelo=nombre, tamano="~1,3 GB")
     try:
-        if clase == "gliner":
-            from gliner import GLiNER
+        from gliner import GLiNER
 
-            GLiNER.from_pretrained(nombre)
-        else:
-            sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
-            from legajo_ner import cargar_glirel
-
-            cargar_glirel(nombre)
+        GLiNER.from_pretrained(nombre)
     except Exception as e:
         decir(ok=False, modelo=nombre, error=f"no se pudo bajar {nombre}: {e}")
         return 1
@@ -97,8 +91,7 @@ def instalar_hf(nombre, clase):
 # quieta. Tiene que coincidir con `Modelos::default()` en core/src/extraccion.rs.
 PREDETERMINADOS = [
     "spacy:es_core_news_sm",
-    "gliner:urchade/gliner_multi-v2.1",
-    "glirel:jackboyla/glirel-large-v0",
+    "gliner:knowledgator/gliner-relex-multi-v1.0",
 ]
 
 
@@ -116,8 +109,8 @@ def main():
         clase, _, nombre = arg.partition(":")
         if clase == "spacy":
             fallos += instalar_spacy(nombre)
-        elif clase in ("gliner", "glirel"):
-            fallos += instalar_hf(nombre, clase)
+        elif clase == "gliner":
+            fallos += instalar_hf(nombre)
         else:
             decir(ok=False, error=f"no sé qué es «{arg}»")
             fallos += 1

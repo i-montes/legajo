@@ -1,0 +1,424 @@
+{
+ "juez": "qwen3.8:27b-32k",
+ "umbral": 0.5,
+ "veredictos": {
+  "base-mps": {
+   "organizacion": {
+    "si": 4,
+    "no": 32,
+    "ejemplos_no": [
+     "Los cotudos",
+     "empresariado",
+     "Café Orgánico",
+     "Andoques",
+     "los indígenas",
+     "empresarios",
+     "lobistas",
+     "guardaparques",
+     "LSA",
+     "El café",
+     "los indígenas",
+     "Colombia",
+     "LSA",
+     "industrias más grandes",
+     "uribismo",
+     "Federación",
+     "LSA",
+     "bacrim",
+     "los Char",
+     "poder político",
+     "indígenas",
+     "diferentes actores políticos",
+     "Aquí",
+     "trabajadores",
+     "privados",
+     "resguardos",
+     "empresas",
+     "empresa",
+     "política",
+     "campesinos",
+     "disidencias",
+     "empleador"
+    ],
+    "ejemplos_si": [
+     "Federación de Cafeteros",
+     "Nespresso",
+     "FARC-EP",
+     "Rainforest Alliance"
+    ]
+   },
+   "lugar": {
+    "si": 30,
+    "no": 20,
+    "ejemplos_no": [
+     "territorio",
+     "LSA",
+     "La Silla Académica",
+     "norte",
+     "cine",
+     "Presidencia",
+     "La Silla Académica",
+     "regiones",
+     "bosque",
+     "bosque",
+     "La Silla Académica",
+     "mundo",
+     "La Silla Académica",
+     "campo",
+     "Gobernación",
+     "condominios",
+     "mercado",
+     "La Silla Académica",
+     "país",
+     "microcuencas"
+    ],
+    "ejemplos_si": [
+     "Centroamérica",
+     "Antioquia",
+     "Quindío",
+     "Colombia",
+     "Bogotá",
+     "Cundinamarca",
+     "Huila",
+     "Italia",
+     "Barranquilla",
+     "Honduras",
+     "América Latina",
+     "Tolima",
+     "Colombia",
+     "Barranquilla",
+     "Antioquia",
+     "Barranquilla",
+     "Eje Cafetero",
+     "Barranquilla",
+     "Chía",
+     "eje cafetero",
+     "Brasil",
+     "Chía",
+     "Asia",
+     "EE.UU.",
+     "Colombia",
+     "Brasil",
+     "Antioquia",
+     "Colombia",
+     "Bogotá",
+     "Etiopía"
+    ]
+   },
+   "persona": {
+    "si": 4,
+    "no": 33,
+    "ejemplos_no": [
+     "profesores",
+     "ingeniero",
+     "L.R.",
+     "L.R. y A.A.",
+     "usted",
+     "personas",
+     "uno",
+     "R.I.B.",
+     "L.R.",
+     "usted",
+     "…",
+     "mujeres",
+     "presidente santandereano",
+     "Los empresarios",
+     "santandereano",
+     "quienes",
+     "A.A.",
+     "presidente",
+     "Arango O",
+     "escritores",
+     "preceptores",
+     "Brundtland",
+     "periodista",
+     "escritor",
+     "Ministra de Cultura",
+     "empleados",
+     "Armando Puyana",
+     "mujeres",
+     "Serna y Barrera",
+     "Mónica",
+     "ustedes",
+     "maestros",
+     "usted"
+    ],
+    "ejemplos_si": [
+     "Castro E.",
+     "García Márquez",
+     "José Antonio Ocampo",
+     "Castro"
+    ]
+   },
+   "obra": {
+    "si": 0,
+    "no": 1,
+    "ejemplos_no": [
+     "Prospectiva laboral en la región del eje cafetero"
+    ],
+    "ejemplos_si": []
+   },
+   "evento": {
+    "si": 0,
+    "no": 13,
+    "ejemplos_no": [
+     "Acuerdo de Paz",
+     "Asamblea Constituyente",
+     "conflicto armado colombiano",
+     "huelga",
+     "Guerra de Los Mil Días",
+     "inundaciones",
+     "conflictos armados",
+     "huelga",
+     "transición",
+     "helada",
+     "huelga",
+     "2011",
+     "Acuerdo de Paz"
+    ],
+    "ejemplos_si": []
+   },
+   "monto": {
+    "si": 0,
+    "no": 2,
+    "ejemplos_no": [
+     "41 mil millones",
+     "2 millones de pesos"
+    ],
+    "ejemplos_si": []
+   },
+   "ley": {
+    "si": 0,
+    "no": 11,
+    "ejemplos_no": [
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA"
+    ],
+    "ejemplos_si": []
+   }
+  },
+  "relex": {
+   "lugar": {
+    "si": 1,
+    "no": 27,
+    "ejemplos_no": [
+     "región",
+     "territorio",
+     "pueblos",
+     "gran centro urbanoYency Contreras",
+     "movilidad",
+     "familias",
+     "regiones geográficas",
+     "zonas",
+     "horno",
+     "regiones",
+     "mundo",
+     "soportes urbanos",
+     "bosques",
+     "andenes",
+     "comunidades",
+     "mina de cal",
+     "otras partes del mundo",
+     "plaza",
+     "casa",
+     "géneros",
+     "especies",
+     "sector",
+     "grupos étnicos",
+     "resto del país",
+     "región",
+     "parque nacional de agua dulce",
+     "regiones"
+    ],
+    "ejemplos_si": [
+     "España"
+    ]
+   },
+   "evento": {
+    "si": 0,
+    "no": 22,
+    "ejemplos_no": [
+     "extorsión",
+     "futuro",
+     "corrupción",
+     "convenciones",
+     "seguridad democrática",
+     "crisis de liderazgo",
+     "reconocimientos",
+     "transformaciones sociales",
+     "reciclaje de la violencia",
+     "cultura",
+     "desempleo",
+     "procesos de paz",
+     "conflicto",
+     "adolescencia",
+     "falta de garantía",
+     "post-acuerdo",
+     "eventos sociales",
+     "infancia",
+     "confianza mutua",
+     "futuro",
+     "sicariato",
+     "grandes proyectos extractivos"
+    ],
+    "ejemplos_si": []
+   },
+   "organizacion": {
+    "si": 2,
+    "no": 26,
+    "ejemplos_no": [
+     "clase media",
+     "redes de cooperación",
+     "programas",
+     "universidades",
+     "servicios públicos esenciales",
+     "clase política",
+     "juntas directivas",
+     "C.A.M.O",
+     "L.S.A.",
+     "Gobierno",
+     "desarrollo inmobiliario",
+     "paquete de programas sociales",
+     "L.S.A.",
+     "servicios públicos esenciales",
+     "santandereanos",
+     "LSA",
+     "La Silla Académica",
+     "LSA",
+     "condominios",
+     "LSA",
+     "empresas",
+     "constituency",
+     "indígenas",
+     "dos instituciones",
+     "R.I.B.",
+     "fuerza de trabajo"
+    ],
+    "ejemplos_si": [
+     "La Silla Académica",
+     "Cric"
+    ]
+   },
+   "cargo": {
+    "si": 4,
+    "no": 23,
+    "ejemplos_no": [
+     "líder",
+     "intelectuales públicos",
+     "profesora",
+     "concejal",
+     "víctima",
+     "económico",
+     "empleador",
+     "corresponsabilidad",
+     "patronos",
+     "papel ecológico",
+     "líderes",
+     "Ministro de Defensa",
+     "poder político",
+     "tecnócratas en economía",
+     "historiadora",
+     "política",
+     "psicoanalistas",
+     "comerciantes",
+     "profesor",
+     "ingeniero",
+     "levantiscos",
+     "estudiosa",
+     "junta directiva"
+    ],
+    "ejemplos_si": [
+     "presidente",
+     "director",
+     "presidentes",
+     "guardaparques"
+    ]
+   },
+   "obra": {
+    "si": 2,
+    "no": 8,
+    "ejemplos_no": [
+     "libro",
+     "novelas",
+     "portada_revista",
+     "Libros de Mónica",
+     "novelas",
+     "Construyendo la historia del empresariado colombiano. Un análisis de “empresariado antioqueño y sociedad, 1940-2004. Influencia de las élites patronales de Antioquia en las políticas socioeconómicas colombianas",
+     "realismo mágico",
+     "literatura contemporánea"
+    ],
+    "ejemplos_si": [
+     "Estado de la vivienda y del espacio público en el municipio de Chía",
+     "Democracy against the grain: indigenous politics in twentieth century colombia, the case of southwestern andes"
+    ]
+   },
+   "persona": {
+    "si": 2,
+    "no": 20,
+    "ejemplos_no": [
+     "griegos",
+     "Acin",
+     "indígenas",
+     "rivales",
+     "entrevistadas",
+     "personas",
+     "jóvenes",
+     "trabajadores",
+     "menores de edad",
+     "niños desmovilizados",
+     "élites",
+     "campesina indígena",
+     "A.R.",
+     "individuos",
+     "usted",
+     "ciudadanos",
+     "esposas",
+     "otro",
+     "colombianos",
+     "actores políticos"
+    ],
+    "ejemplos_si": [
+     "Peñalosa",
+     "Marcela Becerra"
+    ]
+   },
+   "ley": {
+    "si": 1,
+    "no": 6,
+    "ejemplos_no": [
+     "Planes de Ordenamiento Territorial",
+     "ordenamiento territorial",
+     "política antidrogas",
+     "privatización de la religión",
+     "responsabilidad social",
+     "Acuerdo"
+    ],
+    "ejemplos_si": [
+     "Convención sobre los Derechos del Niño"
+    ]
+   },
+   "monto": {
+    "si": 0,
+    "no": 6,
+    "ejemplos_no": [
+     "sueldo",
+     "sueldo fijo",
+     "centavo",
+     "1143",
+     "salario",
+     "15 años"
+    ],
+    "ejemplos_si": []
+   }
+  }
+ }
+}

@@ -166,15 +166,14 @@ export const AYUDA: Record<PasoNav, Ayuda> = {
     que: "El extractor corre sobre un puñado de artículos, tú corriges, y con esas correcciones se recalcula cómo se usa: el corte de confianza de cada tipo y qué no debe proponer nunca.",
     meta: "No descubrir a las cinco horas de cómputo que el extractor estaba etiquetando mal media cosa.",
     como: [
-      "Elige los modelos. Con los que vienen por defecto se empieza bien.",
-      "Extrae sobre los artículos de calibración. La primera vez descarga los modelos y tarda.",
+      "Extrae sobre los artículos de calibración. La primera vez descarga el modelo y tarda; después arranca en segundos.",
       "Pasa a revisar y corrige. Al cerrar el último artículo vuelves aquí y la calibración se calcula sola.",
       "Mira el antes y el después por tipo, y aplícala al lote.",
     ],
     porque: [
       "Es aritmética sobre las puntuaciones ya guardadas: el efecto se ve al instante y sin volver a pasar el modelo.",
-      "Extraer relaciones casi cuadruplica el tiempo por artículo. Sin ellas tendrás un índice de nombres, no un grafo; se puede dejar para una segunda pasada.",
-      "Bajar los modelos es lo único de la app que sale a la red, y trae pesos públicos: ningún texto de tu archivo se envía a ninguna parte.",
+      "No hay modelo que elegir. Hubo un menú con cuatro y un interruptor de relaciones; se midió sobre artículos reales y quedó el que saca entidades y relaciones en una sola pasada, en el GPU de tu computador si lo tiene.",
+      "Bajar el modelo es lo único de la app que sale a la red, y trae pesos públicos: ningún texto de tu archivo se envía a ninguna parte.",
     ],
     despues: "La extracción sobre el resto del lote, con los cortes y el diccionario que salieron de tu revisión.",
   },

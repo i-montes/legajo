@@ -201,9 +201,14 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
   }, [corriendo]);
 
   /* Leer el archivo no es una decisión que valga la pena poner a votación: se
-     acaba de dar permiso para ello, y no hay nada que elegir. Arranca solo. */
+     acaba de dar permiso para ello, y no hay nada que elegir. Arranca solo.
+
+     «De vuelta» solo cuenta si hay algo a lo que volver. Tras «borrar y
+     conectar otro» la sesión conservaba el progreso del medio anterior, así
+     que la app se creía de vuelta en un archivo que ya no existía: no
+     arrancaba el censo y enseñaba «Empezando a leer» sin empezar nada. */
   useEffect(() => {
-    if (deVuelta.current || censoArrancado.current) return;
+    if ((deVuelta.current && censado > 0) || censoArrancado.current) return;
     if (sondeando || sinPermiso || corriendo) return;
     if (!perfil || totalRemoto == null) return;
     const listo = perfil.tramos_totales > 0 && perfil.tramos_hechos >= perfil.tramos_totales;
@@ -211,7 +216,7 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
     censoArrancado.current = true;
     void censar(perfil.censado === 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perfil, sondeando, sinPermiso, corriendo, totalRemoto]);
+  }, [perfil, sondeando, sinPermiso, corriendo, totalRemoto, censado]);
 
   /* Y cuando termina, lleva a los hallazgos sin pedir un clic más: es el
      siguiente paso y no hay otra cosa que hacer aquí. */
@@ -430,12 +435,20 @@ export default function Perfil({ estado }: { estado: EstadoApp }) {
               calculan sobre el censo terminado. Un botón apagado ocupa el sitio
               de una acción y no es ninguna —invita a pulsarlo y no explica por
               qué no responde—, así que no se enseña hasta que sirve. */}
+          {/* Un censo a medias —la app se cerró, se cortó la red— retoma por
+              tramo: `ventanas_hechas` sabe cuáles ya están. Pero aquí la única
+              acción de lectura que se ofrecía era «desde cero», así que quien
+              volvía tras un corte pulsaba lo único que había y tiraba lo
+              recorrido. Pasó de verdad: quince minutos de archivo, otra vez. */}
           {!corriendo && (
-            <Acciones>
-              <Boton onClick={() => estado.avanzar(2, "sanidad")}>
+            <Acciones nota={completo ? undefined : "Retoma por el tramo donde se quedó; no repite lo ya leído."}>
+              {!completo && <Boton onClick={() => censar(false)}>Seguir leyendo el archivo</Boton>}
+              <Boton variante={completo ? "primario" : "secundario"} onClick={() => estado.avanzar(2, "sanidad")}>
                 Ver los hallazgos
               </Boton>
-              <Boton variante="enlace" onClick={() => censar(true)}>volver a leer el archivo desde cero</Boton>
+              <Boton variante="enlace" onClick={() => censar(true)}>
+                {completo ? "volver a leer el archivo desde cero" : "descartar lo leído y empezar desde cero"}
+              </Boton>
             </Acciones>
           )}
         </>

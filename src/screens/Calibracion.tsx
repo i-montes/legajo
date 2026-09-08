@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon, Rotulo } from "../ui";
+import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon, Rehacer, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
 import {
   alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceAnotacion, avanceExtraccion,
   alProgresoEntorno, alProgresoModelo, calibracionGuardada, calibrar, cancelarExtraccion,
-  catalogoModelos, entornoEstado, instalarEntorno, iniciarExtraccion, modelosPendientes,
-  prepararModelos,
+  catalogoModelos, deshacerExtraccion, entornoEstado, instalarEntorno, iniciarExtraccion,
+  modelosPendientes, prepararModelos,
 } from "../lib/ipc";
 import type {
-  CatalogoModelos, EstadoEntorno, Modelos, OpcionModelo, ProgresoEntorno, ProgresoExtraccion,
-  ProgresoModelo, ResultadoCalibracion,
+  CatalogoModelos, EstadoEntorno, ProgresoEntorno, ProgresoExtraccion, ProgresoModelo,
+  ResultadoCalibracion,
 } from "../types";
 import type { EstadoApp } from "../App";
 
@@ -41,7 +41,7 @@ type Fase = "elegir" | "extrayendo" | "revisar" | "resultado";
    —se extrae aquí, se corrige en el paso 6, se vuelve aquí a calcular— y sin
    un mapa la gente no sabía si le faltaba algo o ya había terminado. */
 const ETAPAS: [Fase, string][] = [
-  ["elegir", "Modelos"],
+  ["elegir", "Preparar"],
   ["extrayendo", "Extraer"],
   ["revisar", "Revisar"],
   ["resultado", "Ajustar"],
@@ -60,17 +60,18 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const [entorno, setEntorno] = useState<EstadoEntorno | null>(null);
   const [progEntorno, setProgEntorno] = useState<ProgresoEntorno | null>(null);
   const [instalando, setInstalando] = useState(false);
-  /* Lo que le falta a la combinación elegida. Se consulta antes de dejar
-     extraer: descubrirlo a mitad de la corrida, después de esperar la carga,
-     es lo que le pasó a alguien de verdad y lo que esto existe para evitar. */
+  /* Lo que falta por bajar del modelo. Se consulta antes de dejar extraer:
+     descubrirlo a mitad de la corrida, después de esperar la carga, es lo que
+     le pasó a alguien de verdad y lo que esto existe para evitar.
+
+     El modelo es uno y no se elige. Hubo aquí un menú con cuatro variantes y un
+     interruptor de relaciones; se midió sobre artículos reales y se quedó el
+     que hace las dos cosas en una pasada (docs/pipeline.md). El menú dejaba
+     además corridas incomparables sin que nadie supiera con qué se hizo cada
+     una: el único artículo anotado a mano se anotó sobre propuestas de un
+     modelo que ya no está, y hubo que deducirlo. */
   const [faltan, setFaltan] = useState<string[]>([]);
   const [bajando, setBajando] = useState<ProgresoModelo | null>(null);
-  const [modelos, setModelos] = useState<Modelos>({
-    gliner: "urchade/gliner_multi-v2.1",
-    spacy: "es_core_news_sm",
-    glirel: "jackboyla/glirel-large-v0",
-    relaciones: true,
-  });
   const [prog, setProg] = useState<ProgresoExtraccion | null>(null);
   const [hechos, setHechos] = useState(0);
   const [res, setRes] = useState<ResultadoCalibracion | null>(null);
@@ -85,10 +86,10 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   }, []);
   useEffect(mirarCatalogo, [mirarCatalogo]);
 
-  // Al cambiar de modelo se vuelve a mirar qué falta, no al pulsar «extraer».
+  // Qué falta se mira al llegar, no al pulsar «extraer».
   useEffect(() => {
-    modelosPendientes(modelos).then(setFaltan).catch(() => setFaltan([]));
-  }, [modelos]);
+    modelosPendientes().then(setFaltan).catch(() => setFaltan([]));
+  }, []);
 
   useEffect(() => {
     const off = alProgresoModelo(setBajando);
@@ -114,20 +115,20 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
       await instalarEntorno();
       mirarEntorno();
       catalogoModelos().then(setCatalogo).catch(() => {});
-      setFaltan(await modelosPendientes(modelos).catch(() => []));
+      setFaltan(await modelosPendientes().catch(() => []));
     } catch (e) {
       setError(String(e));
     } finally {
       setInstalando(false);
       setProgEntorno(null);
     }
-  }, [mirarEntorno, modelos]);
+  }, [mirarEntorno]);
 
   /* `faltan` llega como «spacy:es_core_news_lg»; el tamaño está en el catálogo,
      que es donde vive el dato. */
   const megasDe = useCallback((clave: string) => {
     const id = clave.slice(clave.indexOf(":") + 1);
-    for (const familia of [catalogo?.gliner, catalogo?.spacy, catalogo?.glirel]) {
+    for (const familia of [catalogo?.gliner, catalogo?.spacy]) {
       const o = familia?.find((x) => x.id === id);
       if (o?.mb) return o.mb;
     }
@@ -139,15 +140,15 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
   const bajarModelos = useCallback(async () => {
     setError(null);
     try {
-      await prepararModelos(modelos);
-      setFaltan(await modelosPendientes(modelos));
+      await prepararModelos();
+      setFaltan(await modelosPendientes());
       mirarCatalogo();
     } catch (e) {
       setError(String(e));
     } finally {
       setBajando(null);
     }
-  }, [modelos, mirarCatalogo]);
+  }, [mirarCatalogo]);
 
   const calcular = useCallback(async (): Promise<ResultadoCalibracion | null> => {
     if (loteId == null) return null;
@@ -210,7 +211,7 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
     setError(null);
     setFase("extrayendo");
     try {
-      await iniciarExtraccion(loteId, modelos, true);
+      await iniciarExtraccion(loteId, true);
     } catch (e) {
       setError(String(e));
       setFase("elegir");
@@ -248,8 +249,8 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
           : undefined
         }
         frase={
-          fase === "elegir" ? "Elige los modelos y suelta el extractor sobre los artículos de calibración. Con los que vienen por defecto se empieza bien."
-          : fase === "extrayendo" ? "Son pocos artículos; lo que tarda es cargar los modelos la primera vez."
+          fase === "elegir" ? "Suelta el extractor sobre los artículos de calibración. La primera vez baja el modelo; después arranca en segundos."
+          : fase === "extrayendo" ? "Son pocos artículos; lo que tarda es cargar el modelo la primera vez."
           : fase === "revisar" ? "Corrige lo que propuso el extractor en el paso de revisión. Al cerrar el último artículo, vuelves aquí y la calibración se calcula sola."
           : "El corte de confianza de cada tipo y lo que dejará de proponer, calculados sobre tus correcciones."
         }
@@ -267,32 +268,6 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
 
       {fase === "elegir" && catalogo && (
         <>
-          <Rotulo style={{ marginBottom: 14 }}>Modelos</Rotulo>
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--esp-6)", marginBottom: "var(--esp-11)" }}>
-            <Familia titulo="Entidades · GLiNER" opciones={catalogo.gliner}
-              valor={modelos.gliner} onChange={(v) => setModelos({ ...modelos, gliner: v })} />
-            <Familia titulo="Segmentación · spaCy" opciones={catalogo.spacy}
-              valor={modelos.spacy} onChange={(v) => setModelos({ ...modelos, spacy: v })}
-              nota="Parte el texto en oraciones antes de pasárselo a GLiNER, y alinea las entidades a límites de token para que GLiREL pueda leerlas." />
-            <div>
-              <button
-                onClick={() => setModelos({ ...modelos, relaciones: !modelos.relaciones })}
-                style={{ display: "flex", alignItems: "center", gap: 10, appearance: "none", background: "transparent", border: 0, padding: 0, cursor: "pointer", textAlign: "left", color: "var(--t1)" }}
-              >
-                <span style={{ width: 15, height: 15, borderRadius: 4, display: "grid", placeItems: "center", background: modelos.relaciones ? "var(--acento)" : "transparent", border: `1px solid ${modelos.relaciones ? "var(--acento)" : "var(--borde-fuerte)"}`, color: "var(--bg)", fontSize: 10 }}>
-                  {modelos.relaciones ? "✓" : ""}
-                </span>
-                <span style={{ fontSize: 14, fontWeight: 500 }}>Extraer también relaciones · GLiREL</span>
-              </button>
-              <p className="t-menor" style={{ color: "var(--t3)", margin: "8px 0 0 25px", lineHeight: 1.65, maxWidth: "56ch" }}>
-                <strong style={{ fontWeight: 600 }}>Casi cuadruplica</strong> el tiempo por
-                artículo: medido sobre un perfil de 39 párrafos, 8 s sin relaciones y 32 s con
-                ellas. Es el 73 % del cómputo de toda la extracción. Sin esto tendrás entidades
-                pero no un grafo: solo un índice de nombres. Se puede dejar para una segunda
-                pasada, que retoma sin repetir lo hecho.
-              </p>
-            </div>
-          </div>
           {entorno && !entorno.listo ? (
             <div style={{ padding: "14px 16px", background: "var(--hundida)", borderRadius: 10 }}>
               <div style={{ display: "flex", gap: 11, alignItems: "baseline", marginBottom: 11 }}>
@@ -311,7 +286,7 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
                   python · {entorno.python}  {peso(32)}
                 </span>
                 <span className="t-mono" style={{ fontSize: 11.5, color: "var(--t2)" }}>
-                  torch · spacy · gliner · glirel  {peso(1400)}
+                  torch · spacy · gliner  {peso(1400)}
                 </span>
               </div>
               {instalando ? (
@@ -389,7 +364,7 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
                 {prog?.fase === "descargando" && "Descargando el cuerpo de los artículos"}
                 {prog?.fase === "arrancando" && "Arrancando el extractor"}
                 {prog?.fase === "cargando" && "Cargando los modelos"}
-                {prog?.fase === "cargado" && "Modelos listos"}
+                {prog?.fase === "cargado" && "Modelo listo"}
                 {prog?.fase === "extrayendo" && `Extrayendo · artículo #${prog.wp_id}`}
                 {!prog && "Preparando"}
               </div>
@@ -440,6 +415,22 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
             ) : (
               <Boton onClick={() => estado.avanzar(5, "revision")}>Ir a revisar</Boton>
             )}
+            {/* Volver a extraer es normal, no una anomalía: cambia el modelo,
+                cambian las reglas. Sin esto la única salida era otro lote. */}
+            <Rehacer
+              enlace="volver a extraer los de calibración"
+              accion="Borrar las propuestas y extraer otra vez"
+              costo={<>Borra lo que el modelo propuso sobre los {num(hechos)} artículos de calibración y los
+                extrae otra vez con el modelo y las reglas de ahora. Tus marcas y tus tiempos se quedan;
+                lo que ya revisaste habrá que confrontarlo con las propuestas nuevas.</>}
+              onConfirmar={async () => {
+                if (loteId == null) return;
+                try {
+                  await deshacerExtraccion(loteId, true);
+                  await extraer();
+                } catch (e) { setError(String(e)); }
+              }}
+            />
           </div>
         </div>
       )}
@@ -560,55 +551,3 @@ function Cifra({ v, pie, destacada }: { v: string; pie: string; destacada?: bool
   );
 }
 
-function Familia({ titulo, opciones, valor, onChange, nota }: {
-  titulo: string;
-  opciones: OpcionModelo[];
-  valor: string; onChange: (v: string) => void; nota?: string;
-}) {
-  return (
-    <div>
-      <Rotulo style={{ marginBottom: 8 }}>{titulo}</Rotulo>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {opciones.map((o) => (
-          <button
-            key={o.id}
-            onClick={() => onChange(o.id)}
-            style={{
-              display: "flex", gap: 10, alignItems: "baseline", appearance: "none",
-              background: valor === o.id ? "var(--acento-suave)" : "transparent",
-              border: `1px solid ${valor === o.id ? "var(--acento)" : "transparent"}`,
-              borderRadius: 8, padding: "9px 11px", cursor: "pointer", textAlign: "left",
-            }}
-          >
-            <span style={{ width: 12, height: 12, borderRadius: 999, border: `1px solid ${valor === o.id ? "var(--acento)" : "var(--borde-fuerte)"}`, background: valor === o.id ? "var(--acento)" : "transparent", flex: "0 0 auto", marginTop: 3 }} />
-            <span style={{ flex: 1 }}>
-              <span style={{ fontSize: 13.5, color: "var(--t1)", display: "flex", alignItems: "baseline", gap: 7 }}>
-                {o.nombre}
-                {/* Un modelo que no está en la máquina se puede elegir igual;
-                    lo que no se puede es empezar a extraer sin avisar. El
-                    tamaño va en la etiqueta porque es lo que decide: bajar 892
-                    MB y bajar 2,3 GB no son la misma respuesta. */}
-                {o.instalado === false && (
-                  <span
-                    className="t-mono"
-                    title="No está en este computador. Se baja una vez, desde el repositorio público del modelo, y queda guardado."
-                    style={{ fontSize: 10, color: "var(--t3)", border: "1px solid var(--borde)", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}
-                  >
-                    ↓ {peso(o.mb)}
-                  </span>
-                )}
-                {o.instalado === true && (
-                  <span title="Ya está en este computador" style={{ fontSize: 10, color: "var(--exito)" }}>✓</span>
-                )}
-              </span>
-              <span className="t-menor" style={{ color: "var(--t3)", lineHeight: 1.55 }}>{o.nota}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-      {nota && (
-        <p className="t-menor" style={{ color: "var(--t3)", margin: "8px 0 0 11px", lineHeight: 1.6, maxWidth: "56ch" }}>{nota}</p>
-      )}
-    </div>
-  );
-}

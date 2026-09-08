@@ -224,7 +224,7 @@ pub fn ventanas_mensuales(desde_anio: i32, hasta_anio: i32) -> Vec<Ventana> {
 
 fn parametros(v: &Ventana, campos: &str, page: u32) -> Vec<(&'static str, String)> {
     let mut q: Vec<(&'static str, String)> = vec![
-        ("per_page", POR_TANDA.to_string()),
+        ("per_page", POR_PAGINA.to_string()),
         ("page", page.to_string()),
         ("orderby", "date".into()),
         ("order", "asc".into()),
@@ -316,13 +316,13 @@ pub async fn censar_ventana(
             });
         }
 
-        if items.len() < POR_TANDA { break; }
+        if items.len() < POR_PAGINA { break; }
         page += 1;
         // Una ventana mensual con más de cinco mil piezas es un archivo anómalo
         // o un filtro que el sitio ignora. Cortar evita un bucle infinito. El
         // tope se expresa en piezas y no en páginas para que no se mueva solo
         // si cambia el tamaño de la tanda.
-        if page as usize * POR_TANDA > 5_000 { break; }
+        if page as usize * POR_PAGINA > 5_000 { break; }
     }
 
     Ok(lote)
@@ -388,6 +388,21 @@ pub async fn rango_real(http: &Http, t: &Transport, auth: &Auth) -> Result<(i32,
 /// tope de cien de WordPress, que con el cuerpo incluido es una respuesta
 /// pesada.
 pub const POR_TANDA: usize = 40;
+
+/// Cuántas piezas se piden por página al recorrer el archivo.
+///
+/// Es aparte de `POR_TANDA` porque son dos cosas: aquella es cuánto se procesa
+/// de una vez; esta, cuánto se le pide al sitio en cada petición. Y al sitio le
+/// conviene el máximo que WordPress admite, que es cien.
+///
+/// La razón es el limitador del servidor, no el ancho de banda. Medido contra
+/// el archivo real, alojado en Automattic (Batcache, `a8c-cdn`): con cuarenta
+/// por página el censo iba a 10–13 piezas por segundo —dos horas para 84.000—
+/// con los carriles frenados por 429 casi todo el tiempo. El limitador cuenta
+/// **peticiones**, no bytes: una página de cien con el cuerpo pesa 240 KB
+/// comprimidos y tarda 2,6 s, frente a 1,2 s la de cuarenta; por pieza es más
+/// barata y son dos veces y media menos peticiones que contar.
+pub const POR_PAGINA: usize = 100;
 
 pub async fn traer_contenido(
     http: &Http,
@@ -474,8 +489,9 @@ mod tests {
         // Y la página baja a la tanda: con el cuerpo dentro, cien piezas son
         // varios MB contra un tiempo de espera de 45 s.
         let por_pagina = q.iter().find(|(k, _)| *k == "per_page").unwrap().1.clone();
-        assert_eq!(por_pagina, POR_TANDA.to_string());
-        assert!(POR_TANDA >= 40, "la redacción pidió al menos cuarenta por petición");
+        assert_eq!(por_pagina, POR_PAGINA.to_string());
+        assert!(POR_PAGINA >= 40, "la redacción pidió al menos cuarenta por petición");
+        assert!(POR_PAGINA <= 100, "WordPress no admite más de cien por página");
     }
 
     #[test]

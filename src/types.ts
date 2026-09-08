@@ -339,13 +339,6 @@ export interface LoteRow {
   calibrado: boolean;
 }
 
-export interface Modelos {
-  gliner: string;
-  spacy: string;
-  glirel: string | null;
-  relaciones: boolean;
-}
-
 export interface OpcionModelo {
   id: string;
   nombre: string;
@@ -395,10 +388,10 @@ export interface ProgresoModelo {
   modelo: string;
   tamano: string;
 }
+/** Lo que hay que tener bajado para extraer, con su tamaño. Ya no es un menú. */
 export interface CatalogoModelos {
   gliner: OpcionModelo[];
   spacy: OpcionModelo[];
-  glirel: OpcionModelo[];
 }
 
 // ── Calibración (core/src/calibracion.rs) ────────────────────────────────

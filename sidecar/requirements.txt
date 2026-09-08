@@ -4,14 +4,12 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.0
 
-# spaCy segmenta oraciones y tokeniza. Es lo que le da a GLiNER trozos con
-# sentido gramatical en vez de ventanas de N palabras, y lo que permite alinear
-# las entidades a límites de token antes de pasárselas a GLiREL.
+# spaCy segmenta oraciones. Es lo que le da al modelo trozos con sentido
+# gramatical en vez de ventanas de N palabras: una entidad partida por la mitad
+# no da error, simplemente no aparece.
 spacy>=3.8
 es-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl
 
-# Entidades y relaciones, ambos de vocabulario abierto.
-gliner>=0.2.13
-glirel>=1.0.0
-# glirel 1.2.1 importa loguru sin declararlo entre sus dependencias.
-loguru
+# Entidades y relaciones en una sola pasada, de vocabulario abierto. La familia
+# relex —entidades y relaciones juntas— entró en gliner 0.2.28.
+gliner>=0.2.28

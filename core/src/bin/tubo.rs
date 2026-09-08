@@ -30,16 +30,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_, en_lote) = db.avance_extraccion(lote_id, false, &[])?;
     println!("2 · lote {lote_id}       {en_lote} artículos, {n_cal} para calibrar");
 
-    // 2 · El extractor: un solo proceso con los tres modelos. Se arranca antes
+    // 2 · El extractor: un solo proceso con el modelo. Se arranca antes
     //     de bajar nada, igual que en la app: si los modelos no cargan, no
     //     tiene sentido haber descargado cuerpos.
     let (python, guion) = extraccion::localizar(&extraccion::Rutas::del_repo())?;
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
     let modelos = extraccion::Modelos::default();
     let ms = sc.cargar(&modelos).await?;
-    println!("3 · modelos      {} · spaCy {} · GLiREL {} · {:.1}s",
+    println!("3 · modelo       {} · spaCy {} · relaciones {} · {:.1}s",
              modelos.gliner, modelos.spacy,
-             if sc.glirel_activo { "sí" } else { "NO" }, ms as f64 / 1000.0);
+             if sc.relaciones_activas { "sí" } else { "NO" }, ms as f64 / 1000.0);
 
     // 3 · Descarga y extracción en el mismo bucle, por tandas. Es lo que corre
     //     la app: una petición trae la tanda y el extractor la consume acto

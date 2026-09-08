@@ -346,6 +346,33 @@ export function Acciones({ children, nota, raya = true }: { children: ReactNode;
 /* ── Aviso en línea ────────────────────────────────────────────────────────
    Un fallo, una advertencia o una nota, con su glifo. Las pantallas lo
    escribían cada una a mano con los mismos doce estilos. */
+/** Un enlace que, antes de hacer algo que no se deshace, dice qué se va.
+ *
+ *  No es un «¿seguro?»: eso no informa de nada. Es la acción nombrada por lo
+ *  que cuesta, y el botón de confirmar repite la acción, no dice «sí». Es el
+ *  mismo patrón que «borrar y conectar otro» en el paso 1. */
+export function Rehacer({ enlace, costo, accion, onConfirmar }: {
+  enlace: string; costo: ReactNode; accion: string; onConfirmar: () => void | Promise<void>;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [haciendo, setHaciendo] = useState(false);
+  if (!abierto) {
+    return <Boton variante="enlace" onClick={() => setAbierto(true)}>{enlace}</Boton>;
+  }
+  return (
+    <div style={{ padding: "12px 14px", borderRadius: 8, background: "var(--advertencia-fondo)", maxWidth: "52ch" }}>
+      <p style={{ margin: "0 0 12px", fontSize: 12.5, lineHeight: 1.65, color: "var(--t1)" }}>{costo}</p>
+      <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+        <Boton variante="secundario" disabled={haciendo} onClick={async () => {
+          setHaciendo(true);
+          try { await onConfirmar(); } finally { setHaciendo(false); setAbierto(false); }
+        }}>{accion}</Boton>
+        <Boton variante="enlace" onClick={() => setAbierto(false)}>cancelar</Boton>
+      </div>
+    </div>
+  );
+}
+
 export function Aviso({ estado, children }: { estado: Estado; children: ReactNode }) {
   const fondo: Record<Estado, string> = {
     exito: "var(--exito-fondo)", advertencia: "var(--advertencia-fondo)",

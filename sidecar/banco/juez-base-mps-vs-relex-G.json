@@ -1,0 +1,424 @@
+{
+ "juez": "qwen3.8:27b-32k",
+ "umbral": 0.5,
+ "veredictos": {
+  "base-mps": {
+   "persona": {
+    "si": 2,
+    "no": 38,
+    "ejemplos_no": [
+     "excombatientes",
+     "A.M.R.",
+     "Usted",
+     "usted",
+     "menores de edad",
+     "mujeres",
+     "Ministro",
+     "quienes",
+     "A.R.",
+     "ministro",
+     "presidente",
+     "maestros",
+     "clase media-baja",
+     "personas",
+     "usted",
+     "gobernantes",
+     "sus madres",
+     "YC",
+     "A.M.R.",
+     "gente",
+     "maestras",
+     "usted",
+     "terceros",
+     "Nosotros",
+     "gente",
+     "Ministra de Cultura",
+     "preceptores",
+     "clase media",
+     "Nosotros",
+     "periodista",
+     "ustedes",
+     "párroco",
+     "escritores",
+     "malosos",
+     "guía turístico",
+     "Muchas niñas",
+     "L.R. y A.A.",
+     "presidente"
+    ],
+    "ejemplos_si": [
+     "Oviedo, R.",
+     "Castro"
+    ]
+   },
+   "obra": {
+    "si": 0,
+    "no": 2,
+    "ejemplos_no": [
+     "libro",
+     "libro"
+    ],
+    "ejemplos_si": []
+   },
+   "lugar": {
+    "si": 21,
+    "no": 20,
+    "ejemplos_no": [
+     "ciudad",
+     "Acá",
+     "cine",
+     "país",
+     "mercado",
+     "país",
+     "bosque",
+     "país",
+     "Gobernación",
+     "Santander",
+     "LSA",
+     "otro lugar",
+     "periferia",
+     "país",
+     "reserva natural",
+     "El país",
+     "LSA",
+     "corredores naturales",
+     "mercados",
+     "campo"
+    ],
+    "ejemplos_si": [
+     "América Latina",
+     "Caribe colombiano",
+     "México",
+     "Tolima",
+     "Antioquia",
+     "Quindío",
+     "Antioquia",
+     "Caldas",
+     "Colombia",
+     "Caribe",
+     "Tolima",
+     "Eje Cafetero",
+     "Colombia",
+     "Barranquilla",
+     "Colombia",
+     "Colombia",
+     "Santander",
+     "Caldas",
+     "eje cafetero",
+     "Casa de Nariño",
+     "Caldas"
+    ]
+   },
+   "organizacion": {
+    "si": 8,
+    "no": 29,
+    "ejemplos_no": [
+     "estados no seculares",
+     "castrochavistas",
+     "Los indígenas",
+     "Gobierno",
+     "actores políticos",
+     "La Silla Académica",
+     "Gobierno",
+     "minDefensa",
+     "indígenas",
+     "Gobierno",
+     "grupos armados",
+     "indígenas",
+     "guerrilla",
+     "empleador",
+     "sociedad",
+     "Los indígenas",
+     "Aquí",
+     "universidades",
+     "empresarios",
+     "empresarios",
+     "LSA",
+     "españoles",
+     "LSA",
+     "gobiernos",
+     "LSA",
+     "empresarios",
+     "Las aves",
+     "sindicatos",
+     "empresarios"
+    ],
+    "ejemplos_si": [
+     "Facultad de Ciencias Contables, Económicas y Administrativas",
+     "Federación",
+     "FARC-EP",
+     "El Comercio",
+     "Nespresso",
+     "La Silla Académica",
+     "Congreso",
+     "Juan Valdez"
+    ]
+   },
+   "evento": {
+    "si": 0,
+    "no": 22,
+    "ejemplos_no": [
+     "huelga",
+     "huelga",
+     "desarrollo industrial",
+     "asesinato",
+     "eventos",
+     "caza",
+     "Segunda Guerra Mundial",
+     "negociaciones colectivas",
+     "cambio",
+     "plata",
+     "huelga",
+     "conflicto armado",
+     "crisis",
+     "huelga",
+     "guerra",
+     "homicidios",
+     "huelga",
+     "posconflicto",
+     "helada",
+     "cumbre de Johannesburgo",
+     "conflicto armado",
+     "elecciones"
+    ],
+    "ejemplos_si": []
+   },
+   "ley": {
+    "si": 0,
+    "no": 7,
+    "ejemplos_no": [
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA",
+     "LSA"
+    ],
+    "ejemplos_si": []
+   },
+   "monto": {
+    "si": 0,
+    "no": 1,
+    "ejemplos_no": [
+     "un centavo"
+    ],
+    "ejemplos_si": []
+   }
+  },
+  "relex-G": {
+   "cargo": {
+    "si": 6,
+    "no": 26,
+    "ejemplos_no": [
+     "trabajo",
+     "príncipe",
+     "bastones de mando",
+     "gobernantes",
+     "constructor",
+     "reportería",
+     "alcaldía",
+     "periodistas",
+     "concejal",
+     "profesora",
+     "director",
+     "liderazgo",
+     "profesor",
+     "alcalde",
+     "Ooispo",
+     "escritor",
+     "profesora",
+     "escritor",
+     "presidente",
+     "senador indígena",
+     "Presidencia",
+     "poder central",
+     "exsenador indígena",
+     "empleador",
+     "doctor en filosofía de la religión",
+     "estadista"
+    ],
+    "ejemplos_si": [
+     "presidente",
+     "profesora de Ciencia Política",
+     "presidente",
+     "presidente",
+     "rector",
+     "ministro de hacienda"
+    ]
+   },
+   "obra": {
+    "si": 9,
+    "no": 11,
+    "ejemplos_no": [
+     "artículo",
+     "textos",
+     "libros_marcela",
+     "memorias",
+     "libro",
+     "novelas",
+     "LSA",
+     "caso 007",
+     "Selección de cuentos",
+     "manuales de historia de la literatura",
+     "El Futuro del Futuro"
+    ],
+    "ejemplos_si": [
+     "Excombatientes y acuerdo de paz con las FARC-EP en Colombia",
+     "El olvido que seremos",
+     "El humor que se mece en la hamaca del Caribe",
+     "La Silla Académica",
+     "empresariado antioqueño y sociedad, 1940-2004. Influencia de las élites patronales de Antioquia en las políticas socioeconómicas colombianas",
+     "La infancia perdida por reclutamiento ilícito",
+     "La Silla Académica",
+     "La Silla Académica",
+     "Democracy against the grain: indigenous politics in twentieth century colombia, the case of southwestern andes"
+    ]
+   },
+   "monto": {
+    "si": 0,
+    "no": 11,
+    "ejemplos_no": [
+     "cinco",
+     "35 mil habitantes",
+     "plata",
+     "centavo",
+     "ganancias",
+     "8.6 por ciento",
+     "18 años",
+     "50 millones",
+     "salarios",
+     "15 años",
+     "menos"
+    ],
+    "ejemplos_si": []
+   },
+   "organizacion": {
+    "si": 4,
+    "no": 36,
+    "ejemplos_no": [
+     "A.A.",
+     "LSA",
+     "poder económico",
+     "Estado",
+     "A.M.R.",
+     "…",
+     "mercado accionario",
+     "L.R.",
+     "tribunal",
+     "grupos criminales",
+     "LSA",
+     "LSA",
+     "LSA",
+     "C.A.M.O",
+     "teatros",
+     "editoriales",
+     "LSA",
+     "LSA",
+     "YC",
+     "Estado",
+     "Plan Marshall",
+     "filas",
+     "país",
+     "A.M.R.",
+     "L.S.A.",
+     "chamanismo",
+     "Estados",
+     "hidroeléctrica",
+     "islam",
+     "LSA",
+     "turismo de aves",
+     "La Guardia",
+     "L.S.A.",
+     "LSA",
+     "Gobierno Duque",
+     "grupos armados"
+    ],
+    "ejemplos_si": [
+     "Cric",
+     "Club del Comercio",
+     "Facultad de Ciencias Jurídicas",
+     "Universidad del Norte"
+    ]
+   },
+   "persona": {
+    "si": 5,
+    "no": 11,
+    "ejemplos_no": [
+     "Y.A.",
+     "papá",
+     "…",
+     "autor",
+     "YC",
+     "oressochen jubatus",
+     "Contreras",
+     "YC",
+     "DeLaCalleHum",
+     "marido",
+     "Chía"
+    ],
+    "ejemplos_si": [
+     "Peñalosa",
+     "Gabo",
+     "Flower Trompeta",
+     "Palacio",
+     "Petro"
+    ]
+   },
+   "lugar": {
+    "si": 2,
+    "no": 16,
+    "ejemplos_no": [
+     "Atenas Suramericana",
+     "plaza",
+     "región",
+     "país",
+     "vías locales",
+     "Costa",
+     "bosque",
+     "región",
+     "parte",
+     "conjunto habitacional",
+     "Angélika",
+     "territorio colombiano",
+     "país",
+     "montañas andinas",
+     "usos urbanos",
+     "territorios"
+    ],
+    "ejemplos_si": [
+     "Ucrania",
+     "España"
+    ]
+   },
+   "evento": {
+    "si": 0,
+    "no": 2,
+    "ejemplos_no": [
+     "proceso de paz",
+     "Hay"
+    ],
+    "ejemplos_si": []
+   },
+   "ley": {
+    "si": 1,
+    "no": 10,
+    "ejemplos_no": [
+     "POT",
+     "impuestos",
+     "normas estatales",
+     "normas del derecho colombiano",
+     "POT",
+     "Planes de Ordenamiento Territorial",
+     "Protocolo Facultativo",
+     "políticas públicas",
+     "Planes de Ordenamiento Territorial",
+     "Y.A."
+    ],
+    "ejemplos_si": [
+     "Convención de los Derechos del Niño"
+    ]
+   }
+  }
+ }
+}

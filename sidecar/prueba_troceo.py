@@ -5,7 +5,7 @@ da error, simplemente devuelve menos.
 """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from legajo_ner import aplicables, predicados_del_parrafo, sin_espejos, deduplicar, trozos_por_oracion, spacy_sin_solapes
+from legajo_ner import CIFRA, PRONOMBRES, aplicables, deduplicar, hablantes, sin_espejos, sin_hablante, trozos_por_oracion
 
 
 class DocFalso:
@@ -73,24 +73,6 @@ def test_deduplicar_devuelve_en_orden_de_lectura():
     assert [x["texto"] for x in deduplicar(e)] == ["a", "b"]
 
 
-class SpanFalso:
-    def __init__(self, a, b): self.start_char, self.end_char = a, b
-    def __repr__(self): return f"[{self.start_char},{self.end_char})"
-
-
-def test_spacy_no_admite_solapes_y_gana_la_mas_larga():
-    # spaCy rechaza doc.ents con entidades solapadas: hay que elegir antes.
-    spans = [SpanFalso(0, 16), SpanFalso(4, 16), SpanFalso(20, 28)]
-    r = spacy_sin_solapes(spans)
-    assert len(r) == 2
-    assert (r[0].start_char, r[0].end_char) == (0, 16)
-
-
-
-
-
-# ── Vocabulario de relaciones ────────────────────────────────────────────
-
 VOCAB = [
     {"etiqueta": "ocupa el cargo", "desde": ["persona"], "hasta": ["cargo"], "simetrico": False},
     {"etiqueta": "trabaja en", "desde": ["persona"], "hasta": ["organizacion"], "simetrico": False},
@@ -114,17 +96,6 @@ def test_un_extremo_sin_restriccion_acepta_cualquier_tipo():
     # pueden estar ubicados en un lugar.
     for tipo in ("persona", "monto", "ley"):
         assert "ubicado en" in [p["etiqueta"] for p in aplicables(VOCAB, tipo, "lugar")]
-
-
-def test_no_se_le_pregunta_al_modelo_lo_que_no_puede_aplicar():
-    # Un párrafo de solo leyes y montos no admite ninguna relación entre
-    # personas: preguntarlas es pagar por respuestas que se van a descartar.
-    utiles = [p["etiqueta"] for p in predicados_del_parrafo(VOCAB, {"ley", "monto"})]
-    assert utiles == ["sanciona con"]
-
-    utiles = [p["etiqueta"] for p in predicados_del_parrafo(VOCAB, {"persona", "cargo"})]
-    assert "ocupa el cargo" in utiles
-    assert "sanciona con" not in utiles
 
 
 def test_de_dos_direcciones_del_mismo_par_queda_la_de_mas_confianza():
@@ -157,6 +128,31 @@ def test_el_espejo_no_se_lleva_por_delante_otro_predicado():
         {"a": "B", "b": "A", "predicado": "trabaja en", "score": 0.7},
     ]
     assert len(sin_espejos(rels, VOCAB)) == 2
+
+
+def test_una_entrevista_tiene_hablantes_y_un_titular_con_dos_puntos_no():
+    ps = ["La Silla Académica: ¿Esto es así?", "Adriana Camacho: No necesariamente.",
+          "Adriana Camacho: Otros requisitos…", "La Silla Académica: ¿Y los públicos?",
+          "Colombia: un país en vilo."]
+    q = hablantes(ps)
+    assert q == {"La Silla Académica", "Adriana Camacho"}, q
+    assert sin_hablante(ps[1], q) == len("Adriana Camacho: ")
+    assert sin_hablante(ps[4], q) == 0, "un titular con dos puntos no es un hablante"
+    assert sin_hablante("Sin etiqueta.", q) == 0
+
+
+def test_un_monto_lleva_cifra():
+    for si in ("10 mil millones de pesos", "7 por ciento", "$ 300", "un millón", "50 centavos"):
+        assert CIFRA.search(si), si
+    for no in ("salarios", "plata", "chequeras", "capital", "salario mínimo"):
+        assert not CIFRA.search(no), no
+
+
+def test_un_pronombre_nunca_es_una_persona():
+    for p in ("Usted", "yo", "tú", "mí", "otro", "uno"):
+        assert p.lower() in PRONOMBRES, p
+    for nombre in ("Marx", "Adriana Camacho", "Uno de los Nuestros"):
+        assert nombre.lower() not in PRONOMBRES, nombre
 
 
 if __name__ == "__main__":

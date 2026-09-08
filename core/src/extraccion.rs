@@ -32,54 +32,45 @@ pub struct RelacionExtraida {
     pub score: f64,
 }
 
-/// Qué modelos usa el extractor. Se guarda con el lote: comparar dos corridas
-/// solo tiene sentido si se sabe con qué se hicieron.
+/// Qué modelo usa el extractor.
+///
+/// Es uno y no se elige. Hubo un menú con cuatro variantes de GLiNER y un
+/// interruptor de relaciones; se midió sobre artículos reales
+/// (docs/pipeline.md) y se quedó el que hace las dos cosas en una pasada. El
+/// menú, además, dejaba corridas incomparables sin que nadie supiera con qué se
+/// había hecho cada una: el único artículo anotado a mano se anotó sobre
+/// propuestas de un modelo que ya no está, y hubo que deducirlo.
+///
+/// Sigue existiendo como estructura porque viaja al sidecar y se puede apuntar
+/// a otro modelo de la misma familia —relex, que hace entidades y relaciones—
+/// para volver a medir, no para que lo elija quien usa la app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Modelos {
     pub gliner: String,
     pub spacy: String,
-    pub glirel: Option<String>,
-    pub relaciones: bool,
 }
 
 impl Default for Modelos {
     fn default() -> Self {
         Self {
-            gliner: "urchade/gliner_multi-v2.1".into(),
+            gliner: "knowledgator/gliner-relex-multi-v1.0".into(),
             spacy: "es_core_news_sm".into(),
-            glirel: Some("jackboyla/glirel-large-v0".into()),
-            relaciones: true,
         }
     }
 }
 
-/// Los modelos entre los que se puede elegir, con lo que cuesta cada uno.
-///
-/// `instalado` lo rellena `catalogo_con_estado`: aquí no se puede saber sin
-/// mirar el disco, y este catálogo también se usa donde no hay entorno.
+/// Lo que hay que tener bajado, con lo que pesa. Ya no es un menú: es la
+/// lista de lo que la app necesita para poder extraer, con su tamaño para
+/// poder decirlo antes de bajarlo.
 pub fn catalogo() -> Value {
     json!({
         "gliner": [
-            {"id": "urchade/gliner_multi-v2.1", "nombre": "GLiNER multilingüe v2.1", "mb": 1156,
-             "nota": "El caballo de batalla. Multilingüe, 209M, equilibrado."},
-            {"id": "urchade/gliner_multi_pii-v1", "nombre": "GLiNER multilingüe PII", "mb": 1156,
-             "nota": "Afinado para datos personales; útil si el foco son personas."},
-            {"id": "knowledgator/gliner-bi-large-v1.0", "nombre": "GLiNER bi-encoder grande", "mb": 2288,
-             "nota": "Codifica etiquetas aparte: más rápido con muchas etiquetas, y más pesado de cargar."},
-            {"id": "knowledgator/gliner-multitask-large-v0.5", "nombre": "GLiNER multitarea grande", "mb": 892,
-             "nota": "El más preciso de la familia y el más lento. Sirve para saber cuánto techo se deja."}
+            {"id": "knowledgator/gliner-relex-multi-v1.0", "nombre": "GLiNER relex multilingüe", "mb": 1275,
+             "nota": "Entidades y relaciones en una sola pasada, sobre mDeBERTa. El único modelo del extractor."}
         ],
         "spacy": [
             {"id": "es_core_news_sm", "nombre": "spaCy español pequeño", "mb": 13,
-             "nota": "Segmenta y tokeniza de sobra para lo que hace falta."},
-            {"id": "es_core_news_md", "nombre": "spaCy español mediano", "mb": 42,
-             "nota": "Con vectores. Mejor segmentación en prosa difícil."},
-            {"id": "es_core_news_lg", "nombre": "spaCy español grande", "mb": 545,
-             "nota": "Solo si la segmentación resulta ser el cuello de botella."}
-        ],
-        "glirel": [
-            {"id": "jackboyla/glirel-large-v0", "nombre": "GLiREL grande", "mb": 1867,
-             "nota": "Relaciones de vocabulario abierto sobre las entidades ya halladas."}
+             "nota": "Segmenta oraciones y tokeniza; nada más hace falta de él."}
         ]
     })
 }
@@ -151,13 +142,6 @@ pub fn faltan(est: &EstadoModelos, m: &Modelos) -> Vec<String> {
     if !est.hf.iter().any(|x| x == &m.gliner) {
         f.push(format!("gliner:{}", m.gliner));
     }
-    if m.relaciones {
-        if let Some(g) = &m.glirel {
-            if !est.hf.iter().any(|x| x == g) {
-                f.push(format!("glirel:{g}"));
-            }
-        }
-    }
     f
 }
 
@@ -215,7 +199,7 @@ where
 /// El catálogo con una marca por modelo diciendo si ya está en la máquina.
 pub fn catalogo_con_estado(est: &EstadoModelos) -> Value {
     let mut cat = catalogo();
-    for (familia, presentes) in [("spacy", &est.spacy), ("gliner", &est.hf), ("glirel", &est.hf)] {
+    for (familia, presentes) in [("spacy", &est.spacy), ("gliner", &est.hf)] {
         if let Some(xs) = cat.get_mut(familia).and_then(Value::as_array_mut) {
             for m in xs.iter_mut() {
                 let id = m.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -233,16 +217,35 @@ pub fn catalogo_con_estado(est: &EstadoModelos) -> Value {
 /// GLiNER es de vocabulario abierto: la etiqueta es una instrucción en lenguaje
 /// natural, y cómo se redacte cambia el resultado bastante. Se mantienen aquí,
 /// juntas y visibles, porque son un parámetro del experimento y no un detalle.
+///
+/// Esta redacción salió de correr siete sobre los mismos once artículos
+/// (`sidecar/banco.py --redaccion`). La original —«persona», «lugar», «cargo o
+/// rol»— devolvía 544 nombres comunes con confianza ≥0,9: «país», «indígenas»,
+/// «libro», «niños». Pedir «nombre propio» y «nombre de…» los bajó a 92, y la
+/// señuelo de abajo a 44. Ninguna redacción arregla «evento»: el 90 % de lo
+/// que devuelve es nombre común en todas, lo que confirma lo que ya decía
+/// docs/plan-anotacion.md sobre retirarlo.
 pub const ETIQUETAS: &[(&str, &str)] = &[
-    ("persona", "persona"),
-    ("organizacion", "organización"),
-    ("lugar", "lugar"),
-    ("cargo", "cargo o rol"),
-    ("ley", "ley o norma"),
-    ("evento", "evento"),
-    ("obra", "obra o publicación"),
-    ("monto", "monto o cifra"),
+    ("persona", "persona con nombre propio"),
+    ("organizacion", "nombre de organización, institución, empresa o partido"),
+    ("lugar", "nombre propio de lugar"),
+    ("cargo", "cargo público o título de un puesto"),
+    ("ley", "nombre de ley, decreto, sentencia o norma jurídica"),
+    ("evento", "nombre propio de evento o suceso"),
+    ("obra", "título de libro, informe, periódico, revista o medio"),
+    ("monto", "monto de dinero o cifra"),
 ];
+
+/// Etiquetas que se le piden al modelo y no vuelven.
+///
+/// El modelo le da a cada tramo la etiqueta que mejor le cuadre de las que hay,
+/// así que un nombre de grupo —«indígenas», «niños», «empresarios»— acababa en
+/// «persona» o en «organización» según a cuál se le abriera más la puerta.
+/// Darle una que le cuadre mejor, y tirar lo que caiga en ella, es la forma de
+/// que no acabe en ninguna de las buenas: los falsos de persona bajaron de 392
+/// a 77 en once artículos. El sidecar descarta lo que venga con una etiqueta
+/// que no esté en `ETIQUETAS`.
+pub const SENUELOS: &[&str] = &["grupo genérico de personas"];
 
 /// El vocabulario de relaciones, con los tipos entre los que cada una tiene
 /// sentido y si es simétrica.
@@ -318,8 +321,11 @@ pub fn predicados_con_tipos() -> Value {
     )
 }
 
+/// Lo que se le pide al modelo: los ocho tipos y las señuelo.
 pub fn etiquetas_modelo() -> Vec<String> {
-    ETIQUETAS.iter().map(|(_, v)| v.to_string()).collect()
+    ETIQUETAS.iter().map(|(_, v)| v.to_string())
+        .chain(SENUELOS.iter().map(|s| s.to_string()))
+        .collect()
 }
 
 /// Devuelve la clave interna a partir de lo que respondió el modelo.
@@ -355,24 +361,34 @@ impl Rutas {
 }
 
 /// Los directorios que podrían tener los guiones del extractor, en orden.
+///
+/// En una compilación de desarrollo el repositorio va **antes** que los
+/// recursos. Tauri copia `sidecar/*.py` junto al binario al compilar, y esa
+/// copia solo se renueva cuando cambia algo de Rust: una tarde entera de
+/// cambios al extractor corrió contra una copia de la mañana sin que nada lo
+/// dijera, porque el modelo era el nuevo y las reglas no. En la app
+/// empaquetada no hay repositorio y los recursos son la única fuente.
 fn dirs_sidecar(r: &Rutas) -> Vec<PathBuf> {
-    let mut ds = Vec::new();
-    if let Some(x) = &r.recursos {
-        ds.push(x.join("sidecar"));
-    }
+    let mut repo = Vec::new();
     // Desarrollo: se sube desde el ejecutable hasta encontrar el repositorio.
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().map(Path::to_path_buf);
         for _ in 0..5 {
             let Some(d) = dir.clone() else { break };
-            ds.push(d.join("sidecar"));
+            repo.push(d.join("sidecar"));
             dir = d.parent().map(Path::to_path_buf);
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        ds.push(cwd.join("sidecar"));
+        repo.push(cwd.join("sidecar"));
     }
-    ds
+    let recursos: Vec<PathBuf> = r.recursos.iter().map(|x| x.join("sidecar")).collect();
+
+    if cfg!(debug_assertions) {
+        repo.into_iter().chain(recursos).collect()
+    } else {
+        recursos.into_iter().chain(repo).collect()
+    }
 }
 
 /// El guion del extractor. `preparar.py` se busca a su lado.
@@ -449,8 +465,9 @@ pub struct Sidecar {
     salida: BufReader<ChildStdout>,
     pub modelo: Option<String>,
     pub dispositivo: String,
-    /// GLiREL cargó de verdad. Puede fallar sin impedir extraer entidades.
-    pub glirel_activo: bool,
+    /// El modelo extrae relaciones además de entidades. Lo dice el sidecar al
+    /// cargar; si apuntase a un GLiNER sin relaciones, aquí se sabría.
+    pub relaciones_activas: bool,
 }
 
 impl Sidecar {
@@ -470,7 +487,7 @@ impl Sidecar {
 
         let mut s = Self {
             hijo, entrada, salida, modelo: None,
-            dispositivo: "cpu".into(), glirel_activo: false,
+            dispositivo: "cpu".into(), relaciones_activas: false,
         };
         // El proceso saluda al arrancar; leerlo confirma que está vivo.
         s.leer().await?;
@@ -508,14 +525,15 @@ impl Sidecar {
 
     pub async fn cargar(&mut self, m: &Modelos) -> Result<u64> {
         let r = self
-            .pedir(json!({
-                "op": "cargar", "gliner": m.gliner, "spacy": m.spacy,
-                "glirel": m.glirel, "relaciones": m.relaciones,
-            }))
+            .pedir(json!({ "op": "cargar", "gliner": m.gliner, "spacy": m.spacy }))
             .await?;
         self.modelo = Some(m.gliner.clone());
-        // El sidecar responde qué cargó de verdad: si GLiREL falló, se sabe.
-        self.glirel_activo = r.get("glirel").and_then(Value::as_str).is_some();
+        // El sidecar responde qué cargó de verdad.
+        self.relaciones_activas = r.get("relaciones").and_then(Value::as_bool).unwrap_or(false);
+        // Y dónde: en el GPU de la máquina si lo hay. Elegirlo es cosa suya.
+        if let Some(d) = r.get("dispositivo").and_then(Value::as_str) {
+            self.dispositivo = d.to_string();
+        }
         Ok(r.get("ms").and_then(Value::as_u64).unwrap_or(0))
     }
 
@@ -653,6 +671,10 @@ mod tests {
     #[test]
     fn hay_una_etiqueta_por_tipo_del_sistema() {
         assert_eq!(ETIQUETAS.len(), 8);
-        assert_eq!(etiquetas_modelo().len(), 8);
+        // Las señuelo van al modelo pero no son tipos: no vuelven.
+        assert_eq!(etiquetas_modelo().len(), 8 + SENUELOS.len());
+        for s in SENUELOS {
+            assert_eq!(clave_de(s), s.to_lowercase(), "una señuelo no debe mapear a ningún tipo");
+        }
     }
 }

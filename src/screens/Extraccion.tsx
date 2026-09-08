@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon, Rotulo } from "../ui";
+import { Acciones, Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Razon, Rotulo, Rehacer } from "../ui";
 import {
   alFinExtraccion, alProgresoExtraccion, avanceExtraccion, cancelarExtraccion,
-  categoriasDelLote, extrayendo as consultarExtrayendo, iniciarExtraccion,
+  categoriasDelLote, deshacerExtraccion, extrayendo as consultarExtrayendo, iniciarExtraccion,
 } from "../lib/ipc";
 import type { CategoriaLote, ColaCategorias, ProgresoExtraccion } from "../types";
 import type { EstadoApp } from "../App";
@@ -55,6 +55,10 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<Linea[]>([]);
   const [entidades, setEntidades] = useState(0);
+  /* Con qué se está extrayendo, dicho por el extractor al cargar: el modelo y
+     el dispositivo. Antes era un texto fijo que decía «CPU» aunque corriera en
+     el GPU. */
+  const [motor, setMotor] = useState<string | null>(null);
   const tiempos = useRef<number[]>([]);
 
   const anotar = (texto: string) =>
@@ -92,7 +96,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
         anotar(`faltaban ${p.detalle} cuerpos por bajar: los trae ahora`);
       }
       if (p.fase === "cargando") anotar(`cargando el modelo ${p.detalle}`);
-      if (p.fase === "cargado") anotar(`modelo listo en ${seg(p.ms)} s`);
+      if (p.fase === "cargado") { anotar(`modelo listo en ${seg(p.ms)} s · ${p.detalle}`); setMotor(p.detalle); }
       if (p.fase === "arrancando") anotar("arrancando el extractor");
     });
     const un2 = alFinExtraccion((f) => {
@@ -126,7 +130,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
     tiempos.current = [];
     setEntidades(0);
     try {
-      await iniciarExtraccion(loteId, null, false, term);
+      await iniciarExtraccion(loteId, false, term);
     } catch (e) {
       setError(String(e));
       setCorriendo(false);
@@ -246,7 +250,7 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
             <Metrica k="Velocidad medida" v={medio > 0 ? `${seg(medio)} s por artículo` : "—"} />
             {restante != null && <Metrica k="Falta" v={duracion(restante)} />}
             <Metrica k="Origen del texto" v="Tu disco · sin red" />
-            <Metrica k="Modelo" v="GLiNER multilingüe · CPU" />
+            <Metrica k="Modelo" v={motor ?? "GLiNER relex"} />
           </div>
         </>
       )}
@@ -260,7 +264,22 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
         {corriendo ? (
           <Boton variante="secundario" onClick={() => cancelarExtraccion()}>Detener</Boton>
         ) : todoHecho ? (
-          <Boton onClick={() => estado.avanzar(7, "grafo")}>Ver el grafo</Boton>
+          <>
+            <Boton onClick={() => estado.avanzar(7, "grafo")}>Ver el grafo</Boton>
+            <Rehacer
+              enlace="volver a extraer todo el lote"
+              accion="Borrar las propuestas y extraer el lote otra vez"
+              costo="Borra lo que el modelo propuso sobre todo el lote y lo pone otra vez en la cola, categoría por categoría. Las marcas hechas a mano se quedan."
+              onConfirmar={async () => {
+                if (loteId == null) return;
+                try {
+                  const n = await deshacerExtraccion(loteId, false);
+                  anotar(`${num(n)} artículos vuelven a la cola`);
+                  refrescarCola(); refrescarAvance();
+                } catch (e) { setError(String(e)); }
+              }}
+            />
+          </>
         ) : (
           <>
             <Boton
@@ -286,6 +305,27 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
               <Boton variante="secundario" onClick={() => arrancar(null)}>
                 Extraer lo que quede ({num(sueltosPendientes)})
               </Boton>
+            )}
+            {/* Volver a extraer una categoría ya hecha —porque cambió el
+                modelo, las reglas o la calibración— es una operación normal.
+                Sin esto la única salida era crear otro lote. */}
+            {categoria != null && elegida && elegida.extraidos > 0 && (
+              <Rehacer
+                enlace={`volver a extraer ${elegida.nombre}`}
+                accion={`Borrar y extraer ${elegida.nombre} otra vez`}
+                costo={<>Borra lo que el modelo propuso sobre los {num(elegida.extraidos)} artículos ya
+                  extraídos de «{elegida.nombre}» y los pone otra vez en la cola. Las marcas hechas a mano
+                  se quedan.</>}
+                onConfirmar={async () => {
+                  if (loteId == null) return;
+                  try {
+                    const n = await deshacerExtraccion(loteId, false, categoria);
+                    anotar(`${num(n)} artículos vuelven a la cola`);
+                    refrescarCola();
+                    await arrancar(categoria);
+                  } catch (e) { setError(String(e)); }
+                }}
+              />
             )}
             {/* El grafo se puede mirar con lo que ya haya: no hace falta
                 terminar el lote entero para ver qué va saliendo. */}

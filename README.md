@@ -39,8 +39,10 @@ ayuda lo leen de ahí. La ayuda de cada paso (`src/contenido/ayuda.ts`) sigue el
 mismo orden en los ocho: qué es, qué haces, qué consigues, qué pasa después, y
 aparte las razones, para quien las quiera.
 
-Los tres modelos —spaCy para segmentar, GLiNER para entidades, GLiREL para
-relaciones— comparten un solo proceso. Está explicado en
+Los dos modelos —spaCy para segmentar oraciones, GLiNER-relex para entidades y
+relaciones en una sola pasada— comparten un solo proceso y corren en el GPU de la
+máquina si lo hay. Fueron tres con un menú para elegir; se midió sobre artículos
+reales y quedó uno. Está explicado, con las cifras, en
 [`docs/pipeline.md`](docs/pipeline.md).
 
 ## Cómo se conecta a un sitio
@@ -70,6 +72,7 @@ python3 -m venv .venv && ./.venv/bin/pip install -r sidecar/requirements.txt
 cargo test -p legajo-core                            # núcleo: sin librerías gráficas
 cargo test -p legajo-core -- --ignored --nocapture   # contra sitios reales
 python3 sidecar/prueba_troceo.py                     # troceo del extractor
+.venv/bin/python sidecar/banco.py --nombre x --dispositivo mps --vueltas 2   # medir el extractor
 pnpm tauri dev                                       # la app
 
 # Censo completo contra un sitio, por línea de comandos
@@ -125,8 +128,8 @@ que hace que actualizar sea barato:
 | Capa | Qué lleva | Peso | Cómo llega | Se renueva |
 |---|---|---|---|---|
 | La app | Binario de Rust, la interfaz y los `.py` del extractor | 3,6 MB | Instalador (`.dmg`, `.msi`, `.AppImage`, `.deb`) | Sola, con el updater |
-| La ejecución | CPython portátil + torch, spaCy, GLiNER, GLiREL | ~1,4 GB | La instala la app en el paso 5, una vez | Solo si cambian las dependencias |
-| Los modelos | Pesos de GLiNER, GLiREL y spaCy | ~1,5 GB | Los baja el paso 5, una vez | Nunca |
+| La ejecución | CPython portátil + torch, spaCy, GLiNER | ~1,4 GB | La instala la app en el paso 5, una vez | Solo si cambian las dependencias |
+| Los modelos | Pesos de GLiNER-relex y spaCy | ~1,3 GB | Los baja el paso 5, una vez | Nunca |
 
 Las dos últimas viven en el directorio de datos de la app y **las
 actualizaciones no las tocan**. El `.dmg` de 0.1.0 mide 3,6 MB medidos. Si el

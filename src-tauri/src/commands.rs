@@ -802,19 +802,16 @@ pub struct ProgresoModelo {
     pub tamano: String,
 }
 
-/// Baja lo que le falte a esta combinación de modelos.
+/// Baja lo que falte del modelo y de spaCy.
 ///
 /// Devuelve cuántos bajó. Es lo único del programa que sale a la red por su
 /// cuenta, y solo trae pesos de repositorios públicos: ningún texto del archivo
 /// se envía a ninguna parte.
 #[tauri::command]
-pub async fn preparar_modelos(
-    app: AppHandle,
-    modelos: extraccion::Modelos,
-) -> Result<usize> {
+pub async fn preparar_modelos(app: AppHandle) -> Result<usize> {
     let r = rutas(&app);
     let est = extraccion::estado_modelos(&r).await?;
-    let pendientes = extraccion::faltan(&est, &modelos);
+    let pendientes = extraccion::faltan(&est, &extraccion::Modelos::default());
     let n = pendientes.len();
 
     let app2 = app.clone();
@@ -827,14 +824,11 @@ pub async fn preparar_modelos(
     Ok(n)
 }
 
-/// Qué le falta a esta combinación, sin bajar nada.
+/// Qué falta por bajar para poder extraer, sin bajar nada.
 #[tauri::command]
-pub async fn modelos_pendientes(
-    app: AppHandle,
-    modelos: extraccion::Modelos,
-) -> Result<Vec<String>> {
+pub async fn modelos_pendientes(app: AppHandle) -> Result<Vec<String>> {
     let est = extraccion::estado_modelos(&rutas(&app)).await?;
-    Ok(extraccion::faltan(&est, &modelos))
+    Ok(extraccion::faltan(&est, &extraccion::Modelos::default()))
 }
 
 // ── La capa de ejecución del extractor ───────────────────────────────────
@@ -857,7 +851,17 @@ pub async fn entorno_estado(app: AppHandle) -> Result<legajo_core::entorno::Esta
                 .into(),
         )
     })?;
-    legajo_core::entorno::estado(&datos, &req)
+    let mut est = legajo_core::entorno::estado(&datos, &req)?;
+    // La capa instalada aparte es la forma normal de tener extractor, no la
+    // única: en desarrollo está el `.venv` del repositorio, y un paquete puede
+    // traer el suyo dentro. Si el buscador encuentra uno que sirve, se puede
+    // extraer, y pedirle a quien programa que baje 1,4 GB a su directorio de
+    // datos cada vez que cambia una dependencia sería castigarlo por trabajar.
+    if !est.listo && extraccion::localizar(&r).is_ok() {
+        est.listo = true;
+        est.mb = 0;
+    }
+    Ok(est)
 }
 
 /// Instala el intérprete de Python y las librerías del extractor.
@@ -917,6 +921,32 @@ pub struct ColaCategorias {
     pub sueltos_hechos: i64,
 }
 
+/// Deshace la extracción para poder repetirla con el modelo y las reglas de
+/// ahora. Devuelve cuántos artículos vuelven a la cola.
+///
+/// No se hace con una extracción en marcha: borraría bajo los pies de la que
+/// está guardando.
+#[tauri::command]
+pub async fn deshacer_extraccion(
+    state: State<'_, AppState>,
+    lote_id: i64,
+    solo_calibracion: bool,
+    categoria: Option<i64>,
+) -> Result<usize> {
+    if state.extrayendo.load(Ordering::SeqCst) {
+        return Err(Error::Other("Hay una extracción en marcha. Deténla antes de rehacerla.".into()));
+    }
+    let db = state.db.clone();
+    en_hilo(move || {
+        let terminos = match categoria {
+            Some(t) => terminos_de_lote(&db, lote_id, &[t])?,
+            None => Vec::new(),
+        };
+        db.deshacer_extraccion(lote_id, solo_calibracion, &terminos)
+    })
+    .await
+}
+
 /// Lanza la extracción sobre una categoría del lote.
 ///
 /// `solo_calibracion` limita al puñado de artículos que la persona va a revisar
@@ -927,7 +957,6 @@ pub fn iniciar_extraccion(
     app: AppHandle,
     state: State<'_, AppState>,
     lote_id: i64,
-    modelos: Option<extraccion::Modelos>,
     solo_calibracion: bool,
     // La categoría elegida en el paso 7. `None` es el lote entero, que es lo
     // que necesita la calibración.
@@ -942,7 +971,8 @@ pub fn iniciar_extraccion(
     let db = state.db.clone();
     let corriendo = state.extrayendo.clone();
     let cancelar = state.extraccion_cancelar.clone();
-    let modelos = modelos.unwrap_or_default();
+    // El modelo es uno y no se elige: ver `Modelos` en core/src/extraccion.rs.
+    let modelos = extraccion::Modelos::default();
     let rutas = rutas(&app);
 
     tauri::async_runtime::spawn(async move {
@@ -1058,18 +1088,19 @@ async fn extraer(
 
     avisar("cargando", 0, total, 0, 0, 0, 0, &modelos.gliner);
     let ms_carga = sc.cargar(modelos).await?;
-    let nota = if sc.glirel_activo { "" } else { "sin relaciones: GLiREL no cargó" };
-    avisar("cargado", 0, total, 0, 0, 0, ms_carga, nota);
+    let nota = if sc.relaciones_activas { "" } else { "sin relaciones: el modelo no las extrae" };
+    // Qué corre y dónde, para que la pantalla lo diga en vez de suponerlo.
+    let corto = modelos.gliner.rsplit('/').next().unwrap_or(&modelos.gliner);
+    let detalle = format!("{corto} · {}{}", sc.dispositivo.to_uppercase(), if nota.is_empty() { String::new() } else { format!(" · {nota}") });
+    avisar("cargado", 0, total, 0, 0, 0, ms_carga, &detalle);
 
     // 3 · El recorrido, por tandas. Cada vuelta baja lo que le falte a su tanda
     //     y lo extrae acto seguido: una sola pasada sobre el lote en vez de
     //     dos, y lo descargado no se acumula esperando a que empiece el modelo.
     let cal = db.calibracion(lote_id)?.unwrap_or_default();
-    let predicados: Vec<String> = if modelos.relaciones {
-        legajo_core::extraccion::predicados_modelo()
-    } else {
-        vec![]
-    };
+    // Las relaciones salen en la misma pasada que las entidades: no hay
+    // interruptor que apagar, ni ahorro por apagarlo.
+    let predicados: Vec<String> = extraccion::predicados_modelo();
     let transporte = db.transporte(conn_id)?;
     let auth = db.credencial(conn_id)?;
 

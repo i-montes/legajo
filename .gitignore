@@ -37,6 +37,11 @@ Thumbs.db
 sidecar/__pycache__/
 sidecar/dist/
 sidecar/build/
+# Corridas del banco de modelos: medio mega de JSON cada una, y se regeneran
+# con `sidecar/banco.py`. Los veredictos del juez sí se guardan: son pequeños y
+# docs/pipeline.md remite a ellos.
+sidecar/banco/*.json
+!sidecar/banco/juez-*.json
 
 # Metadatos que WSL arrastra de Windows
 *:Zone.Identifier

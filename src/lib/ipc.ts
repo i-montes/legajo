@@ -4,7 +4,7 @@ import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
   ColaCategorias, ConexionGuardada,
   Discovery, EntradaLexico, EstadoEntorno, Estimacion, FilaAnotable, FinCenso,
-  Hallazgo, Identidad, LoteRow, Mencion, Modelos, NodoGrafo, PasoAutorizacion,
+  Hallazgo, Identidad, LoteRow, Mencion, NodoGrafo, PasoAutorizacion,
   PerfilArchivo, ProgresoCenso, ProgresoEntorno,
   ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
   SesionRecuperada, SinNombrar,
@@ -89,9 +89,15 @@ export const avanceAnotacion = (loteId: number) =>
 // ── Extracción ───────────────────────────────────────────────────────────
 
 export const iniciarExtraccion = (
-  loteId: number, modelos: Modelos | null, soloCalibracion: boolean,
-  categoria: number | null = null
-) => invoke<void>("iniciar_extraccion", { loteId, modelos, soloCalibracion, categoria });
+  loteId: number, soloCalibracion: boolean, categoria?: number | null
+) => invoke<void>("iniciar_extraccion", { loteId, soloCalibracion, categoria: categoria ?? null });
+
+/** Borra las propuestas del modelo sobre esos artículos y los devuelve a la
+ *  cola, para extraerlos otra vez. Las marcas de la persona se quedan.
+ *  Devuelve cuántos artículos vuelven. */
+export const deshacerExtraccion = (
+  loteId: number, soloCalibracion: boolean, categoria?: number | null
+) => invoke<number>("deshacer_extraccion", { loteId, soloCalibracion, categoria: categoria ?? null });
 
 export const cancelarExtraccion = () => invoke<void>("cancelar_extraccion");
 export const extrayendo = () => invoke<boolean>("extrayendo");
@@ -158,11 +164,10 @@ export const lotes = (connectionId: number) => invoke<LoteRow[]>("lotes", { conn
 
 export const catalogoModelos = () => invoke<CatalogoModelos>("catalogo_modelos");
 
-export const modelosPendientes = (modelos: Modelos) =>
-  invoke<string[]>("modelos_pendientes", { modelos });
+/** Qué falta por bajar del modelo y de spaCy. El modelo es uno: no se elige. */
+export const modelosPendientes = () => invoke<string[]>("modelos_pendientes");
 
-export const prepararModelos = (modelos: Modelos) =>
-  invoke<number>("preparar_modelos", { modelos });
+export const prepararModelos = () => invoke<number>("preparar_modelos");
 
 export const alProgresoModelo = (cb: (p: ProgresoModelo) => void): Promise<UnlistenFn> =>
   listen<ProgresoModelo>("modelos:progreso", (e) => cb(e.payload));

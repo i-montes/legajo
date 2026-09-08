@@ -1,4 +1,4 @@
-"""Extractor de Legajo: spaCy + GLiNER + GLiREL en un solo proceso.
+"""Extractor de Legajo: spaCy + GLiNER-relex en un solo proceso.
 
 Habla con la app por líneas JSON en stdin/stdout. No abre puertos ni escucha en
 la red: la promesa de la app es que el archivo no sale del computador, y un
@@ -6,36 +6,98 @@ proceso hijo con tuberías es la forma más simple de cumplirla y de demostrarlo
 
 El reparto de trabajo:
 
-- **spaCy** tokeniza y segmenta oraciones. Es lo que le da a GLiNER trozos con
-  sentido gramatical en vez de ventanas de N palabras cortadas a ciegas, y lo
-  que permite alinear las entidades a límites de token antes de pasárselas a
-  GLiREL.
-- **GLiNER** extrae entidades de vocabulario abierto: las etiquetas son
-  instrucciones en lenguaje natural, no clases aprendidas.
-- **GLiREL** extrae relaciones sobre las entidades ya encontradas, también de
-  vocabulario abierto.
+- **spaCy** tokeniza y segmenta oraciones. Es lo que le da al modelo trozos con
+  sentido gramatical en vez de ventanas de N palabras cortadas a ciegas: una
+  entidad partida por la mitad no da error, simplemente no aparece.
+- **GLiNER-relex** extrae entidades y relaciones de vocabulario abierto en una
+  sola pasada. Las etiquetas y los predicados son instrucciones en lenguaje
+  natural, no clases aprendidas, así que cómo se redacten cambia el resultado;
+  la redacción vive en `core/src/extraccion.rs`, que es quien la manda.
+
+Antes eran tres modelos —GLiNER para entidades, GLiREL para relaciones y spaCy
+de puente para alinear caracteres a tokens— y un menú con cuatro variantes del
+primero. Se midió sobre artículos reales (docs/pipeline.md) y se quedó uno: el
+conjunto hace las dos cosas en menos tiempo del que GLiREL tardaba solo en las
+relaciones, y devuelve el vocabulario que un grafo de poder necesita —«ocupa el
+cargo», «aliado de», «opositor de»—, del que GLiREL devolvía uno o ninguno por
+lote. El menú se fue con él: elegir modelo era trasladar la decisión a quien
+menos información tenía para tomarla, y dejaba corridas incomparables sin que
+nadie supiera con qué se hizo cada una.
 
 Protocolo, una petición por línea:
-    {"op":"cargar","gliner":"...","spacy":"es_core_news_sm","relaciones":true}
-    {"op":"procesar","id":1,"parrafos":[...],"etiquetas":[...],"predicados":[...]}
+    {"op":"cargar","gliner":"...","spacy":"es_core_news_sm"}
+    {"op":"procesar","id":1,"parrafos":[...],"etiquetas":[...],"claves":{...},"predicados":[...]}
     {"op":"salir"}
 """
 
 import json
+import os
+import re
 import sys
 import time
+from collections import Counter
 
-GLINER_POR_DEFECTO = "urchade/gliner_multi-v2.1"
+GLINER_POR_DEFECTO = "knowledgator/gliner-relex-multi-v1.0"
 SPACY_POR_DEFECTO = "es_core_news_sm"
-GLIREL_POR_DEFECTO = "jackboyla/glirel-large-v0"
 
-# Techo de oraciones por lote que se le pasa a GLiNER de una vez. Su ventana es
-# corta; agrupar oraciones hasta este límite aprovecha el contexto sin pasarse.
+# Techo de caracteres por trozo que se le pasa al modelo de una vez. Agrupar
+# oraciones hasta este límite aprovecha el contexto sin pasarse de su ventana.
 CARACTERES_POR_TROZO = 1200
+
+# «Adriana Camacho: No necesariamente.» Una etiqueta de hablante: hasta seis
+# palabras con mayúscula inicial (o artículos y «de»), dos puntos y espacio, al
+# principio del párrafo.
+ETIQUETA_HABLANTE = re.compile(
+    r"^\s*((?:[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.\-]*|de|del|la|las|el|los|y)"
+    r"(?:\s+(?:[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ.\-]*|de|del|la|las|el|los|y)){0,5}):\s+"
+)
+
+# Un monto tiene una cifra. «salarios», «plata» y «chequeras» hablan de dinero
+# pero no son una cantidad, y el modelo los devolvía como monto con 0,8 de
+# confianza: un umbral no los separa de «10 mil millones de pesos».
+# Un pronombre no es una persona con nombre propio, y el modelo devolvía
+# «Usted», «Yo», «tu» como persona con 0,8 de confianza —por encima de muchos
+# nombres reales—, con lo que ningún umbral los separa. Es una lista cerrada,
+# no un juicio: ninguna de estas palabras es jamás un nombre.
+PRONOMBRES = {
+    "yo", "tú", "tu", "vos", "usted", "ustedes", "él", "ella", "ellos", "ellas",
+    "nosotros", "nosotras", "vosotros", "vosotras", "me", "mí", "te", "ti", "se", "sí",
+    "uno", "una", "otro", "otra", "otros", "otras", "quien", "quién", "alguien", "nadie",
+    "cualquiera", "todos", "todas", "ambos", "ambas",
+}
+
+CIFRA = re.compile(r"\d|%|\$|\b(mil|millón|millones|billón|billones|ciento|cientos|por ciento|centavos?)\b", re.I)
 
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
+
+
+def dispositivo():
+    """Dónde corre el modelo: el GPU de la máquina si lo hay, si no la CPU.
+
+    Medido sobre esta misma ruta de código y doce artículos reales, en un M5
+    Pro: 392 s en CPU y 129 s en MPS, con las 3.124 entidades y las 1.464
+    relaciones idénticas. En MPS la primera pasada con cada longitud de
+    secuencia nueva paga un calentamiento —212 ms frente a 13 después—, que
+    sobre doce artículos disfraza la ganancia y sobre un archivo entero se
+    amortiza a nada: el extractor es un solo proceso de larga vida y las
+    longitudes posibles son finitas.
+
+    fp16 daba un 10 % más y cambiaba tres entidades de tres mil: no compensa
+    perder que dos corridas sean comparables. `LEGAJO_DISPOSITIVO=cpu` fuerza
+    la CPU, para medir o para descartar el GPU como causa de algo.
+    """
+    forzado = os.environ.get("LEGAJO_DISPOSITIVO")
+    if forzado:
+        return forzado
+    import torch
+
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 
 def responder(obj):
@@ -62,6 +124,31 @@ def trozos_por_oracion(doc, limite=CARACTERES_POR_TROZO):
     return trozos or ([(doc.text, 0)] if doc.text else [])
 
 
+def hablantes(parrafos):
+    """Las etiquetas de hablante de una entrevista: «Nombre: » al principio de
+    dos o más párrafos del mismo artículo.
+
+    En una entrevista el nombre de quien habla encabeza cada respuesta —23 veces
+    en un artículo real— y el modelo lo tomaba como una mención más, y peor:
+    relacionaba a la entrevistada con todo lo que mencionaba en su respuesta,
+    «Adriana Camacho trabaja en sindicato». La etiqueta no es parte del texto
+    que se analiza; es quién lo dice. Se exige que se repita para no confundir
+    un titular con dos puntos —«Colombia: un país…»— con un hablante.
+    """
+    cuenta = Counter()
+    for p in parrafos:
+        m = ETIQUETA_HABLANTE.match(p)
+        if m:
+            cuenta[m.group(1)] += 1
+    return {k for k, n in cuenta.items() if n >= 2}
+
+
+def sin_hablante(texto, quienes):
+    """Dónde empieza lo dicho, saltando la etiqueta de hablante si la hay."""
+    m = ETIQUETA_HABLANTE.match(texto)
+    return m.end() if m and m.group(1) in quienes else 0
+
+
 def deduplicar(entidades):
     """Quita repetidas y solapamientos parciales entre trozos.
 
@@ -82,11 +169,11 @@ def deduplicar(entidades):
 class Motor:
     def __init__(self):
         self.nlp = None
-        self.gliner = None
-        self.glirel = None
+        self.modelo = None
         self.nombres = {}
         # Etiqueta del modelo → clave interna. La manda el programa, que es
-        # donde vive el vocabulario.
+        # donde vive el vocabulario. Lo que el modelo devuelva con una etiqueta
+        # que no esté aquí es una señuelo y se descarta.
         self.claves = {}
 
     def cargar(self, cfg):
@@ -111,123 +198,127 @@ class Motor:
 
         from gliner import GLiNER
 
-        nombre_gliner = cfg.get("gliner") or GLINER_POR_DEFECTO
-        log(f"cargando GLiNER {nombre_gliner}…")
-        self.gliner = GLiNER.from_pretrained(nombre_gliner)
-        self.gliner.eval()
+        dev = dispositivo()
+        nombre = cfg.get("gliner") or GLINER_POR_DEFECTO
+        log(f"cargando {nombre} en {dev}…")
+        self.modelo = GLiNER.from_pretrained(nombre).to(dev)
+        self.modelo.eval()
+        if not hasattr(self.modelo, "predict_relations"):
+            raise RuntimeError(
+                f"«{nombre}» no extrae relaciones. Legajo necesita un GLiNER de la familia "
+                f"relex, que haga entidades y relaciones en la misma pasada."
+            )
 
-        if cfg.get("relaciones"):
-            nombre_glirel = cfg.get("glirel") or GLIREL_POR_DEFECTO
-            log(f"cargando GLiREL {nombre_glirel}…")
-            self.glirel = cargar_glirel(nombre_glirel)
-
-        self.nombres = {
-            "spacy": nombre_spacy,
-            "gliner": nombre_gliner,
-            "glirel": (cfg.get("glirel") or GLIREL_POR_DEFECTO) if self.glirel else None,
-        }
+        self.nombres = {"spacy": nombre_spacy, "gliner": nombre, "relaciones": True, "dispositivo": dev}
         return round((time.time() - t0) * 1000)
 
-    def entidades(self, doc, etiquetas, umbral):
-        salida = []
+    def clave(self, etiqueta):
+        return self.claves.get(etiqueta, etiqueta)
+
+    def procesar_articulo(self, parrafos, etiquetas, predicados, umbral, umbral_rel):
+        """Todos los párrafos de un artículo, con lo que solo se sabe viéndolos
+        juntos: quién habla, si es una entrevista."""
+        quienes = hablantes(parrafos)
+        ents_por_parrafo, rels_por_parrafo = [], []
+        for texto in parrafos:
+            base = sin_hablante(texto, quienes)
+            ents, rels = self.procesar(self.nlp(texto[base:]), etiquetas, predicados, umbral, umbral_rel)
+            if base:
+                # Las posiciones vuelven al sistema de coordenadas del párrafo
+                # entero, que es donde la revisión las busca.
+                for e in ents:
+                    e["inicio"] += base
+                    e["fin"] += base
+            ents_por_parrafo.append(ents)
+            rels_por_parrafo.append(rels)
+        return ents_por_parrafo, rels_por_parrafo
+
+    def procesar(self, doc, etiquetas, predicados, umbral, umbral_rel):
+        """Entidades y relaciones de un párrafo, en una pasada por trozo.
+
+        Se le piden los trece predicados siempre. Antes se filtraban por los
+        tipos presentes en el párrafo, pero eso exigía conocer las entidades
+        antes de pedir las relaciones, y aquí salen juntas. Lo que vuelve mal
+        unido —un predicado entre tipos que no admite— se descarta igual.
+        """
+        pedir = [p["etiqueta"] for p in predicados]
+        ents, crudas = [], []
         for trozo, desplazamiento in trozos_por_oracion(doc):
             if not trozo.strip():
                 continue
-            for c in self.gliner.predict_entities(trozo, etiquetas, threshold=umbral):
-                salida.append({
+            if pedir:
+                e, r = self.modelo.predict_relations(
+                    trozo, etiquetas, pedir, threshold=umbral, relation_threshold=umbral_rel
+                )
+            else:
+                e, r = self.modelo.predict_entities(trozo, etiquetas, threshold=umbral), []
+            for c in e:
+                # Lo que cayó en una etiqueta señuelo no es una entidad: la
+                # señuelo existe para que un nombre de grupo —«indígenas»,
+                # «niños»— tenga dónde caer que no sea «persona».
+                if self.claves and c["label"] not in self.claves:
+                    continue
+                clave = self.clave(c["label"])
+                if clave == "monto" and not CIFRA.search(c["text"]):
+                    continue
+                if clave == "persona" and c["text"].strip().lower() in PRONOMBRES:
+                    continue
+                ents.append({
                     "texto": c["text"],
                     "inicio": c["start"] + desplazamiento,
                     "fin": c["end"] + desplazamiento,
                     "etiqueta": c["label"],
                     "score": round(float(c["score"]), 4),
                 })
-        return deduplicar(salida)
+            crudas.extend(r or [])
+        ents = deduplicar(ents)
+        return ents, self.relaciones(crudas, ents, predicados, umbral_rel)
 
-    def clave(self, etiqueta):
-        return self.claves.get(etiqueta, etiqueta)
+    def relaciones(self, crudas, ents, predicados, umbral):
+        """Las relaciones que sobreviven al vocabulario.
 
-    def relaciones(self, doc, ents, predicados, umbral):
-        """Relaciones entre las entidades ya encontradas.
-
-        GLiREL no trabaja sobre cadenas sino sobre **tokens**: quiere el texto
-        como lista de tokens y las entidades como índices de token. Aquí es
-        donde spaCy paga su sitio en el pipeline — alinear los desplazamientos
-        de carácter que devuelve GLiNER a límites de token es exactamente lo
-        que hace falta, y hacerlo a mano con expresiones regulares sería
-        frágil en español.
+        El modelo devuelve cada relación con el texto de sus dos extremos. Se
+        les busca el tipo entre las entidades que quedaron —si un extremo cayó
+        en una señuelo o lo quitó el deduplicado, la relación se va con él— y
+        se comprueba que el predicado admita esos tipos: «Álvaro Leyva trabaja
+        en Bogotá» con Bogotá como lugar es imposible por definición, y servirlo
+        a revisar es gastar atención humana en descartarlo.
         """
-        if not self.glirel or len(ents) < 2 or not predicados:
-            return []
-
-        # Solo lo que puede aplicar a los tipos que hay en este párrafo.
-        tipos = {self.clave(e["etiqueta"]) for e in ents}
-        utiles = predicados_del_parrafo(predicados, tipos)
-        if not utiles:
-            return []
-        etiquetas_utiles = [p["etiqueta"] for p in utiles]
-
-        tokens = [t.text for t in doc]
-        spans = []
-        for e in ents:
-            span = doc.char_span(e["inicio"], e["fin"], label=e["etiqueta"], alignment_mode="expand")
-            if span is not None and span.end > span.start:
-                spans.append(span)
-        spans = spacy_sin_solapes(spans)
-        if len(spans) < 2:
-            return []
-
-        # Formato de GLiREL: [inicio_token, fin_token_inclusive, etiqueta, texto]
-        ner = [[s.start, s.end - 1, s.label_, s.text] for s in spans]
-
-        try:
-            crudas = self.glirel.predict_relations(
-                tokens, etiquetas_utiles, threshold=umbral, ner=ner, top_k=1
-            )
-        except Exception as e:  # noqa: BLE001
-            log(f"GLiREL falló: {type(e).__name__}: {e}")
-            return []
-
-        # El tipo de cada mención, para poder descartar lo que su propio
-        # predicado no admite. Se toma del span alineado y no de la entidad
-        # original porque es lo que GLiREL vio.
-        tipo_de = {s.text: self.clave(s.label_) for s in spans}
-
+        tipo_de = {e["texto"]: self.clave(e["etiqueta"]) for e in ents}
         out = []
-        for r in crudas or []:
+        for r in crudas:
             score = float(r.get("score", 0))
             if score < umbral:
                 continue
-            cabeza = r.get("head_text")
-            cola = r.get("tail_text")
-            a = " ".join(cabeza) if isinstance(cabeza, list) else str(cabeza or "")
-            b = " ".join(cola) if isinstance(cola, list) else str(cola or "")
-            etiqueta = r.get("label", "")
-
+            a, b = _texto(r, "head"), _texto(r, "tail")
+            etiqueta = r.get("relation") or r.get("label") or ""
             # Nada se relaciona consigo mismo. Sale cuando la misma cadena
-            # aparece dos veces en el párrafo y el modelo empareja las dos
-            # apariciones: «Corte Suprema investigado por Corte Suprema».
-            if a == b:
+            # aparece dos veces en el párrafo y el modelo empareja las dos.
+            if not a or not b or a == b:
                 continue
-
-            # Lo que une tipos que el predicado no admite es imposible, y
-            # servirlo a revisar es gastar atención humana en descartarlo.
             ta, tb = tipo_de.get(a), tipo_de.get(b)
             if ta is None or tb is None:
                 continue
-            if not any(p["etiqueta"] == etiqueta for p in aplicables(utiles, ta, tb)):
+            if not any(p["etiqueta"] == etiqueta for p in aplicables(predicados, ta, tb)):
                 continue
-
             out.append({"a": a, "b": b, "predicado": etiqueta, "score": round(score, 4)})
-        return sin_espejos(out, utiles)
+        return sin_espejos(out, predicados)
+
+
+def _texto(r, lado):
+    """El texto de un extremo, venga como diccionario, lista de tokens o cadena."""
+    v = r.get(lado)
+    if v is None:
+        v = r.get(f"{lado}_text")
+    if isinstance(v, dict):
+        v = v.get("text")
+    if isinstance(v, list):
+        v = " ".join(map(str, v))
+    return str(v) if v else ""
 
 
 def modelos_spacy_instalados():
-    """Los modelos de spaCy presentes en este entorno.
-
-    Ofrecer en la interfaz tres modelos cuando solo hay uno instalado convierte
-    una elección en una trampa: se elige el grande, se espera, y lo que llega es
-    un error de Python en mitad de la extracción.
-    """
+    """Los modelos de spaCy presentes en este entorno."""
     try:
         import spacy.util
 
@@ -248,37 +339,20 @@ def aplicables(predicados, tipo_a, tipo_b):
     ]
 
 
-def predicados_del_parrafo(predicados, tipos):
-    """Lo único que tiene sentido preguntar de este párrafo.
-
-    Pedirle a GLiREL los trece predicados cuando en el párrafo solo hay montos y
-    leyes es pagar por respuestas que se van a descartar: medido sobre un lote
-    real, de trece solo ocho aplicaban de media.
-    """
-    utiles = []
-    for p in predicados:
-        desde = set(p.get("desde") or tipos)
-        hasta = set(p.get("hasta") or tipos)
-        if tipos & desde and tipos & hasta:
-            utiles.append(p)
-    return utiles
-
-
 def sin_espejos(relaciones, predicados):
     """Se queda con una sola dirección de cada par.
 
-    GLiREL propone casi siempre los dos sentidos con puntuaciones casi iguales
-    —«Santos parte de Partido Liberal» 0,88 y su espejo 0,87—, porque no está
-    determinando dirección sino midiendo cercanía. Servir las dos a revisar es
-    hacer que la persona lea dos veces el mismo hecho.
+    Los modelos de relaciones proponen casi siempre los dos sentidos con
+    puntuaciones casi iguales —«Santos parte de Partido Liberal» 0,88 y su
+    espejo 0,87—, porque no están determinando dirección sino midiendo
+    cercanía. Servir las dos a revisar es hacer que la persona lea dos veces el
+    mismo hecho.
 
-    En las simétricas —aliado, opositor, familiar— da igual cuál se conserve. En
-    las demás gana la de más confianza, que es lo único que hay para elegir.
+    Se aplica a todos los predicados, no solo a los simétricos: para los
+    asimétricos, la restricción de tipos ya habrá matado la dirección
+    imposible, así que lo que llegue aquí en dos sentidos es genuinamente
+    ambiguo y la puntuación es lo único que hay para desempatar.
     """
-    # Se aplica a todos los predicados, no solo a los simétricos: para los
-    # asimétricos, la restricción de tipos ya habrá matado la dirección
-    # imposible, así que lo que llegue aquí en dos sentidos es genuinamente
-    # ambiguo y la puntuación es lo único que hay para desempatar.
     mejor = {}
     for r in relaciones:
         clave = (r["predicado"], *sorted((r["a"], r["b"])))
@@ -288,50 +362,6 @@ def sin_espejos(relaciones, predicados):
     # Se devuelve en el orden en que llegaron, que es el de lectura.
     conservadas = {id(r) for r in mejor.values()}
     return [r for r in relaciones if id(r) in conservadas]
-
-
-def cargar_glirel(nombre):
-    """Carga GLiREL sorteando el desajuste con huggingface_hub.
-
-    Su `_from_pretrained` exige `proxies` y `resume_download`, argumentos que
-    las versiones nuevas del hub ya no le pasan. Se llama directamente con los
-    valores por defecto en vez de esperar a que el paquete se actualice.
-    """
-    try:
-        from glirel import GLiREL
-    except Exception as e:  # noqa: BLE001
-        log(f"GLiREL no importable ({type(e).__name__}: {e}); se sigue sin relaciones")
-        return None
-
-    try:
-        m = GLiREL.from_pretrained(nombre)
-    except TypeError:
-        try:
-            m = GLiREL._from_pretrained(
-                model_id=nombre, revision=None, cache_dir=None, force_download=False,
-                proxies=None, resume_download=False, local_files_only=False, token=None,
-                map_location="cpu", strict=False,
-            )
-        except Exception as e:  # noqa: BLE001
-            log(f"GLiREL no disponible ({type(e).__name__}: {e}); se sigue sin relaciones")
-            return None
-    except Exception as e:  # noqa: BLE001
-        log(f"GLiREL no disponible ({type(e).__name__}: {e}); se sigue sin relaciones")
-        return None
-
-    m.eval()
-    return m
-
-
-def spacy_sin_solapes(spans):
-    """spaCy no admite entidades solapadas: gana la más larga."""
-    spans = sorted(spans, key=lambda s: (s.start_char, -(s.end_char - s.start_char)))
-    out = []
-    for s in spans:
-        if any(s.start_char < o.end_char and s.end_char > o.start_char for o in out):
-            continue
-        out.append(s)
-    return out
 
 
 def main():
@@ -362,7 +392,7 @@ def main():
                 responder({"ok": True, "evento": "listo", "ms": ms, **motor.nombres})
 
             elif op == "procesar":
-                if motor.gliner is None:
+                if motor.modelo is None:
                     responder({"ok": False, "id": pet.get("id"), "error": "el modelo no está cargado"})
                     continue
                 t0 = time.time()
@@ -375,12 +405,9 @@ def main():
                 # Párrafo a párrafo: la anotación manual guarda las posiciones
                 # dentro del párrafo, y comparar las dos cosas exige el mismo
                 # sistema de coordenadas.
-                ents_por_parrafo, rels_por_parrafo = [], []
-                for texto in pet.get("parrafos") or []:
-                    doc = motor.nlp(texto)
-                    ents = motor.entidades(doc, etiquetas, umbral)
-                    ents_por_parrafo.append(ents)
-                    rels_por_parrafo.append(motor.relaciones(doc, ents, predicados, umbral_rel))
+                ents_por_parrafo, rels_por_parrafo = motor.procesar_articulo(
+                    pet.get("parrafos") or [], etiquetas, predicados, umbral, umbral_rel
+                )
 
                 responder({
                     "ok": True, "id": pet.get("id"),

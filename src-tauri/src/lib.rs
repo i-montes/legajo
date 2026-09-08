@@ -137,6 +137,7 @@ pub fn run() {
             commands::aplicar_calibracion,
             commands::calibracion_guardada,
             commands::iniciar_extraccion,
+            commands::deshacer_extraccion,
             commands::cancelar_extraccion,
             commands::extrayendo,
             commands::avance_extraccion,

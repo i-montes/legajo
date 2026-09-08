@@ -216,7 +216,7 @@ fn solo_para_su_dueno(_path: &Path) {}
 ///
 /// Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo hecho, y
 /// guardarlos como dos filas hace que el grafo lo cuente dos veces y que quien
-/// revisa lea dos veces lo mismo. GLiREL los propone casi siempre en los dos
+/// revisa lea dos veces lo mismo. El modelo los propone casi siempre en los dos
 /// sentidos con puntuaciones casi iguales, pero el extractor no es la única
 /// fuente: una persona también puede marcar las dos a mano. Por eso se ordena
 /// aquí, al guardar, y no en quien produce: es la única puerta por la que pasan
@@ -1405,7 +1405,7 @@ impl Db {
                 if am == bm { continue; }
                 let rid = format!("r{pi}-{am}-{bm}");
                 if relaciones.iter().any(|r: &RelacionFila| r.rid == rid) { continue; }
-                // GLiREL no predice tiempo verbal. «Vigente» es lo que el
+                // El modelo no predice tiempo verbal. «Vigente» es lo que el
                 // texto afirma por defecto, y corregirlo es un clic; asumir lo
                 // contrario obligaría a corregir la mayoría.
                 relaciones.push(RelacionFila {
@@ -1600,7 +1600,7 @@ impl Db {
                                     AND ce.date_valid = 1
                  WHERE r.lote_id = ?1
                  UNION ALL
-                 -- Lo que solo propuso el modelo entra como vigente: GLiREL no
+                 -- Lo que solo propuso el modelo entra como vigente: el modelo no
                  -- predice tiempo verbal, y decir «vigente» es repetir lo que el
                  -- texto afirma en presente, no inventar una fecha.
                  SELECT x.a, x.b, x.predicado, x.wp_id, 0, 'vigente',
@@ -1897,6 +1897,50 @@ impl Db {
              ORDER BY s.wp_id"))?;
         let v = st.query_map([lote_id], |r| r.get::<_, i64>(0))?.filter_map(|r| r.ok()).collect();
         Ok(v)
+    }
+
+    /// Deshace la extracción de parte de un lote para poder repetirla.
+    ///
+    /// Volver a extraer es una operación normal, no una anomalía: cambia el
+    /// modelo, cambian las reglas, cambia la calibración, y lo propuesto sobre
+    /// un lote queda viejo. Sin esto la única salida era crear otro lote, y
+    /// así aparecieron dos lotes idénticos con la misma revisión encima.
+    ///
+    /// Se borran las **propuestas** —entidades y relaciones extraídas— y se
+    /// marcan los artículos como pendientes. Las marcas de la persona y sus
+    /// tiempos no se tocan: son su trabajo, no el del modelo. Devuelve cuántos
+    /// artículos vuelven a la cola.
+    pub fn deshacer_extraccion(
+        &self, lote_id: i64, solo_calibracion: bool, terminos: &[i64],
+    ) -> Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let filtro = if solo_calibracion { "AND s.calibra = 1" } else { "" };
+        let rama = if terminos.is_empty() {
+            String::new()
+        } else {
+            let ids = terminos.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+            format!(
+                " AND EXISTS (SELECT 1 FROM census_terms x
+                              WHERE x.connection_id = d.connection_id AND x.wp_id = s.wp_id
+                                AND x.taxonomy = d.taxonomia AND x.term_id IN ({ids}))")
+        };
+        let tx = conn.transaction()?;
+        let ids: Vec<i64> = {
+            let mut st = tx.prepare(&format!(
+                "SELECT s.wp_id FROM lote_articulos s
+                 JOIN lotes d ON d.id = s.lote_id
+                 WHERE s.lote_id = ?1 {filtro} AND s.extraido_at IS NOT NULL {rama}"))?;
+            let v: Vec<i64> = st.query_map([lote_id], |r| r.get::<_, i64>(0))?
+                .filter_map(|r| r.ok()).collect();
+            v
+        };
+        for wp in &ids {
+            tx.execute("DELETE FROM extraidas WHERE lote_id = ?1 AND wp_id = ?2", rusqlite::params![lote_id, wp])?;
+            tx.execute("DELETE FROM relaciones_extraidas WHERE lote_id = ?1 AND wp_id = ?2", rusqlite::params![lote_id, wp])?;
+            tx.execute("UPDATE lote_articulos SET extraido_at = NULL WHERE lote_id = ?1 AND wp_id = ?2", rusqlite::params![lote_id, wp])?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
     }
 
     /// Cuáles de estos artículos no tienen todavía el cuerpo en caché.
