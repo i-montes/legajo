@@ -398,7 +398,8 @@ export interface CatalogoModelos {
 
 export interface Calibracion {
   umbrales: Record<string, number>;
-  bloqueadas: string[];
+  /** (tipo, texto): lo que no se propone más, con el tipo que se rechazó. */
+  bloqueadas: [string, string][];
   diccionario: [string, string][];
 }
 

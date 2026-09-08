@@ -1348,8 +1348,8 @@ impl Db {
     /// relación cuyos extremos no están marcados no es corregible.
     pub fn propuestas(&self, lote_id: i64, wp_id: i64) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
         let cal = self.calibracion(lote_id)?.unwrap_or_default();
-        let bloqueadas: std::collections::HashSet<String> =
-            cal.bloqueadas.iter().map(|t| t.to_lowercase()).collect();
+        let bloqueadas: std::collections::HashSet<(String, String)> =
+            cal.bloqueadas.iter().map(|(t, x)| (t.clone(), x.to_lowercase())).collect();
 
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
@@ -1366,7 +1366,7 @@ impl Db {
         let mut menciones: Vec<Mencion> = Vec::new();
         for (pi, ini, fin, texto, etiqueta, score) in crudas {
             let umbral = cal.umbrales.get(&etiqueta).copied().unwrap_or(0.50);
-            if score < umbral || bloqueadas.contains(&texto.to_lowercase()) {
+            if score < umbral || bloqueadas.contains(&(etiqueta.clone(), texto.to_lowercase())) {
                 continue;
             }
             menciones.push(Mencion {
@@ -3055,7 +3055,7 @@ mod tests {
         // «Congreso», que ya se rechazó dos veces.
         let cal = crate::calibracion::Calibracion {
             umbrales: [("persona".to_string(), 0.96)].into_iter().collect(),
-            bloqueadas: vec!["congreso".into()],
+            bloqueadas: vec![("lugar".into(), "congreso".into())],
             diccionario: vec![],
         };
         db.guardar_calibracion(1, &cal).unwrap();

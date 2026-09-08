@@ -24,10 +24,30 @@ use std::collections::{HashMap, HashSet};
 pub struct Calibracion {
     /// Corte de confianza por tipo.
     pub umbrales: HashMap<String, f64>,
-    /// Textos que no se proponen nunca, en minúscula.
-    pub bloqueadas: Vec<String>,
+    /// Lo que no se propone nunca: (tipo, texto en minúscula).
+    ///
+    /// Lleva el tipo porque el rechazo lo tiene. Cuando bloqueaba solo por
+    /// texto, dos rechazos de «Colombia» como *organización* escondieron 1.229
+    /// menciones de «Colombia» como *lugar* en un archivo colombiano. Las
+    /// listas guardadas con el formato viejo —solo texto— se descartan al leer:
+    /// eran justamente las que hacían daño.
+    #[serde(deserialize_with = "bloqueos_con_tipo")]
+    pub bloqueadas: Vec<(String, String)>,
     /// Textos que se marcan siempre, con su tipo.
     pub diccionario: Vec<(String, String)>,
+}
+
+/// Acepta pares (tipo, texto) y deja caer las entradas del formato anterior,
+/// que eran solo texto y bloqueaban sin mirar el tipo.
+fn bloqueos_con_tipo<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<(String, String)>, D::Error> {
+    let crudo: Vec<serde_json::Value> = Deserialize::deserialize(d)?;
+    Ok(crudo
+        .into_iter()
+        .filter_map(|v| {
+            let par = v.as_array()?;
+            Some((par.first()?.as_str()?.to_string(), par.get(1)?.as_str()?.to_string()))
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,7 +74,16 @@ pub struct Resultado {
 }
 
 const UMBRAL_MIN: f64 = 0.30;
-const UMBRAL_MAX: f64 = 0.90;
+
+/// Los cortes que se prueban. De 0,30 a 0,85 de cinco en cinco; de ahí a 0,99
+/// de uno en uno. El modelo actual satura —mediana 0,87, casi la mitad de lo
+/// que devuelve por encima de 0,9— y con el techo anterior de 0,90 la zona
+/// donde había que cortar fino ni siquiera se podía probar.
+fn cortes() -> Vec<f64> {
+    let mut v: Vec<f64> = (0..=11).map(|i| UMBRAL_MIN + i as f64 * 0.05).collect();
+    v.extend((86..=99).map(|i| i as f64 / 100.0));
+    v.into_iter().map(|x| (x * 100.0).round() / 100.0).collect()
+}
 
 /// Una propuesta del modelo, con lo que la persona decidió sobre ella.
 struct Propuesta {
@@ -85,9 +114,7 @@ fn mejor_umbral(props: &[&Propuesta], anadidas: f64) -> (f64, f64, f64) {
     // 0,49999999999999994, que además de feos en la configuración hacen
     // comparaciones frágiles.
     let mut mejor = (UMBRAL_MIN, base);
-    for paso in 0..=12 {
-        let t = UMBRAL_MIN + paso as f64 * 0.05;
-        if t > UMBRAL_MAX { break; }
+    for t in cortes() {
         let sobre: Vec<_> = props.iter().filter(|p| p.score >= t).collect();
         let vp = sobre.iter().filter(|p| p.aceptada).count() as f64;
         let fp = sobre.len() as f64 - vp;
@@ -97,13 +124,26 @@ fn mejor_umbral(props: &[&Propuesta], anadidas: f64) -> (f64, f64, f64) {
         // Ante empate gana el umbral más bajo: conserva más candidatos, y
         // descartar de más es peor que proponer de más, que se borra con una tecla.
         if s > mejor.1 + 1e-9 {
-            mejor = ((t * 100.0).round() / 100.0, s);
+            mejor = (t, s);
         }
     }
     (mejor.0, base, mejor.1)
 }
 
 pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
+    // Lo que la revisión estaba enseñando cuando la persona revisó. Una
+    // propuesta que nunca llegó a la pantalla —por debajo del corte, o
+    // bloqueada— no fue rechazada por nadie, y contarla como rechazo fabricaba
+    // bloqueos de la nada: así acabó «Colombia» en la lista.
+    let vigente = db.calibracion(lote_id)?.unwrap_or_default();
+    let bloqueadas_vigentes: HashSet<(String, String)> = vigente
+        .bloqueadas.iter().map(|(t, x)| (t.clone(), x.to_lowercase())).collect();
+    let visible = |tipo: &str, texto: &str, score: f64| -> bool {
+        // El mismo criterio que `Db::propuestas`, que es quien sirve la pantalla.
+        score >= vigente.umbrales.get(tipo).copied().unwrap_or(0.50)
+            && !bloqueadas_vigentes.contains(&(tipo.to_string(), texto.to_lowercase()))
+    };
+
     db.con(|c| {
         // Artículos con extracción y con revisión humana cerrada: solo ahí se
         // sabe qué se aceptó y qué se rechazó.
@@ -138,7 +178,9 @@ pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
                     .unwrap_or_default()
             };
 
-            let propuestas = leer("extraidas");
+            let propuestas: Vec<_> = leer("extraidas").into_iter()
+                .filter(|(_, _, _, texto, etiqueta, score)| visible(etiqueta, texto, *score))
+                .collect();
             let humanas = leer("anotaciones");
 
             // Una propuesta se considera aceptada si la persona dejó una marca
@@ -171,9 +213,9 @@ pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
 
         // Se bloquea lo rechazado dos veces o más: una vez puede ser el
         // contexto; dos veces es un patrón.
-        let mut bloqueadas: Vec<String> = rechazos.iter()
+        let mut bloqueadas: Vec<(String, String)> = rechazos.iter()
             .filter(|(_, n)| **n >= 2)
-            .map(|((_, t), _)| t.clone())
+            .map(|((tipo, texto), _)| (tipo.clone(), texto.clone()))
             .collect();
         bloqueadas.sort();
         bloqueadas.dedup();
@@ -268,6 +310,69 @@ mod tests {
         let refs: Vec<&Propuesta> = v.iter().collect();
         let (umbral, _, _) = mejor_umbral(&refs, 0.0);
         assert!(umbral < 0.4, "umbral {umbral}: cortaría doce aciertos por un fallo");
+    }
+
+    /// Lo que nunca llegó a la pantalla no cuenta como rechazado.
+    ///
+    /// Es el fallo real: «Colombia» propuesta dos veces como organización a
+    /// 0,3 —por debajo del corte, invisible en la revisión— contaba como dos
+    /// rechazos, entraba en la lista de bloqueo, y la lista bloqueaba por texto
+    /// sin mirar el tipo: 1.229 menciones de «Colombia» como lugar escondidas.
+    #[test]
+    fn lo_que_no_se_vio_no_se_rechazo() {
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-calibrar.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.con(|c| {
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json,
+                   transport_label, discovery_json) VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, 100), (1, 101);
+                 INSERT INTO lote_articulos (lote_id, wp_id) VALUES (1, 102);
+                 -- Visible y conservada; invisible (0,3) dos veces como organización.
+                 INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score) VALUES
+                   (1,100,0, 0, 8,'Colombia','lugar',0.96),
+                   (1,100,0,20,28,'Colombia','organizacion',0.31),
+                   (1,101,0, 0, 8,'Colombia','lugar',0.95),
+                   (1,101,0,20,28,'Colombia','organizacion',0.33);
+                 -- La persona conservó lo que vio (auto = 1) y cerró los dos.
+                 INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo, auto) VALUES
+                   (1,100,'m0-0-8',0,0,8,'Colombia','lugar',1),
+                   (1,101,'m0-0-8',0,0,8,'Colombia','lugar',1);
+                 INSERT INTO tiempos (lote_id, wp_id, segundos, cerrado) VALUES (1,100,30,1), (1,101,30,1);",
+            )?;
+            Ok(())
+        }).unwrap();
+        let r = calibrar(&db, 1).unwrap();
+        assert!(r.calibracion.bloqueadas.is_empty(),
+            "nadie rechazó nada: {:?}", r.calibracion.bloqueadas);
+        let lugar = r.por_tipo.iter().find(|m| m.tipo == "lugar").expect("hay lugar");
+        assert_eq!((lugar.propuestas, lugar.aceptadas, lugar.rechazadas), (2, 2, 0));
+        assert!(r.por_tipo.iter().all(|m| m.tipo != "organizacion"),
+            "las de 0,3 nunca se vieron: no hay nada que decir de organización");
+
+        // Y si un día sí se rechaza dos veces, bloquea ese tipo y no los demás.
+        let cal = Calibracion {
+            umbrales: HashMap::new(),
+            bloqueadas: vec![("organizacion".into(), "colombia".into())],
+            diccionario: vec![],
+        };
+        db.guardar_calibracion(1, &cal).unwrap();
+        let (m, _) = db.propuestas(1, 100).unwrap();
+        assert!(m.iter().any(|x| x.texto == "Colombia" && x.tipo == "lugar"),
+            "el bloqueo de organización no puede esconder el lugar: {m:?}");
+
+        // Una lista del formato viejo —solo texto— se descarta al leer.
+        db.con(|c| {
+            c.execute("UPDATE lotes SET calibracion_json = ?1 WHERE id = 1",
+                [r#"{"umbrales":{},"bloqueadas":["colombia"],"diccionario":[]}"#])?;
+            Ok(())
+        }).unwrap();
+        let vieja = db.calibracion(1).unwrap().expect("se lee");
+        assert!(vieja.bloqueadas.is_empty(), "el formato viejo bloqueaba sin tipo: fuera");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
