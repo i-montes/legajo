@@ -1,5 +1,10 @@
 # Plan de entrenamiento: un extractor propio de entidades y relaciones en español
 
+> **Nota (2026-09-09):** la parte de datos de este plan quedó sustituida por
+> [`plan-entrenamiento.md`](plan-entrenamiento.md), escrito tras encontrar las
+> extracciones de Quién-AI en Mongo. Este documento se conserva por el
+> razonamiento y la ontología, a los que el nuevo remite.
+
 Este documento es el plan completo para pasar de un modelo genérico que se usa
 tal cual (GLiNER-relex multilingüe, ver [`pipeline.md`](pipeline.md)) a **un
 modelo afinado con datos de La Silla Vacía**, en español, que extraiga los ocho
