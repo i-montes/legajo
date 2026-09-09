@@ -156,6 +156,11 @@ porcentaje.
 
 ## Qué modelo, medido
 
+> ¿Y un LLM local en vez de GLiNER? Se midió después, con siete modelos de 1,7B
+> a 14B, y la respuesta está en [`llm.md`](llm.md): sin afinar, 14–35 veces más
+> lentos y con más ruido; el camino es afinar con datos propios.
+
+
 La pregunta era cuál de los cuatro GLiNER del menú usar, y si convenía afinar
 uno. Se respondió midiendo, con `sidecar/banco.py`, que corre **la misma ruta
 de código que la app** sobre artículos reales del archivo —los doce de
