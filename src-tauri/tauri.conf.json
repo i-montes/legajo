@@ -37,7 +37,8 @@
     "resources": {
       "../sidecar/legajo_ner.py": "sidecar/legajo_ner.py",
       "../sidecar/preparar.py": "sidecar/preparar.py",
-      "../sidecar/requirements.txt": "sidecar/requirements.txt"
+      "../sidecar/requirements.txt": "sidecar/requirements.txt",
+      "../sidecar/identidades/colombia.jsonl": "sidecar/identidades/colombia.jsonl"
     },
     "shortDescription": "Radiografía y muestreo del archivo de un sitio en WordPress",
     "longDescription": "Legajo conecta el archivo de cualquier sitio en WordPress, lo lee entero, y extrae entidades y relaciones con corrección humana por delante. Todo el procesamiento ocurre en el computador.",

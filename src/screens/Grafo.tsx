@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Boton, Encabezado, Glifo, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
-import { grafoDuplicados, grafoEntidades, grafoRelaciones, grafoResumen, grafoSinNombrar } from "../lib/ipc";
-import type { AristaGrafo, Caso, NodoGrafo, ResumenGrafo, SinNombrar } from "../types";
+import { decidirPar, deshacerResolucion, grafoDuplicados, grafoEntidades, grafoEvidencia, grafoRelaciones, grafoResumen, grafoSinNombrar, resolucionesDelLote } from "../lib/ipc";
+import type { AristaGrafo, Caso, Evidencia, NodoGrafo, Resolucion, ResumenGrafo, SinNombrar } from "../types";
 import type { EstadoApp } from "../App";
 
 const num = (n: number) => n.toLocaleString("es-CO");
@@ -16,15 +16,52 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   const [filtro, setFiltro] = useState<string | null>(null);
   const [dobles, setDobles] = useState<Caso[]>([]);
   const [anonimas, setAnonimas] = useState<SinNombrar[]>([]);
+  /* Lo decidido sobre pares de nombres, por quien sea: se enseña porque el
+     grafo lo funde, y lo que se funde sin que se vea es un error escondido. */
+  const [decididas, setDecididas] = useState<Resolucion[]>([]);
+  const [verDecididas, setVerDecididas] = useState(false);
+
+  const recargar = (lote: number) => {
+    grafoResumen(lote).then(setRes).catch(() => {});
+    grafoEntidades(lote, 300).then(setEnts).catch(() => {});
+    grafoRelaciones(lote, 200).then(setRels).catch(() => {});
+    grafoDuplicados(lote).then(setDobles).catch(() => {});
+    grafoSinNombrar(lote).then(setAnonimas).catch(() => {});
+    resolucionesDelLote(lote).then(setDecididas).catch(() => {});
+  };
 
   useEffect(() => {
     if (loteId == null) return;
-    grafoResumen(loteId).then(setRes).catch(() => {});
-    grafoEntidades(loteId, 300).then(setEnts).catch(() => {});
-    grafoRelaciones(loteId, 200).then(setRels).catch(() => {});
-    grafoDuplicados(loteId).then(setDobles).catch(() => {});
-    grafoSinNombrar(loteId).then(setAnonimas).catch(() => {});
+    recargar(loteId);
   }, [loteId]);
+
+  const decidir = async (c: Caso, misma: boolean) => {
+    if (loteId == null) return;
+    await decidirPar(loteId, c, misma).catch(() => {});
+    recargar(loteId);
+  };
+  const deshacer = async (r: Resolucion) => {
+    if (loteId == null) return;
+    await deshacerResolucion(loteId, r.clave).catch(() => {});
+    recargar(loteId);
+  };
+
+  /* La relación abierta y de dónde sale: se pide al pulsar, no antes, porque
+     son doscientas aristas y cada una arrastra sus párrafos. */
+  const [abierta, setAbierta] = useState<number | null>(null);
+  const [evidencia, setEvidencia] = useState<Evidencia[] | null>(null);
+  const [evidenciaError, setEvidenciaError] = useState<string | null>(null);
+  const abrir = async (i: number, r: AristaGrafo) => {
+    if (abierta === i) { setAbierta(null); return; }
+    setAbierta(i); setEvidencia(null); setEvidenciaError(null);
+    if (loteId != null) grafoEvidencia(loteId, r).then(setEvidencia).catch((e) => setEvidenciaError(String(e)));
+  };
+
+  const fundidas = decididas.filter((r) => r.decision === "misma");
+  const separadas = decididas.filter((r) => r.decision === "distinta");
+  const dudasJuez = decididas.filter((r) => r.decision === "posponer" && r.fuente.startsWith("juez"));
+  const quien = (f: string) =>
+    f === "persona" ? "tú" : f === "regla" ? "la grafía" : f === "quien-ai" ? "Quién-AI" : `el juez (${f.replace(/^juez:/, "")})`;
 
   if (loteId == null || !res) {
     return (
@@ -142,27 +179,68 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
             <Glifo estado="advertencia" size={11} />
             <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "62ch" }}>
               {dobles.length === 1
-                ? "Un par de nombres parece ser la misma entidad"
-                : `${num(dobles.length)} pares de nombres parecen ser la misma entidad`}
-              , y el grafo los cuenta por separado. Solo funde lo que marcaste con
-              <span className="t-mono" style={{ margin: "0 3px" }}>=</span>
-              al revisar: no adivina, para no inventarse identidades que nadie confirmó.
+                ? "Un par de nombres podría ser la misma entidad"
+                : `${num(dobles.length)} pares de nombres podrían ser la misma entidad`}
+              , y el grafo los cuenta por separado hasta que alguien lo decida. Funde lo que
+              marcaste con <span className="t-mono" style={{ margin: "0 3px" }}>=</span> al revisar,
+              lo que el diccionario de Quién-AI tiene curado y lo que el juez decidió con los párrafos;
+              lo demás queda aquí para que lo digas tú.
             </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 22 }}>
-            {dobles.slice(0, 6).map((c) => (
+            {dobles.slice(0, 8).map((c) => (
               <div key={c.clave} style={{ fontSize: 12.5, color: "var(--t2)", display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
                 <span style={{ width: 7, height: 7, borderRadius: 2, background: colorTipo(c.tipo), display: "block" }} />
                 <span style={{ color: "var(--t1)" }}>{c.a.nombre}</span>
                 <span style={{ color: "var(--t3)" }}>·</span>
                 <span style={{ color: "var(--t1)" }}>{c.b.nombre}</span>
                 <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }}>{c.motivo}</span>
+                <span style={{ flex: 1 }} />
+                <Accion onClick={() => decidir(c, true)} titulo="Son la misma entidad">= misma</Accion>
+                <Accion onClick={() => decidir(c, false)} titulo="Son entidades distintas">≠ distintas</Accion>
               </div>
             ))}
-            {dobles.length > 6 && (
-              <span style={{ fontSize: 12, color: "var(--t3)" }}>y {num(dobles.length - 6)} más</span>
+            {dobles.length > 8 && (
+              <span style={{ fontSize: 12, color: "var(--t3)" }}>y {num(dobles.length - 8)} más</span>
             )}
           </div>
+        </div>
+      )}
+
+      {decididas.length > 0 && (
+        <div style={{ padding: "13px 16px", background: "var(--hundida)", borderRadius: 10, marginBottom: "var(--esp-11)" }}>
+          <div style={{ display: "flex", gap: 11, alignItems: "baseline" }}>
+            <Glifo estado="neutro" size={11} />
+            <span className="t-menor" style={{ color: "var(--t1)", lineHeight: 1.7, maxWidth: "62ch" }}>
+              {num(fundidas.length)} {fundidas.length === 1 ? "par fundido" : "pares fundidos"} y {num(separadas.length)} {separadas.length === 1 ? "separado" : "separados"}
+              {dudasJuez.length > 0 && <> · el juez dejó {num(dudasJuez.length)} en duda</>}
+              . Cada decisión dice quién la tomó y por qué; se puede deshacer.
+            </span>
+            <span style={{ flex: 1 }} />
+            <Accion onClick={() => setVerDecididas((v) => !v)} titulo="Ver las decisiones">{verDecididas ? "ocultar" : "ver"}</Accion>
+          </div>
+          {verDecididas && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 22, marginTop: 9 }}>
+              {decididas.filter((r) => r.decision !== "posponer" || r.fuente.startsWith("juez")).slice(0, 40).map((r) => (
+                <div key={r.clave} style={{ fontSize: 12.5, color: "var(--t2)", display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 2, background: colorTipo(r.tipo), display: "block" }} />
+                  <span style={{ color: "var(--t1)" }}>{r.a}</span>
+                  <span className="t-mono" style={{ color: r.decision === "misma" ? "var(--exito)" : "var(--t3)", fontSize: 11 }}>
+                    {r.decision === "misma" ? "=" : r.decision === "distinta" ? "≠" : "?"}
+                  </span>
+                  <span style={{ color: "var(--t1)" }}>{r.b}</span>
+                  <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }} title={r.motivo ?? ""}>
+                    {quien(r.fuente)}{r.motivo ? ` · ${r.motivo.length > 70 ? r.motivo.slice(0, 70) + "…" : r.motivo}` : ""}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  {r.fuente !== "persona" && <Accion onClick={() => deshacer(r)} titulo="Devolver a la cola de dudas">deshacer</Accion>}
+                </div>
+              ))}
+              {decididas.length > 40 && (
+                <span style={{ fontSize: 12, color: "var(--t3)" }}>y {num(decididas.length - 40)} más</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -213,14 +291,52 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
         <div style={{ marginBottom: "var(--esp-11)" }}>
           <Rotulo style={{ marginBottom: 14 }}>Relaciones más frecuentes</Rotulo>
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            {rels.slice(0, 24).map((r, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "5px 8px", borderRadius: 6, background: i % 2 ? "transparent" : "var(--superficie)" }}>
-                <span style={{ fontSize: 13, color: "var(--t1)" }}>{r.a}</span>
-                <span className="t-menor" style={{ color: "var(--acento)" }}>{r.predicado}</span>
-                <span style={{ fontSize: 13, color: "var(--t1)" }}>{r.b}</span>
-                {r.revisada && <span title="Confirmada al revisar" style={{ color: "var(--exito)", fontSize: 10 }}>✓</span>}
-                <div style={{ flex: 1 }} />
-                <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }}>{r.articulos}</span>
+            {rels.slice(0, 40).map((r, i) => (
+              <div key={i} style={{ borderRadius: 6, background: i % 2 ? "transparent" : "var(--superficie)" }}>
+                <div
+                  onClick={() => void abrir(i, r)}
+                  title="Ver de qué artículos sale"
+                  style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "5px 8px", cursor: "pointer" }}
+                >
+                  <span style={{ fontSize: 13, color: "var(--t1)" }}>{r.a}</span>
+                  <span className="t-menor" style={{ color: "var(--acento)" }}>{r.predicado}</span>
+                  <span style={{ fontSize: 13, color: "var(--t1)" }}>{r.b}</span>
+                  {r.revisada && <span title="Confirmada al revisar" style={{ color: "var(--exito)", fontSize: 10 }}>✓</span>}
+                  {r.cuando !== "vigente" && <span className="t-mono" style={{ color: "var(--t3)", fontSize: 10 }}>{r.cuando}</span>}
+                  <div style={{ flex: 1 }} />
+                  {/* El periodo: según notas de qué años. No es la fecha del hecho, es
+                      cuándo el archivo lo afirmó, y eso es lo que se puede decir con verdad. */}
+                  <span className="t-mono" title={r.por_anio.map(([y, n]) => `${y}: ${n} ${n === 1 ? "artículo" : "artículos"}`).join("\n")}
+                        style={{ color: "var(--t2)", fontSize: 11 }}>
+                    {rangoAnios(r)}
+                  </span>
+                  <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11, minWidth: 24, textAlign: "right" }}>{r.articulos}</span>
+                </div>
+                {abierta === i && (
+                  <div style={{ padding: "2px 8px 10px 22px", display: "flex", flexDirection: "column", gap: 7 }}>
+                    {r.por_anio.length > 1 && (
+                      <div className="t-mono" style={{ fontSize: 11, color: "var(--t3)" }}>
+                        {r.por_anio.map(([y, n]) => `${y} (${n})`).join(" · ")}
+                      </div>
+                    )}
+                    {/* Un fallo se dice; antes se quedaba en «Buscando…» para siempre. */}
+                    {evidenciaError && <span className="t-menor" style={{ color: "var(--error)" }}>No se pudo buscar: {evidenciaError}</span>}
+                    {!evidenciaError && evidencia === null && <span className="t-menor" style={{ color: "var(--t3)" }}>Buscando los párrafos…</span>}
+                    {evidencia && evidencia.length === 0 && <span className="t-menor" style={{ color: "var(--t3)" }}>Ningún párrafo la afirma tal cual: viene de nombres fundidos o de una marca ya corregida.</span>}
+                    {(evidencia ?? []).map((e) => (
+                      <div key={`${e.wp_id}-${e.pi}`} style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                          {e.enlace
+                            ? <a href={e.enlace} target="_blank" rel="noreferrer" style={{ color: "var(--t1)", textDecoration: "none", fontWeight: 500 }}>{e.titulo ?? `Artículo ${e.wp_id}`}</a>
+                            : <span style={{ color: "var(--t1)", fontWeight: 500 }}>{e.titulo ?? `Artículo ${e.wp_id}`}</span>}
+                          <span className="t-mono" style={{ color: "var(--t3)", fontSize: 11 }}>{e.fecha?.slice(0, 10)}</span>
+                          {e.revisada && <span title="Confirmada al revisar" style={{ color: "var(--exito)", fontSize: 10 }}>✓</span>}
+                        </div>
+                        <div style={{ color: "var(--t2)" }}>{resaltar(e.parrafo, [r.a, r.b])}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -245,4 +361,31 @@ function Cifra({ v, pie }: { v: string; pie: string }) {
       <div className="t-menor" style={{ color: "var(--t3)", marginTop: 5, maxWidth: "20ch" }}>{pie}</div>
     </div>
   );
+}
+
+/* Un botón pequeño de texto, para decidir o deshacer sin salir de la lista. */
+function Accion({ onClick, titulo, children }: { onClick: () => void; titulo: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={titulo}
+      style={{ appearance: "none", background: "transparent", border: "1px solid var(--borde)", borderRadius: 5, padding: "1px 7px", cursor: "pointer", fontSize: 11, color: "var(--t2)", fontFamily: "var(--font-sans)" }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** «2022–2025», «2019» o nada, según lo que el archivo date. */
+function rangoAnios(r: AristaGrafo): string {
+  if (r.desde_anio == null) return "";
+  return r.hasta_anio != null && r.hasta_anio !== r.desde_anio ? `${r.desde_anio}–${r.hasta_anio}` : String(r.desde_anio);
+}
+
+/** El párrafo con los dos nombres en negrita, para encontrar la frase de un vistazo. */
+function resaltar(texto: string, nombres: string[]): React.ReactNode {
+  const claves = nombres.filter((n) => n.length > 1);
+  if (claves.length === 0) return texto;
+  const partes = texto.split(new RegExp(`(${claves.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g"));
+  return partes.map((p, i) => (claves.includes(p) ? <strong key={i} style={{ color: "var(--t1)", fontWeight: 600 }}>{p}</strong> : p));
 }

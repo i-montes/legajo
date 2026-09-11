@@ -1,0 +1,223 @@
+{"tipo": "lugar", "distintas": ["Centro Comercial Andino", "centro cultural El Indio"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "lugar", "canonico": "Portal de El Tunal", "formas": ["Portal del Tunal", "Portal Tunal"], "fuentes": ["juez:MiniMax-M3", "regla"]}
+{"tipo": "lugar", "distintas": ["Portal de Suba", "Portal del Sur"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "lugar", "distintas": ["San Andrés", "San Antonio"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "lugar", "distintas": ["Santa Fe", "Santa Fe de Antioquia"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "lugar", "canonico": "peaje El Cerrito", "formas": ["peaje Cerrito", "El Cerrito"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "lugar", "canonico": "reserva Thomas Van der Hammen", "formas": ["Van der Hammen"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "obra", "canonico": "La Movida del Día", "formas": ["Movida del Día"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "obra", "canonico": "Radio de La Noche", "formas": ["La Noche"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Alcaldía de Bucaramanga", "Alcaldía de Buenaventura"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Alianza de Valores y Fiduciaria", "Alianza Verde"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Asamblea General de las Naciones Unidas", "Naciones Unidas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Banco de la República", "La República"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Centro Democrática", "formas": ["Centro Democrático"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Centro Internacional para la Justicia Transicional", "comité Internacional de la Cruz Roja"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Coalición Centro Esperanza", "formas": ["Centro Esperanza"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Asesora Penal", "Comisión de Administración de Divisas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Comisión Asesora del Estado para el Diseño de la Política Criminal", "formas": ["Comisión Asesora Penal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Asesora del Estado para el Diseño de la Política Criminal", "Comisión de Administración de Divisas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Asesora del Estado para el Diseño de la Política Criminal", "Comisión Asesora en Política de Drogas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Asesora en Política de Drogas", "Comisión de Administración de Divisas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Asesora en Política de Drogas", "Comisión Asesora Penal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Colombiana de Juristas", "Comisión Cuarta"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión III Cámara", "Comisión IV Senado"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión III Cámara", "Comisión III Senado"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión III Cámara", "Comisión IV Cámara"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión III Senado", "Comisión IV Cámara"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión III Senado", "Comisión IV Senado"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión IV Cámara", "Comisión Tercera de la Cámara"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión IV Cámara", "Comisión IV Senado"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Nacional para la Moralización", "Consejo Nacional Electoral"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Nacional para la Moralización", "Comité Nacional Republicano"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comisión Nacional para la Moralización", "Consejo Nacional de Estupefacientes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Comisión Tercera de la Cámara", "formas": ["Comisión III Cámara"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comité Nacional Republicano", "Consejo Nacional Electoral"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Comité Nacional Republicano", "Consejo Nacional de Estupefacientes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Concejo de Cali", "Concejo de Cartagena"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Consejo Directivo de la CAR", "formas": ["Consejo Directivo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Consejo Nacional de Estupefacientes", "Dirección Nacional de Estupefacientes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Consejo Nacional de Estupefacientes", "Consejo Nacional Electoral"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Consejo Superior de la Universidad de Antioquia", "Consejo Superior de Política Criminal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Contraloría General", "Contraloría General de Antioquia"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Contraloría de General de Antioquia", "formas": ["Contraloría General de Antioquia", "Contraloría de Antioquia"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Contraloría de General de Antioquia", "Contraloría General"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Corporación Sisma Mujer", "formas": ["Sisma Mujer"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Corte Suprema de Justicia", "formas": ["Corte Suprema"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Cámara Colombiana de la Construcción", "Comisión Colombiana de Juristas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Cámara Colombiana de la Construcción", "Cámara Colombo Venezolana"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Departamento Administrativo de la Presidencia de la República", "formas": ["Departamento Administrativo de la Presidencia", "Presidencia de la República"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Departamento Administrativo de la Presidencia de la República", "La República"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Departamento Nacional de Planeación", "formas": ["Planeación Nacional"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Departamento Nacional de Planeación", "Dirección Nacional de Estupefacientes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Departamento de la Función Pública", "formas": ["Función Pública"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Departamento de la Función Pública", "Departamento de Salud Pública"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Departamento para la Prosperidad Social", "formas": ["Departamento de Prosperidad Social", "Prosperidad Social"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Deportivo Tolima", "formas": ["Deportes Tolima"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Escuadrones Móviles Antidisturbios", "formas": ["Escuadrón Móvil Antidisturbios"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Federación Nacional de Cultivadores de Cereales", "Foro Nacional Ambiental"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Fondo de Adaptación", "Fondo de Ahorro y Estabilización"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Foro Nacional Ambiental", "formas": ["Foro Ambiental"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Fuerza Pública", "Función Pública"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Gobierno Nacional", "Guardia Nacional"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Grupos de Psiquiatría de Medicina Legal", "formas": ["Grupo de Psiquiatría"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Grupos de Psiquiatría de Medicina Legal", "Medicina Legal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "HM Ingenieria SAS", "formas": ["HM Ingeniería"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Instituto de Medicina Legal y Ciencias Forenses", "formas": ["Medicina Legal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["La República", "Presidencia de la República"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["La Silla", "La Silla Pacífico"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["La Silla", "La Silla Sur"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "La Silla Cachaca", "formas": ["La Silla Paisa", "La Silla Vacía", "La Silla"], "fuentes": ["juez:MiniMax-M3", "regla"]}
+{"tipo": "organizacion", "distintas": ["La Silla Pacífico", "La Silla Paisa"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Ministerio de Agricultura", "Ministerio de Ambiente"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Ministerio de Interior y de Justicia", "formas": ["Ministerio de Justicia y del Derecho", "Ministerio del Interior", "Ministerio de Interior", "Ministerio de Justicia"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Ministerio de Medio Ambiente", "Ministerio de Minas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Ministerio de Minas", "Ministerio del Medio Ambiente"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Ministerio de Protección Social", "Ministerio Público"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Ministerio del Medio Ambiente", "formas": ["Ministerio de Medio Ambiente", "Ministerio de Ambiente"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Misión Nacional Ciudadana para la Lucha contra la Corrupción", "formas": ["Misión Ciudadana"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Misión Nacional Ciudadana para la Lucha contra la Corrupción", "Movimiento Nacional de Víctimas de Crímenes de Estado"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido Acción Nacional", "Partido de Integración Nacional"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido Acción Nacional", "Partido de la U"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido Conservador", "Partido de la U"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido de Integración Nacional", "Partido de la U"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido de la U", "Partido Liberal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido de la U", "Partido Verde"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Partido de la U", "Partido Republicano"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Pavimentos Colombia S.A.", "Pfizer Colombia"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Pavimentos Colombia S.A.", "Programa Colombia Joven"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Pfizer Colombia", "Programa Colombia Joven"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Por un Valle Seguro", "Universidad del Valle"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Programa Colombia Joven", "Programa contra las Minas Antipersonal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Proyectos Amigables de Ingeniería S.A.S.", "formas": ["Proyectos Amigables de Ingeniería SA"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Revista Semana", "Revista Supuestos"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Sala Consultiva del Consejo de Estado", "formas": ["Sala Plena del Consejo de Estado", "Sala Plena de la Corte", "Consejo de Estado", "Sala Consultiva", "Sala Plena"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Subdelegación de Cali del Comité Internacional de la Cruz Roja", "formas": ["comité Internacional de la Cruz Roja"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "The Wall Street Journal", "formas": ["Wall Street Journal"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "The Washington Post", "formas": ["Washington Post"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["UAE Gestión de Restitución de Tierras Despojadas", "unidad de gestión pensional y parafiscales"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Unidad Nacional", "Universidad Nacional"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Universidad Autónoma de México", "Universidad de los Andes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "distintas": ["Universidad de la Sabana", "Universidad de Sabaneta"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Universidad de los Andes", "formas": ["los Andes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "Unión Temporal Vitalogic RSU", "formas": ["Vitalogic RSU"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "organizacion", "canonico": "clan García Romero", "formas": ["clan García"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Abelardo De La Espriella", "formas": ["De La Espriella"], "fuentes": ["juez:MiniMax-M3", "regla"]}
+{"tipo": "persona", "canonico": "Adelina Guerrero Covo", "formas": ["Adelina Guerrero", "Adelina Covo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Alejandro Char Chaljub", "formas": ["Alejandro Char", "Alex Char"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Alejandro Gaviria", "Aníbal Gaviria"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Alejandro Gaviria", "Aníbal Gaviria Correa"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Alexander López", "Alfonso López Michelsen"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Alfonso López Michelsen", "formas": ["López Michelsen"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Alfonso del Cristo Hilsaca Elajdue", "formas": ["‘El Turco’ Hilsaca"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Allende Perilla Sandoval", "formas": ["Allende"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Andrés Botero", "Juan David Ángel Botero"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Andrés García Zuccardi", "formas": ["Álvaro García"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Antonio Zabaraín", "formas": ["Toño Zabaraín"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Aníbal Gaviria Correa", "formas": ["Aníbal Gaviria"], "fuentes": ["juez:MiniMax-M3", "regla"]}
+{"tipo": "persona", "canonico": "Aureliano Carbonell", "formas": ["Victor Cubides"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Bernardo Miguel ‘el Ñoño’ Elías", "formas": ["Bernardo Miguel Elías Vidal,", "Bernardo “Ñoño” Elías", "Ñoño Elías"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Bruce Mac Master", "formas": ["Mac Master"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Calarcá Córdoba", "formas": ["Alexander Díaz"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Camilo Ospina", "Clara Elvira Ospina"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Carlos Eduardo Enríquez Maya", "Edgardo Maya"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Carlos Fernando", "Carlos Fernando Motoa"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Carlos Fernando Galán", "formas": ["Carlos Fernando"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Carlos Holmes Trujillo", "formas": ["Carlos Holmes"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Carlos Lleras Restrepo", "formas": ["Carlos Lleras"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Carlos Marío Jimenez", "formas": ["Macaco"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Carlos Pérez Ricart", "formas": ["Pérez Ricart"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Carmen García", "María Constanza García"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Cecilia Hernández", "Luis Carlos Hernández"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Cecilia López", "Claudia López"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Cristina de la Torre", "formas": ["De la Torre"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Dairo Antonio Úsuga ", "formas": ["Otoniel"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["De La Espriella", "María del Rosario Guerra de La Espriella"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["De La Espriella", "Miguel de La Espriella"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Didier Tavera Amado", "formas": ["Didier Tavera"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Diego Murillo Bejarano", "formas": ["Don Berna"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Dilian Francisca Toro", "formas": ["Dilian F. Toro", "Dilian Toro"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Dorina Hernández", "formas": ["Cha Dorina"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Edmundo del Castillo", "Elizabeth Castillo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Eduardo Suesca", "Helman Eduardo Suesca"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Efraín José Cepeda Sarabia", "formas": ["Fincho Cepeda"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "El gato volador", "formas": ["Laureano Acuña"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Eliecer Herlinton Chamorro", "formas": ["Antonio García"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Enilce López", "formas": ["La Gata"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Ernesto Samper", "María Elvira Samper"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Federico Andrés Gutiérrez Zuluaga", "formas": ["Federico Gutiérrez", "Fico Gutiérrez"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Francia Márquez Mina", "formas": ["Francia Márquez"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Francisco Santos Calderón,", "formas": ["Francisco Santos", "Pacho Santos"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Francisco de Roux", "formas": ["Pacho de Roux"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Gabriel Yepes Mejía", "formas": ["“Samuel”", "HH”"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Germán Vargas", "Inés Gómez de Vargas"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Germán Vargas Lleras", "formas": ["Germán Vargas", "Vargas Lleras"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Giovani Andrés Rojas", "formas": ["Araña"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Griselda Lobo Silva", "formas": ["Sandra Ramírez"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Guillermo León Aguirre", "formas": ["David León"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Gustavo Aníbal Giraldo", "formas": ["Pablito Arauca"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Gustavo de Greiff", "formas": ["De Greiff"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Hernán Moreno", "Hipólito Moreno"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Hernán Moreno Pérez", "formas": ["Hernán Moreno"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Hernán Moreno Pérez", "Hipólito Moreno"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Héctor Amarís", "formas": ["Oso Yogui"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Héctor Sierra", "Humberto Sierra"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Israel Ramírez Pineda", "formas": ["Pablo Beltrán"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Javier Alonso Velosa", "formas": ["Andrey Avendaño"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Jobanis de Jesús Ávila", "formas": ["Comandante Javier", "Chiquito Malo"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Jonathan “JP” Hernández", "formas": ["Jonatan Ferney Pulido", "Jota Pe Hernández", "JP Hernández", "Jotapé"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Jorge Emilio Rey", "formas": ["Jorge Rey"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Jorge Luis Alfonso López", "formas": ["El Gatico"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["José David", "Juan David Ángel Botero"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "José Gonzalo Sánchez", "formas": ["Gonzalito"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "José Guillermo Hernández Aponte", "formas": ["José Guillermo ‘Ñeñe’ Hernández", "Ñeñe Hernández"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["José Luis Pérez", "Luis Pérez"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["José Miguel Bernal", "Julio Miguel"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "José Vicente Lesmes", "formas": ["Walter Mendoza"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Juan Carlos", "Juan Carlos Abadía"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Juan Carlos", "Juan Carlos Gossaín"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Juan Carlos Martínez Sinisterra", "formas": ["Juan Carlos Martínez"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Juan Francisco Gómez Cerchar", "formas": ["Kiko Gómez"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Juan José García", "formas": ["Juan José"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Juan Manuel", "Juan Manuel del Corral Suescún"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Juan Manuel", "Juan Manuel Santos"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Juan Manuel Galán", "formas": ["Juan Manuel"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Juan Pablo", "Juan Pablo Godoy"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Julio César Turbay Ayala", "formas": ["Julio César Turbay"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Julio Miguel Guerra", "formas": ["Julio Miguel"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Liner Campo", "Luis Felipe Campo Saavedra"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Luciano Marin", "formas": ["Iván Márquez"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Luis Alberto Albán Urbano", "formas": ["Marco León Calarcá", "Marcos Calarcá"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Luis Pérez", "Luz Ángela Pérez"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Mabel Torres", "Miguel José Torres Plata"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Manuel Vicente Duque Vasquez", "formas": ["Manolo Duque", "Manuel Duque"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Mario Montoya Uribe", "Miguel Uribe"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["María Elvira Samper", "Miguel Samper"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "María Margarita Zuleta", "formas": ["La Paca Zuleta"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["María Virginia Uribe", "Miguel Uribe"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "María del Rosario Guerra de La Espriella", "formas": ["María del Rosario Guerra", "María del Rosario"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["María del Rosario Guerra de La Espriella", "Miguel de La Espriella"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Miguel Polo", "Miguel Polo Polo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Miguel Polo Polo", "formas": ["Polo Polo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Miguel Uribe Turbay", "formas": ["Miguel Turbay", "Miguel Uribe"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Nestor Gregorio Vera", "formas": ["Iván Mordisco", "Iván Lozada"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Nubia Orozco Acosta", "formas": ["Nubia Orozco"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Pablo Catatumbo Torres Victoria", "formas": ["Jorge Torres Victoria", "Pablo Catatumbo"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Pupo Alonso Rincón", "formas": ["Pupo Alonso"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Rafael Pardo", "Rodrigo Pardo"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Roberto García-Peña", "Roberto Posada García-Peña"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Roberto Ortiz Urueña", "formas": ["Chontico"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Roberto ´Chontico´ Ortiz", "formas": ["Chontico Ortíz"], "fuentes": ["juez:MiniMax-M3", "regla"]}
+{"tipo": "persona", "distintas": ["Roberto ´Chontico´ Ortiz", "Román Ortiz"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Rodolfo Hernández", "Rodolfo José Hernández"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Rodrigo Lara Restrepo", "formas": ["Rodrigo Lara"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "canonico": "Rodrigo Londoño Echeverri, ", "formas": ["Timochenko"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Rodrigo Tovar Pupo", "formas": ["Jorge 40"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Salvatore Mancuso", "formas": ["Mono Mancuso", "Triple Cero"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Samuel Santander Lopesierra", "formas": ["El Hombre Marlboro"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Seusis Pausivas Hernández", "formas": ["Jesús Santrich"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Victoria Eugenia Dávila", "formas": ["Vicky Davila"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Yamilito Arana", "formas": ["Yamil Arana"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "canonico": "Álvaro García Romero", "formas": ["El gordo García"], "fuentes": ["quien-ai"]}
+{"tipo": "persona", "distintas": ["Álvaro ‘el Gordo’ García", "Álvaro García"], "fuentes": ["juez:MiniMax-M3"]}
+{"tipo": "persona", "distintas": ["Ángela María Orozco", "Moisés Orozco"], "fuentes": ["juez:MiniMax-M3"]}

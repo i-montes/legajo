@@ -7,7 +7,7 @@ import type {
   Hallazgo, Identidad, LoteRow, Mencion, NodoGrafo, PasoAutorizacion,
   PerfilArchivo, ProgresoCenso, ProgresoEntorno,
   ProgresoExtraccion, ProgresoModelo, RelacionFila, ResultadoCalibracion, ResumenGrafo,
-  SesionRecuperada, SinNombrar,
+  SesionRecuperada, SinNombrar, Resolucion, Evidencia,
 } from "../types";
 
 export const discoverSite = (input: string) =>
@@ -205,6 +205,14 @@ export const grafoEntidades = (loteId: number, limite = 200) =>
 export const grafoSinNombrar = (loteId: number) =>
   invoke<SinNombrar[]>("grafo_sin_nombrar", { loteId });
 
+export const grafoEvidencia = (loteId: number, r: AristaGrafo) =>
+  invoke<Evidencia[]>("grafo_evidencia", { loteId, a: r.a, b: r.b, predicado: r.predicado });
+export const resolucionesDelLote = (loteId: number) =>
+  invoke<Resolucion[]>("resoluciones_del_lote", { loteId });
+export const deshacerResolucion = (loteId: number, clave: string) =>
+  invoke<void>("deshacer_resolucion", { loteId, clave });
+export const decidirPar = (loteId: number, c: Caso, misma: boolean) =>
+  invoke<void>("decidir_par", { loteId, clave: c.clave, a: c.a.nombre, b: c.b.nombre, tipo: c.tipo, misma });
 export const grafoDuplicados = (loteId: number) =>
   invoke<Caso[]>("grafo_duplicados", { loteId });
 

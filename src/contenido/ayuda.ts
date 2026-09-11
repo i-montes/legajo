@@ -63,11 +63,6 @@ export const REGLAS: Regla[] = [
       "«26 de julio» o «más de diez años» son atributos de lo que se afirma, no cosas del mundo. Solo entran si van dentro de un nombre: «Ley 1448 de 2011», «el 9 de abril».",
   },
   {
-    titulo: "Un evento tiene nombre",
-    texto:
-      "«El paro arrocero» o «el bicentenario» sí. Una oración narrativa —«en 2012 fue notificado Álvaro»— no. Si el tipo Evento se llena de frases, su precisión deja de significar nada.",
-  },
-  {
     titulo: "Las anáforas no se marcan si el nombre ya está",
     texto:
       "Tras «el Representante Telésforo Pedraza», el «El Representante» de después no añade nada. Reconocer entidades y resolver referencias son tareas distintas: incluir anáforas castiga al modelo por algo que no hace.",

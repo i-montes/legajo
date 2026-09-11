@@ -5,7 +5,7 @@ import {
   propagarEnDocumento, soltarAlias, textoDeArbol, unirAlias,
 } from "./propagacion";
 import type { NodoMarca } from "./propagacion";
-import { predicadosPara } from "../contenido/tipos";
+import { FAMILIAS, PREDICADOS, predicadosPara } from "../contenido/tipos";
 import { revisar } from "./revision";
 import type { EntradaLexico, Mencion } from "../types";
 
@@ -328,10 +328,12 @@ describe("predicados", () => {
     expect(e).not.toContain("familiar de");
   });
 
-  it("un monto solo puede ir a un destino o a otro monto", () => {
-    const e = predicadosPara("monto", "evento").map((p) => p.etiqueta);
+  it("un monto solo puede ir a un destino", () => {
+    const e = predicadosPara("monto", "organizacion").map((p) => p.etiqueta);
     expect(e).toContain("destinado a");
     expect(e).not.toContain("ocupa el cargo");
+    // «evento» no se entrena: ningún predicado lo admite ya como destino.
+    expect(predicadosPara("monto", "evento")).toEqual([]);
   });
 
   it("no ofrece nada cuando de verdad no hay nada que ofrecer", () => {
@@ -351,12 +353,29 @@ describe("predicados", () => {
     expect(predicadosPara("persona", "lugar").map((p) => p.etiqueta)).toContain("ubicado en");
   });
 
-  it("la lista filtrada cabe en las teclas 1—9", () => {
-    for (const a of ["persona", "organizacion", "cargo", "lugar", "ley", "monto"]) {
-      for (const b of ["persona", "organizacion", "cargo", "lugar", "ley", "monto"]) {
-        expect(predicadosPara(a, b).length).toBeLessThanOrEqual(9);
+  it("dentro de cada familia, la lista filtrada cabe en las teclas 1—9", () => {
+    /* Con 35 predicados, entre dos personas encajan más de nueve; el menú
+       pide entonces la familia primero. Lo que tiene que caber en 1—9 es cada
+       familia por separado, y las familias mismas. */
+    expect(FAMILIAS.length).toBeLessThanOrEqual(9);
+    for (const a of ["persona", "organizacion", "cargo", "lugar", "ley", "monto", "obra"]) {
+      for (const b of ["persona", "organizacion", "cargo", "lugar", "ley", "monto", "obra"]) {
+        for (const f of FAMILIAS) {
+          expect(predicadosPara(a, b).filter((p) => p.familia === f.k).length).toBeLessThanOrEqual(9);
+        }
       }
     }
+  });
+
+  it("los 35 predicados tienen familia conocida y la familia se conoce", () => {
+    expect(PREDICADOS.length).toBe(35);
+    for (const p of PREDICADOS) expect(FAMILIAS.map((f) => f.k)).toContain(p.familia);
+  });
+
+  it("el parentesco concreto y el genérico conviven", () => {
+    const e = predicadosPara("persona", "persona").map((p) => p.etiqueta);
+    for (const x of ["padre o madre de", "hijo de", "hermano de", "cónyuge o pareja de", "familiar de"]) expect(e).toContain(x);
+    expect(e).toContain("sucedió a");
   });
 });
 
@@ -390,7 +409,7 @@ describe("avisos al marcar", () => {
   });
 
   it("avisa de los tramos que parecen frases", () => {
-    const a = revisar("debate en torno a la creación de un área protegida o la construcción", "evento");
+    const a = revisar("debate en torno a la creación de un área protegida o la construcción", "obra");
     expect(a.some((x) => x.texto.includes("palabras"))).toBe(true);
   });
 

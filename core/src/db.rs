@@ -69,6 +69,32 @@ fn vigente() -> String {
 }
 
 #[derive(Debug, Serialize)]
+pub struct Evidencia {
+    pub wp_id: i64,
+    pub pi: i64,
+    pub titulo: Option<String>,
+    pub fecha: Option<String>,
+    pub enlace: Option<String>,
+    pub parrafo: String,
+    pub revisada: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Resolucion {
+    pub clave: String,
+    pub a: String,
+    pub b: String,
+    pub tipo: String,
+    /// `misma`, `distinta` o `posponer`.
+    pub decision: String,
+    pub confianza: f64,
+    /// `persona`, `quien-ai` o `juez:<modelo>`.
+    pub fuente: String,
+    pub motivo: Option<String>,
+    pub decidido_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NodoGrafo {
     pub tipo: String,
     pub texto: String,
@@ -85,6 +111,10 @@ pub struct AristaGrafo {
     pub predicado: String,
     pub articulos: i64,
     pub revisada: bool,
+    /// Cuántos artículos lo afirman en cada año: «presidente según notas de
+    /// 2022 (12), 2023 (30)». Es lo que permite leer un cargo con su periodo
+    /// sin fingir una fecha exacta que el texto no da.
+    pub por_anio: Vec<(i32, i64)>,
     /// `vigente`, `pasada` o `futura`. No se funde con las demás vigencias: que
     /// alguien fuera ministro y que lo sea son hechos distintos, y un grafo que
     /// los suma en una sola arista afirma algo que nadie dijo.
@@ -698,6 +728,15 @@ impl Db {
         // referencia para el paso 7, no una conjetura de la maquina.
         Self::asegurar_columna(&conn, "anotaciones", "grupo", "TEXT")?;
         Self::asegurar_columna(&conn, "anotaciones", "designa", "INTEGER NOT NULL DEFAULT 0")?;
+        // Quién decidió que dos nombres son o no la misma entidad —la persona,
+        // el diccionario de Quién-AI o el juez con LLM— y por qué. El grafo
+        // funde lo que diga «misma» venga de donde venga, y la pantalla enseña
+        // la razón para que se pueda deshacer.
+        // La forma completa a la que se resolvió una mención corta dentro de su
+        // artículo («Petro» → «Gustavo Petro»). Ver resolucion::canonizar_articulo.
+        Self::asegurar_columna(&conn, "extraidas", "canon", "TEXT")?;
+        Self::asegurar_columna(&conn, "resoluciones", "fuente", "TEXT NOT NULL DEFAULT 'persona'")?;
+        Self::asegurar_columna(&conn, "resoluciones", "motivo", "TEXT")?;
         // Lo anterior a esta columna se anotó sin poder decir otra cosa, y
         // «vigente» es lo que se estaba asumiendo: es el valor honesto para el
         // pasado, no una conjetura nueva.
@@ -1353,22 +1392,37 @@ impl Db {
 
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT pi, ini, fin, texto, etiqueta, score FROM extraidas
+            "SELECT pi, ini, fin, texto, etiqueta, score, canon FROM extraidas
              WHERE lote_id = ?1 AND wp_id = ?2 ORDER BY pi, ini, fin")?;
-        let crudas: Vec<(i64, i64, i64, String, String, f64)> = st
+        let crudas: Vec<(i64, i64, i64, String, String, f64, Option<String>)> = st
             .query_map(rusqlite::params![lote_id, wp_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
             })?
             .filter_map(|r| r.ok())
             .collect();
         drop(st);
 
+        // Las menciones que dentro del artículo se resolvieron a la misma forma
+        // completa llegan a la revisión ya unidas con «=»: es lo que la persona
+        // habría hecho a mano, y deshacerlo es una tecla.
+        let mut por_canon: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+        for (_, _, _, texto, etiqueta, _, canon) in &crudas {
+            let clave = canon.clone().unwrap_or_else(|| texto.clone());
+            *por_canon.entry((etiqueta.clone(), clave)).or_insert(0) += 1;
+        }
+
         let mut menciones: Vec<Mencion> = Vec::new();
-        for (pi, ini, fin, texto, etiqueta, score) in crudas {
+        for (pi, ini, fin, texto, etiqueta, score, canon) in crudas {
             let umbral = cal.umbrales.get(&etiqueta).copied().unwrap_or(0.50);
             if score < umbral || bloqueadas.contains(&(etiqueta.clone(), texto.to_lowercase())) {
                 continue;
             }
+            let clave = canon.clone().unwrap_or_else(|| texto.clone());
+            let grupo = if por_canon.get(&(etiqueta.clone(), clave.clone())).copied().unwrap_or(0) >= 2 {
+                Some(format!("c:{}:{}", etiqueta, crate::resolucion::plegar(&clave)))
+            } else {
+                None
+            };
             menciones.push(Mencion {
                 mid: format!("m{pi}-{ini}-{fin}"),
                 pi, ini, fin, texto, tipo: etiqueta,
@@ -1376,7 +1430,7 @@ impl Db {
                 // que la persona toque deja de serlo, y esa diferencia es lo que
                 // permite decir después cuánto puso cada uno.
                 auto: true,
-                grupo: None,
+                grupo,
                 // El extractor no distingue una descripción definida de un
                 // nombre; eso lo pone la persona al revisar.
                 designa: false,
@@ -1550,15 +1604,25 @@ impl Db {
     /// aparece cuarenta veces en un solo articulo pesa menos en el grafo que
     /// una que aparece en cuarenta articulos.
     pub fn grafo_entidades(&self, lote_id: i64, limite: i64) -> Result<Vec<NodoGrafo>> {
+        // Lo que el diccionario o el juez decidieron que es la misma entidad se
+        // funde igual que lo que la persona marcó con «=»: se agrega en Rust
+        // porque la unión encadena y en SQL saldría ilegible.
+        let canon = self.nombres_canonicos(lote_id)?;
+        // La lista de bloqueo de la calibración también vale para el grafo: lo
+        // que la revisión no enseña («Estado», «gobierno») tampoco se cuenta.
+        let bloqueadas: std::collections::HashSet<(String, String)> = self
+            .calibracion(lote_id)?
+            .map(|c| c.bloqueadas.into_iter().map(|(t, x)| (t, x.to_lowercase())).collect())
+            .unwrap_or_default();
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT tipo, texto, SUM(menciones), COUNT(DISTINCT wp_id), MAX(revisada) FROM (
+            "SELECT tipo, superficie, texto, menciones, wp_id, revisada FROM (
                  -- Cuando la persona declaró que varias marcas nombran a la
                  -- misma entidad, el grafo la cuenta una vez y con el nombre
                  -- más largo del grupo, que es casi siempre el completo:
                  -- «Gustavo Petro» y no «Petro». Ignorar esa declaración sería
                  -- tirar el único dato de identidad que hay verificado.
-                 SELECT a.tipo AS tipo,
+                 SELECT a.tipo AS tipo, a.texto AS superficie,
                         COALESCE((SELECT g.texto FROM anotaciones g
                                   WHERE g.lote_id = a.lote_id AND g.grupo = a.grupo
                                   ORDER BY LENGTH(g.texto) DESC, g.texto LIMIT 1),
@@ -1568,27 +1632,54 @@ impl Db {
                  FROM anotaciones a WHERE a.lote_id = ?1
                  GROUP BY a.tipo, texto, a.wp_id
                  UNION ALL
-                 SELECT e.etiqueta, e.texto, COUNT(*), e.wp_id, 0
-                 FROM extraidas e WHERE e.lote_id = ?1
+                 -- Lo propuesto por el modelo entra solo por encima del corte
+                 -- de su tipo (la calibración del lote, o 0,5): por debajo son
+                 -- candidatos que nadie confirmó y que la revisión tampoco enseña.
+                 SELECT e.etiqueta, e.texto, COALESCE(e.canon, e.texto), COUNT(*), e.wp_id, 0
+                 FROM extraidas e JOIN lotes d ON d.id = e.lote_id
+                 WHERE e.lote_id = ?1
+                   AND e.score >= COALESCE(json_extract(d.calibracion_json, '$.umbrales.' || e.etiqueta), 0.5)
                    AND NOT EXISTS (SELECT 1 FROM anotaciones a2
                                    WHERE a2.lote_id = e.lote_id AND a2.wp_id = e.wp_id)
-                 GROUP BY e.etiqueta, e.texto, e.wp_id
-             ) GROUP BY tipo, texto ORDER BY 4 DESC, 3 DESC LIMIT ?2")?;
-        let v = st
-            .query_map(rusqlite::params![lote_id, limite], |r| Ok(NodoGrafo {
-                tipo: r.get(0)?, texto: r.get(1)?, menciones: r.get(2)?,
-                articulos: r.get(3)?, revisada: r.get::<_, i64>(4)? != 0,
-            }))?
+                 GROUP BY e.etiqueta, e.texto, COALESCE(e.canon, e.texto), e.wp_id
+             )")?;
+        let filas: Vec<(String, String, String, i64, i64, i64)> = st
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
             .filter_map(|r| r.ok())
             .collect();
+        drop(st);
+
+        let mut acumulado: std::collections::HashMap<(String, String), (i64, std::collections::HashSet<i64>, bool)> =
+            std::collections::HashMap::new();
+        for (tipo, superficie, texto, menciones, wp, revisada) in filas {
+            // El bloqueo mira lo que el modelo escribió («Estado»), no la forma
+            // completa a la que se resolvió («Estado colombiano»).
+            if revisada == 0 && (bloqueadas.contains(&(tipo.clone(), superficie.to_lowercase()))
+                || bloqueadas.contains(&(tipo.clone(), texto.to_lowercase()))) {
+                continue;
+            }
+            let texto = canon.get(&texto).cloned().unwrap_or(texto);
+            let e = acumulado.entry((tipo, texto)).or_insert_with(|| (0, std::collections::HashSet::new(), false));
+            e.0 += menciones;
+            e.1.insert(wp);
+            e.2 |= revisada != 0;
+        }
+        let mut v: Vec<NodoGrafo> = acumulado
+            .into_iter()
+            .map(|((tipo, texto), (menciones, arts, revisada))| NodoGrafo {
+                tipo, texto, menciones, articulos: arts.len() as i64, revisada,
+            })
+            .collect();
+        v.sort_by(|x, y| y.articulos.cmp(&x.articulos).then(y.menciones.cmp(&x.menciones)).then(x.texto.cmp(&y.texto)));
+        v.truncate(limite.max(0) as usize);
         Ok(v)
     }
 
     pub fn grafo_relaciones(&self, lote_id: i64, limite: i64) -> Result<Vec<AristaGrafo>> {
+        let canon = self.nombres_canonicos(lote_id)?;
         let conn = self.conn.lock().unwrap();
         let mut st = conn.prepare(
-            "SELECT a, b, predicado, COUNT(DISTINCT wp_id), MAX(revisada), cuando,
-                    MIN(anio), MAX(anio) FROM (
+            "SELECT a, b, predicado, wp_id, revisada, cuando, anio FROM (
                  SELECT ma.texto AS a, mb.texto AS b, r.predicado AS predicado,
                         r.wp_id AS wp_id, 1 AS revisada, r.cuando AS cuando,
                         CAST(SUBSTR(ce.date, 1, 4) AS INTEGER) AS anio
@@ -1603,7 +1694,13 @@ impl Db {
                  -- Lo que solo propuso el modelo entra como vigente: el modelo no
                  -- predice tiempo verbal, y decir «vigente» es repetir lo que el
                  -- texto afirma en presente, no inventar una fecha.
-                 SELECT x.a, x.b, x.predicado, x.wp_id, 0, 'vigente',
+                 -- Los extremos van por su forma completa dentro del artículo:
+                 -- «Petro ocupa el cargo presidente» cuenta para «Gustavo Petro».
+                 SELECT COALESCE((SELECT ea.canon FROM extraidas ea WHERE ea.lote_id = x.lote_id AND ea.wp_id = x.wp_id
+                                    AND ea.pi = x.pi AND ea.texto = x.a AND ea.canon IS NOT NULL LIMIT 1), x.a),
+                        COALESCE((SELECT eb.canon FROM extraidas eb WHERE eb.lote_id = x.lote_id AND eb.wp_id = x.wp_id
+                                    AND eb.pi = x.pi AND eb.texto = x.b AND eb.canon IS NOT NULL LIMIT 1), x.b),
+                        x.predicado, x.wp_id, 0, 'vigente',
                         CAST(SUBSTR(ce.date, 1, 4) AS INTEGER)
                  FROM relaciones_extraidas x
                  JOIN lotes d ON d.id = x.lote_id
@@ -1612,17 +1709,92 @@ impl Db {
                  WHERE x.lote_id = ?1
                    AND NOT EXISTS (SELECT 1 FROM relaciones r2
                                    WHERE r2.lote_id = x.lote_id AND r2.wp_id = x.wp_id)
-             ) WHERE a <> '' AND b <> ''
-             GROUP BY a, b, predicado, cuando ORDER BY 4 DESC LIMIT ?2")?;
-        let v = st
-            .query_map(rusqlite::params![lote_id, limite], |r| Ok(AristaGrafo {
-                a: r.get(0)?, b: r.get(1)?, predicado: r.get(2)?,
-                articulos: r.get(3)?, revisada: r.get::<_, i64>(4)? != 0,
-                cuando: r.get(5)?, desde_anio: r.get(6)?, hasta_anio: r.get(7)?,
-            }))?
+             ) WHERE a <> '' AND b <> ''")?;
+        let filas: Vec<(String, String, String, i64, i64, String, Option<i32>)> = st
+            .query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?
             .filter_map(|r| r.ok())
             .collect();
+        drop(st);
+
+        type Acum = (std::collections::HashSet<i64>, bool, std::collections::BTreeMap<i32, std::collections::HashSet<i64>>);
+        let mut acumulado: std::collections::HashMap<(String, String, String, String), Acum> = std::collections::HashMap::new();
+        for (a, b, predicado, wp, revisada, cuando, anio) in filas {
+            let a = canon.get(&a).cloned().unwrap_or(a);
+            let b = canon.get(&b).cloned().unwrap_or(b);
+            if a == b {
+                continue; // dos nombres del mismo actor no se relacionan entre sí
+            }
+            let e = acumulado.entry((a, b, predicado, cuando)).or_insert_with(|| (std::collections::HashSet::new(), false, Default::default()));
+            e.0.insert(wp);
+            e.1 |= revisada != 0;
+            if let Some(y) = anio {
+                e.2.entry(y).or_default().insert(wp);
+            }
+        }
+        let mut v: Vec<AristaGrafo> = acumulado
+            .into_iter()
+            .map(|((a, b, predicado, cuando), (arts, revisada, anios))| AristaGrafo {
+                a, b, predicado, articulos: arts.len() as i64, revisada, cuando,
+                desde_anio: anios.keys().next().copied(), hasta_anio: anios.keys().next_back().copied(),
+                por_anio: anios.iter().map(|(y, ws)| (*y, ws.len() as i64)).collect(),
+            })
+            .collect();
+        v.sort_by(|x, y| y.articulos.cmp(&x.articulos).then(x.a.cmp(&y.a)).then(x.b.cmp(&y.b)).then(x.predicado.cmp(&y.predicado)));
+        v.truncate(limite.max(0) as usize);
         Ok(v)
+    }
+
+    /// De dónde sale una relación del grafo: los artículos y párrafos que la
+    /// afirman, con lo que la persona confirmó marcado. Es lo que permite
+    /// mirar un hallazgo y ver la frase, en vez de creerse la arista.
+    pub fn grafo_evidencia(&self, lote_id: i64, a: &str, b: &str, predicado: &str, limite: i64) -> Result<Vec<Evidencia>> {
+        let canon = self.nombres_canonicos(lote_id)?;
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT f.wp_id, f.pi, f.a, f.b, f.revisada, ce.title, ce.date, ce.link, d.connection_id FROM (
+                 SELECT r.lote_id AS lote_id, r.wp_id AS wp_id, ma.pi AS pi, ma.texto AS a, mb.texto AS b, 1 AS revisada
+                 FROM relaciones r
+                 JOIN anotaciones ma ON ma.lote_id = r.lote_id AND ma.wp_id = r.wp_id AND ma.mid = r.a_mid
+                 JOIN anotaciones mb ON mb.lote_id = r.lote_id AND mb.wp_id = r.wp_id AND mb.mid = r.b_mid
+                 WHERE r.lote_id = ?1 AND r.predicado = ?2
+                 UNION ALL
+                 SELECT x.lote_id, x.wp_id, x.pi,
+                        COALESCE((SELECT ea.canon FROM extraidas ea WHERE ea.lote_id = x.lote_id AND ea.wp_id = x.wp_id
+                                    AND ea.pi = x.pi AND ea.texto = x.a AND ea.canon IS NOT NULL LIMIT 1), x.a),
+                        COALESCE((SELECT eb.canon FROM extraidas eb WHERE eb.lote_id = x.lote_id AND eb.wp_id = x.wp_id
+                                    AND eb.pi = x.pi AND eb.texto = x.b AND eb.canon IS NOT NULL LIMIT 1), x.b),
+                        0
+                 FROM relaciones_extraidas x
+                 WHERE x.lote_id = ?1 AND x.predicado = ?2
+                   AND NOT EXISTS (SELECT 1 FROM relaciones r2 WHERE r2.lote_id = x.lote_id AND r2.wp_id = x.wp_id)
+             ) f
+             JOIN lotes d ON d.id = f.lote_id
+             LEFT JOIN census ce ON ce.connection_id = d.connection_id AND ce.wp_id = f.wp_id
+             ORDER BY ce.date DESC")?;
+        let filas: Vec<(i64, i64, String, String, i64, Option<String>, Option<String>, Option<String>, i64)> = st
+            .query_map(rusqlite::params![lote_id, predicado], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st);
+        let quiere = |x: &str, y: &str| canon.get(x).map(String::as_str).unwrap_or(x) == y;
+        let mut out = Vec::new();
+        let mut vistos = std::collections::HashSet::new();
+        for (wp, pi, fa, fb, revisada, titulo, fecha, enlace, conn_id) in filas {
+            if !(quiere(&fa, a) && quiere(&fb, b)) || !vistos.insert((wp, pi)) {
+                continue;
+            }
+            let parrafo: Option<String> = conn.query_row(
+                "SELECT text_plain FROM articles WHERE connection_id = ?1 AND wp_id = ?2",
+                rusqlite::params![conn_id, wp], |r| r.get(0)).ok();
+            let parrafo = parrafo
+                .and_then(|t| t.split("\n\n").filter(|p| !p.trim().is_empty()).nth(pi as usize).map(str::to_string))
+                .unwrap_or_default();
+            out.push(Evidencia { wp_id: wp, pi, titulo, fecha, enlace, parrafo, revisada: revisada != 0 });
+            if out.len() as i64 >= limite {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// Cifras de conjunto del lote.
@@ -1712,12 +1884,14 @@ impl Db {
         let distintas = uno(
             "SELECT COUNT(*) FROM (SELECT DISTINCT tipo, texto FROM (
                SELECT tipo, texto FROM anotaciones WHERE lote_id = ?1
-               UNION SELECT etiqueta, texto FROM extraidas WHERE lote_id = ?1))");
+               UNION SELECT e.etiqueta, COALESCE(e.canon, e.texto) FROM extraidas e JOIN lotes d ON d.id = e.lote_id
+                 WHERE e.lote_id = ?1 AND e.score >= COALESCE(json_extract(d.calibracion_json, '$.umbrales.' || e.etiqueta), 0.5)))");
         let una_vez = uno(
             "SELECT COUNT(*) FROM (
                SELECT texto FROM (
                  SELECT texto, wp_id FROM anotaciones WHERE lote_id = ?1
-                 UNION SELECT texto, wp_id FROM extraidas WHERE lote_id = ?1)
+                 UNION SELECT COALESCE(e.canon, e.texto), e.wp_id FROM extraidas e JOIN lotes d ON d.id = e.lote_id
+                 WHERE e.lote_id = ?1 AND e.score >= COALESCE(json_extract(d.calibracion_json, '$.umbrales.' || e.etiqueta), 0.5))
                GROUP BY texto HAVING COUNT(DISTINCT wp_id) = 1)");
         Ok(ResumenGrafo {
             articulos: uno("SELECT COUNT(*) FROM lote_articulos WHERE lote_id = ?1"),
@@ -1736,17 +1910,52 @@ impl Db {
 
     pub fn decidir_resolucion(
         &self, lote_id: i64, clave: &str, a: &str, b: &str,
-        tipo: &str, decision: &str, confianza: f64,
+        tipo: &str, decision: &str, confianza: f64, fuente: &str, motivo: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO resoluciones (lote_id, clave, a_nombre, b_nombre, tipo, decision, confianza)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)
+            "INSERT INTO resoluciones (lote_id, clave, a_nombre, b_nombre, tipo, decision, confianza, fuente, motivo)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(lote_id, clave) DO UPDATE SET
-               decision = excluded.decision, decidido_at = datetime('now')",
-            rusqlite::params![lote_id, clave, a, b, tipo, decision, confianza],
+               decision = excluded.decision, confianza = excluded.confianza, fuente = excluded.fuente,
+               motivo = excluded.motivo, decidido_at = datetime('now')",
+            rusqlite::params![lote_id, clave, a, b, tipo, decision, confianza, fuente, motivo],
         )?;
         Ok(())
+    }
+
+    /// Las decisiones del lote, las más recientes primero.
+    pub fn resoluciones(&self, lote_id: i64) -> Result<Vec<Resolucion>> {
+        let conn = self.conn.lock().unwrap();
+        let mut st = conn.prepare(
+            "SELECT clave, a_nombre, b_nombre, tipo, decision, confianza, fuente, motivo, decidido_at
+             FROM resoluciones WHERE lote_id = ?1 ORDER BY decidido_at DESC, clave")?;
+        let v = st
+            .query_map([lote_id], |r| Ok(Resolucion {
+                clave: r.get(0)?, a: r.get(1)?, b: r.get(2)?, tipo: r.get(3)?, decision: r.get(4)?,
+                confianza: r.get(5)?, fuente: r.get(6)?, motivo: r.get(7)?, decidido_at: r.get(8)?,
+            }))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(v)
+    }
+
+    /// Para cada nombre que alguna decisión «misma» une a otro, el nombre con
+    /// el que el grafo lo cuenta: el más largo de su componente, que es casi
+    /// siempre el completo. Las decisiones encadenan («Fico» = «Fico Gutiérrez»
+    /// = «Federico Gutiérrez»), así que es una unión de conjuntos, no un mapa
+    /// de pares.
+    pub fn nombres_canonicos(&self, lote_id: i64) -> Result<std::collections::HashMap<String, String>> {
+        let pares: Vec<(String, String)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut st = conn.prepare(
+                "SELECT a_nombre, b_nombre FROM resoluciones WHERE lote_id = ?1 AND decision = 'misma'")?;
+            let v: Vec<(String, String)> = st.query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            v
+        };
+        Ok(crate::resolucion::canonicos(&pares))
     }
 
     pub fn avance_resolucion(&self, lote_id: i64) -> Result<(i64, i64)> {
@@ -1766,6 +1975,10 @@ impl Db {
         &self, lote_id: i64, wp_id: i64,
         por_parrafo: &[Vec<crate::extraccion::Entidad>],
     ) -> Result<i64> {
+        // El cuerpo entero se mira una vez para resolver las formas cortas a
+        // la completa; el extractor trabaja por párrafos y no puede saberlo.
+        let mut por_parrafo = por_parrafo.to_vec();
+        crate::resolucion::canonizar_articulo(&mut por_parrafo);
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM extraidas WHERE lote_id = ?1 AND wp_id = ?2",
@@ -1773,18 +1986,51 @@ impl Db {
         let mut n = 0i64;
         {
             let mut st = tx.prepare(
-                "INSERT OR REPLACE INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")?;
+                "INSERT OR REPLACE INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score, canon)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
             for (pi, grupo) in por_parrafo.iter().enumerate() {
                 for e in grupo {
                     st.execute(rusqlite::params![
-                        lote_id, wp_id, pi as i64, e.inicio, e.fin, e.texto, e.etiqueta, e.score])?;
+                        lote_id, wp_id, pi as i64, e.inicio, e.fin, e.texto, e.etiqueta, e.score, e.canon])?;
                     n += 1;
                 }
             }
         }
         tx.commit()?;
         Ok(n)
+    }
+
+    /// Vuelve a resolver las formas cortas de todos los artículos extraídos de
+    /// un lote. Para lo que se extrajo antes de que existiera `canon`.
+    pub fn recanonizar(&self, lote_id: i64) -> Result<usize> {
+        let filas: Vec<(i64, i64, i64, i64, String, String, f64)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut st = conn.prepare(
+                "SELECT wp_id, pi, ini, fin, texto, etiqueta, score FROM extraidas WHERE lote_id = ?1 ORDER BY wp_id, pi, ini")?;
+            let v = st.query_map([lote_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?
+                .filter_map(|r| r.ok()).collect::<Vec<_>>();
+            v
+        };
+        let mut por_wp: std::collections::BTreeMap<i64, Vec<Vec<crate::extraccion::Entidad>>> = std::collections::BTreeMap::new();
+        for (wp, pi, ini, fin, texto, etiqueta, score) in filas {
+            let arts = por_wp.entry(wp).or_default();
+            let pi = pi as usize;
+            if arts.len() <= pi { arts.resize(pi + 1, Vec::new()); }
+            arts[pi].push(crate::extraccion::Entidad { texto, inicio: ini, fin, etiqueta, score, canon: None });
+        }
+        let mut total = 0;
+        for (wp, mut arts) in por_wp {
+            total += crate::resolucion::canonizar_articulo(&mut arts);
+            let conn = self.conn.lock().unwrap();
+            let mut st = conn.prepare(
+                "UPDATE extraidas SET canon = ?5 WHERE lote_id = ?1 AND wp_id = ?2 AND pi = ?3 AND ini = ?4")?;
+            for (pi, grupo) in arts.iter().enumerate() {
+                for e in grupo {
+                    st.execute(rusqlite::params![lote_id, wp, pi as i64, e.inicio, e.canon])?;
+                }
+            }
+        }
+        Ok(total)
     }
 
     pub fn guardar_relaciones_extraidas(
@@ -2983,6 +3229,38 @@ mod tests {
     }
 
     #[test]
+    fn la_evidencia_de_una_relacion_trae_el_parrafo_y_la_forma_completa() {
+        let path = std::env::temp_dir().join(format!("legajo-test-{}-evidencia.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json, transport_label, discovery_json)
+                   VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO census (connection_id, wp_id, date, title, link) VALUES (1, 100, '2023-05-01', 'Una nota', 'https://x/nota');
+                 INSERT INTO articles (connection_id, wp_id, html_raw, text_plain) VALUES (1, 100, '', 'Gustavo Petro llegó.\n\nPetro es el presidente desde 2022.');
+                 INSERT INTO extraidas (lote_id, wp_id, pi, ini, fin, texto, etiqueta, score, canon) VALUES
+                   (1,100,0,0,13,'Gustavo Petro','persona',0.9,NULL),
+                   (1,100,1,0,5,'Petro','persona',0.9,'Gustavo Petro'),
+                   (1,100,1,12,22,'presidente','cargo',0.9,NULL);
+                 INSERT INTO relaciones_extraidas (lote_id, wp_id, pi, a, b, predicado, score)
+                   VALUES (1, 100, 1, 'Petro', 'presidente', 'ocupa el cargo', 0.8);",
+            ).unwrap();
+        }
+        let aristas = db.grafo_relaciones(1, 10).unwrap();
+        assert_eq!(aristas.len(), 1);
+        assert_eq!(aristas[0].a, "Gustavo Petro", "la arista va por la forma completa");
+        assert_eq!(aristas[0].por_anio, vec![(2023, 1)]);
+        let ev = db.grafo_evidencia(1, "Gustavo Petro", "presidente", "ocupa el cargo", 5).unwrap();
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].parrafo.contains("presidente desde 2022"), "{:?}", ev[0].parrafo);
+        assert_eq!(ev[0].titulo.as_deref(), Some("Una nota"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn el_grafo_cuenta_una_vez_lo_que_la_persona_declaro_igual() {
         /* Marcar «Gustavo Petro», «Petro» y «el presidente» como la misma
            entidad es de lo más laborioso que hace la persona en la revisión.
@@ -3013,6 +3291,17 @@ mod tests {
             .expect("gana el nombre más largo del grupo");
         assert_eq!(petro.menciones, 3, "las tres menciones son de la misma entidad");
         assert_eq!(petro.articulos, 2, "y aparecen en dos artículos");
+
+        // Lo que decide el diccionario o el juez funde igual que el «=»: si
+        // «Duque» es «Iván Duque» según Quién-AI, el grafo lo cuenta una vez.
+        db.decidir_resolucion(1, &crate::resolucion::clave_par("Duque", "Iván Duque"), "Duque", "Iván Duque",
+                              "persona", "misma", 0.9, "quien-ai", Some("alias curado")).unwrap();
+        db.decidir_resolucion(1, &crate::resolucion::clave_par("Iván Duque", "Duque Márquez"), "Iván Duque", "Duque Márquez",
+                              "persona", "misma", 0.8, "juez:prueba", None).unwrap();
+        let nodos = db.grafo_entidades(1, 50).unwrap();
+        let duque = nodos.iter().find(|n| n.tipo == "persona" && n.texto != "Gustavo Petro").unwrap();
+        assert_eq!(duque.texto, "Duque Márquez", "el nombre más largo de la cadena de decisiones");
+        assert_eq!(nodos.iter().filter(|n| n.tipo == "persona").count(), 2);
 
         let _ = std::fs::remove_file(path);
     }

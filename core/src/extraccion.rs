@@ -22,6 +22,11 @@ pub struct Entidad {
     pub fin: i64,
     pub etiqueta: String,
     pub score: f64,
+    /// El nombre completo al que esta mención se resolvió dentro del artículo
+    /// («Petro» → «Gustavo Petro»). Lo pone `resolucion::canonizar_articulo`
+    /// al guardar; vacío si la mención ya es la forma completa o es ambigua.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,15 +51,136 @@ pub struct RelacionExtraida {
 /// para volver a medir, no para que lo elija quien usa la app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Modelos {
+    /// Identificador de Hugging Face o ruta a un directorio con el modelo
+    /// afinado de Legajo (ver `modelo_afinado`).
     pub gliner: String,
     pub spacy: String,
+    /// Corte de confianza para las relaciones cuyo predicado no tenga el suyo.
+    #[serde(default = "umbral_rel_por_defecto")]
+    pub umbral_rel: f64,
+    /// Corte por predicado. Un umbral mayor que 1 poda el predicado: el modelo
+    /// no lo distingue ni con su mejor corte y proponerlo es solo ruido.
+    #[serde(default)]
+    pub umbrales_rel: std::collections::HashMap<String, f64>,
+    /// Corte por tipo de entidad que trae el modelo, medido sobre el oro. Se
+    /// usa mientras el lote no tenga su propia calibración.
+    #[serde(default)]
+    pub umbrales_ent: std::collections::HashMap<String, f64>,
+    /// (tipo, texto) que el modelo propone con confianza y la convención no
+    /// marca: «Estado», «gobierno», «país», «ley». Lista de bloqueo inicial.
+    #[serde(default)]
+    pub bloqueadas: Vec<(String, String)>,
 }
+
+/// Con el modelo base, 0,4 era el corte que dejaba pasar lo revisable; el
+/// afinado calibra distinto y trae los suyos. Sobre el oro, el corte global que
+/// mejor F1 daba al afinado fue 0,7 (sidecar/entrenamiento/v5/RESULTADOS.md).
+fn umbral_rel_por_defecto() -> f64 { 0.4 }
 
 impl Default for Modelos {
     fn default() -> Self {
         Self {
             gliner: "knowledgator/gliner-relex-multi-v1.0".into(),
             spacy: "es_core_news_sm".into(),
+            umbral_rel: umbral_rel_por_defecto(),
+            umbrales_rel: Default::default(),
+            umbrales_ent: Default::default(),
+            bloqueadas: Vec::new(),
+        }
+    }
+}
+
+/// Nombre del directorio, dentro del directorio de modelos, con el afinado.
+pub const MODELO_AFINADO: &str = "legajo-relex";
+
+/// Dónde puede estar el modelo afinado, en orden: la variable de entorno, el
+/// directorio de datos de la app (`<datos>/modelos/legajo-relex`) y, en
+/// desarrollo, `sidecar/modelos/legajo-relex` junto al repositorio. Se instala
+/// con `sidecar/instalar_modelo.py`, que copia los pesos y escribe a su lado
+/// `umbrales.json` con los cortes medidos sobre el oro.
+pub fn dirs_modelos(r: &Rutas) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Ok(x) = std::env::var("LEGAJO_MODELOS") {
+        v.push(PathBuf::from(x));
+    }
+    if let Some(d) = &r.datos {
+        v.push(d.join("modelos"));
+    }
+    for d in dirs_sidecar(r) {
+        v.push(d.join("modelos"));
+    }
+    v
+}
+
+/// Dónde están los ficheros de la base de identidades: los que viajan con la
+/// app (`sidecar/identidades/`, en recursos o en el repositorio) y los que el
+/// medio añada en `<datos>/identidades/`.
+pub fn dirs_identidades(r: &Rutas) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = dirs_sidecar(r).into_iter().map(|d| d.join("identidades")).collect();
+    if let Some(d) = &r.datos {
+        v.push(d.join("identidades"));
+    }
+    v
+}
+
+/// El modelo afinado si está en la máquina: un directorio con
+/// `gliner_config.json` dentro.
+pub fn modelo_afinado(r: &Rutas) -> Option<PathBuf> {
+    dirs_modelos(r)
+        .into_iter()
+        .map(|d| d.join(MODELO_AFINADO))
+        .find(|d| d.join("gliner_config.json").exists())
+}
+
+/// Lo que trae `umbrales.json` junto al modelo afinado.
+#[derive(Debug, Default, Deserialize)]
+struct UmbralesGuardados {
+    #[serde(default)]
+    relaciones: std::collections::HashMap<String, f64>,
+    #[serde(default)]
+    podados: Vec<String>,
+    #[serde(default)]
+    entidades: std::collections::HashMap<String, f64>,
+    #[serde(default)]
+    umbral_rel: Option<f64>,
+    #[serde(default)]
+    bloqueadas: Vec<(String, String)>,
+}
+
+impl Modelos {
+    /// El afinado con sus umbrales si está instalado; si no, el base.
+    ///
+    /// La app no elige modelo: usa el mejor que tenga. Instalar el afinado es
+    /// copiar un directorio, y a partir de ahí todo lote nuevo se extrae con él
+    /// y con los cortes por predicado que se midieron sobre el oro.
+    pub fn para(r: &Rutas) -> Self {
+        let mut m = Self::default();
+        let Some(dir) = modelo_afinado(r) else { return m };
+        m.gliner = dir.display().to_string();
+        // El afinado calibra alto: sin sus umbrales, el corte del base dejaría
+        // pasar relaciones de manga ancha.
+        m.umbral_rel = 0.7;
+        let Ok(texto) = std::fs::read_to_string(dir.join("umbrales.json")) else { return m };
+        let Ok(u) = serde_json::from_str::<UmbralesGuardados>(&texto) else { return m };
+        m.umbrales_rel = u.relaciones;
+        for p in u.podados {
+            m.umbrales_rel.insert(p, 1.01);
+        }
+        m.umbrales_ent = u.entidades;
+        m.bloqueadas = u.bloqueadas;
+        if let Some(x) = u.umbral_rel {
+            m.umbral_rel = x;
+        }
+        m
+    }
+
+    /// Cómo se llama el modelo para una pantalla: el afinado por su nombre,
+    /// el base por el último tramo de su identificador.
+    pub fn nombre_corto(&self) -> String {
+        if Path::new(&self.gliner).is_dir() {
+            format!("{MODELO_AFINADO} (afinado)")
+        } else {
+            self.gliner.rsplit('/').next().unwrap_or(&self.gliner).to_string()
         }
     }
 }
@@ -66,7 +192,7 @@ pub fn catalogo() -> Value {
     json!({
         "gliner": [
             {"id": "knowledgator/gliner-relex-multi-v1.0", "nombre": "GLiNER relex multilingüe", "mb": 1275,
-             "nota": "Entidades y relaciones en una sola pasada, sobre mDeBERTa. El único modelo del extractor."}
+             "nota": "Entidades y relaciones en una sola pasada, sobre mDeBERTa. Es la base; si el afinado de Legajo está instalado (sidecar/instalar_modelo.py), se usa ese."}
         ],
         "spacy": [
             {"id": "es_core_news_sm", "nombre": "spaCy español pequeño", "mb": 13,
@@ -139,7 +265,8 @@ pub fn faltan(est: &EstadoModelos, m: &Modelos) -> Vec<String> {
     if !est.spacy.iter().any(|x| x == &m.spacy) {
         f.push(format!("spacy:{}", m.spacy));
     }
-    if !est.hf.iter().any(|x| x == &m.gliner) {
+    // El afinado es un directorio en la máquina, no algo que bajar del caché.
+    if !Path::new(&m.gliner).is_dir() && !est.hf.iter().any(|x| x == &m.gliner) {
         f.push(format!("gliner:{}", m.gliner));
     }
     f
@@ -212,7 +339,7 @@ pub fn catalogo_con_estado(est: &EstadoModelos) -> Value {
     cat
 }
 
-/// Los ocho tipos del sistema y cómo se le piden al modelo.
+/// Los siete tipos que se le piden al modelo y cómo se redactan.
 ///
 /// GLiNER es de vocabulario abierto: la etiqueta es una instrucción en lenguaje
 /// natural, y cómo se redacte cambia el resultado bastante. Se mantienen aquí,
@@ -231,7 +358,10 @@ pub const ETIQUETAS: &[(&str, &str)] = &[
     ("lugar", "nombre propio de lugar"),
     ("cargo", "cargo público o título de un puesto"),
     ("ley", "nombre de ley, decreto, sentencia o norma jurídica"),
-    ("evento", "nombre propio de evento o suceso"),
+    // «evento» se retiró: el 90 % de lo que devolvía era nombre común, el
+    // modelo afinado no lo aprendió (sidecar/vocabulario.py no lo tiene) y
+    // pedírselo igual producía 44.000 «eventos» como «2018», «paz» o «gas» en
+    // un lote de 371 artículos.
     ("obra", "título de libro, informe, periódico, revista o medio"),
     ("monto", "monto de dinero o cifra"),
 ];
@@ -265,6 +395,9 @@ pub const SENUELOS: &[&str] = &["grupo genérico de personas"];
 /// **21 %** del total eran espejos del mismo hecho.
 pub struct Predicado {
     pub etiqueta: &'static str,
+    /// A qué familia pertenece: es como se agrupa el menú cuando la lista
+    /// filtrada por tipos no cabe en las teclas 1—9.
+    pub familia: &'static str,
     /// Tipos válidos para el origen. Vacío = cualquiera.
     pub desde: &'static [&'static str],
     pub hasta: &'static [&'static str],
@@ -278,27 +411,57 @@ const L: &str = "lugar";
 const N: &str = "ley";
 const M: &str = "monto";
 const B: &str = "obra";
-const E: &str = "evento";
 
 /// Tiene que coincidir con `PREDICADOS` en `src/contenido/tipos.ts`, que es lo
-/// que ve la persona al relacionar dos marcas a mano. Hay una prueba que lo
-/// comprueba leyendo el otro fichero.
+/// que ve la persona al relacionar dos marcas a mano, y con
+/// `sidecar/vocabulario.py`, que es lo que aprendió el modelo. Los tres salen
+/// del mismo sitio: `sidecar/generar_vocabulario.py` reescribe este bloque y el
+/// de TypeScript desde el de Python, y hay pruebas que comprueban que no se
+/// separaron.
 pub const PREDICADOS: &[Predicado] = &[
-    Predicado { etiqueta: "ocupa el cargo",  desde: &[P],    hasta: &[C],             simetrico: false },
-    Predicado { etiqueta: "aspira a",        desde: &[P, O], hasta: &[C],             simetrico: false },
-    Predicado { etiqueta: "aliado de",       desde: &[P, O], hasta: &[P, O],          simetrico: true  },
-    Predicado { etiqueta: "opositor de",     desde: &[P, O], hasta: &[P, O],          simetrico: true  },
-    Predicado { etiqueta: "familiar de",     desde: &[P],    hasta: &[P],             simetrico: true  },
-    Predicado { etiqueta: "investigado por", desde: &[P, O], hasta: &[O, N],          simetrico: false },
-    Predicado { etiqueta: "financia a",      desde: &[P, O], hasta: &[P, O],          simetrico: false },
-    Predicado { etiqueta: "trabaja en",      desde: &[P],    hasta: &[O],             simetrico: false },
-    // Pertenencia, no identidad. Va de la parte al todo, y por eso no admite
-    // como destino los tipos que nunca son un todo que contenga a otra cosa.
-    Predicado { etiqueta: "parte de",        desde: &[],     hasta: &[O, L, N, E],    simetrico: false },
-    Predicado { etiqueta: "citado en",       desde: &[P, O], hasta: &[O, B],          simetrico: false },
-    Predicado { etiqueta: "ubicado en",      desde: &[],     hasta: &[L],             simetrico: false },
-    Predicado { etiqueta: "destinado a",     desde: &[M],    hasta: &[O, C, E, L, N], simetrico: false },
-    Predicado { etiqueta: "sanciona con",    desde: &[N],    hasta: &[M],             simetrico: false },
+    // generado desde sidecar/vocabulario.py: no editar a mano
+    // Familia
+    Predicado { etiqueta: "padre o madre de",    familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "hijo de",             familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "hermano de",          familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    Predicado { etiqueta: "cónyuge o pareja de", familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    Predicado { etiqueta: "familiar de",         familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    // Trabajo e instituciones
+    Predicado { etiqueta: "ocupa el cargo",      familia: "laboral",   desde: &[P],      hasta: &[C],            simetrico: false },
+    Predicado { etiqueta: "trabaja en",          familia: "laboral",   desde: &[P],      hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "dirige",              familia: "laboral",   desde: &[P],      hasta: &[O, B],         simetrico: false },
+    Predicado { etiqueta: "fundó",               familia: "laboral",   desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "dueño de",            familia: "laboral",   desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "asesor de",           familia: "laboral",   desde: &[P],      hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "sucedió a",           familia: "laboral",   desde: &[P],      hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "nombró a",            familia: "laboral",   desde: &[P, O],   hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "renunció a",          familia: "laboral",   desde: &[P],      hasta: &[C, O],         simetrico: false },
+    Predicado { etiqueta: "parte de",            familia: "laboral",   desde: &[],       hasta: &[O, L, N],      simetrico: false },
+    // Política
+    Predicado { etiqueta: "aliado de",           familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
+    Predicado { etiqueta: "opositor de",         familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
+    Predicado { etiqueta: "miembro de",          familia: "politica",  desde: &[P],      hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "aspira a",            familia: "politica",  desde: &[P, O],   hasta: &[C],            simetrico: false },
+    Predicado { etiqueta: "apoyó a",             familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "se reunió con",       familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
+    Predicado { etiqueta: "criticó a",           familia: "politica",  desde: &[P, O],   hasta: &[P, O, N],      simetrico: false },
+    // Dinero
+    Predicado { etiqueta: "financia a",          familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "contrató a",          familia: "economica", desde: &[O, P],   hasta: &[O, P],         simetrico: false },
+    Predicado { etiqueta: "socio de",            familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
+    Predicado { etiqueta: "donó a",              familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "destinado a",         familia: "economica", desde: &[M],      hasta: &[O, C, L, N],   simetrico: false },
+    // Justicia
+    Predicado { etiqueta: "investigado por",     familia: "judicial",  desde: &[P, O],   hasta: &[O, N],         simetrico: false },
+    Predicado { etiqueta: "condenado por",       familia: "judicial",  desde: &[P, O],   hasta: &[O, N],         simetrico: false },
+    Predicado { etiqueta: "acusado de",          familia: "judicial",  desde: &[P, O],   hasta: &[N],            simetrico: false },
+    Predicado { etiqueta: "demandó a",           familia: "judicial",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "sanciona con",        familia: "judicial",  desde: &[N],      hasta: &[M],            simetrico: false },
+    // Lugar y fuente
+    Predicado { etiqueta: "ubicado en",          familia: "fuente",    desde: &[],       hasta: &[L],            simetrico: false },
+    Predicado { etiqueta: "citado en",           familia: "fuente",    desde: &[P, O],   hasta: &[O, B],         simetrico: false },
+    Predicado { etiqueta: "autor de",            familia: "fuente",    desde: &[P, O],   hasta: &[B],            simetrico: false },
+    // fin de lo generado
 ];
 
 pub fn predicados_modelo() -> Vec<String> {
@@ -548,6 +711,11 @@ impl Sidecar {
         umbrales: &std::collections::HashMap<String, f64>,
         predicados: &[String],
         umbral_rel: f64,
+        // Corte por predicado; el que no esté usa `umbral_rel`. Un valor mayor
+        // que 1 poda el predicado. Es lo que trae el modelo afinado medido sobre
+        // el oro: 35 predicados no comparten calibración, y con un corte único
+        // «ocupa el cargo» se quedaba corto mientras «parte de» pasaba de sobra.
+        umbrales_rel: &std::collections::HashMap<String, f64>,
     ) -> Result<(Vec<Vec<Entidad>>, Vec<Vec<RelacionExtraida>>, u64)> {
         // Se pide con el umbral más bajo de todos y se filtra por tipo después:
         // así las puntuaciones quedan guardadas y recalibrar no exige volver a
@@ -573,7 +741,7 @@ impl Sidecar {
                 } else {
                     predicados_con_tipos()
                 },
-                "umbral": piso, "umbral_rel": umbral_rel,
+                "umbral": piso, "umbral_rel": umbral_rel, "umbrales_rel": umbrales_rel,
             }))
             .await?;
 
@@ -629,6 +797,58 @@ mod tests {
         );
     }
 
+    /// La tercera copia es la que aprendió el modelo. Se lee el Python con la
+    /// misma tosquedad que el TypeScript: una tupla por línea, la etiqueta
+    /// entre comillas al principio.
+    #[test]
+    fn el_vocabulario_de_rust_es_el_que_aprendio_el_modelo() {
+        let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sidecar/vocabulario.py");
+        let Ok(py) = std::fs::read_to_string(&ruta) else { return };
+        let en_py: Vec<String> = py
+            .lines()
+            .map(str::trim_start)
+            .filter_map(|l| l.strip_prefix("(\""))
+            .filter_map(|r| r.split_once('"'))
+            .map(|(n, _)| n.to_string())
+            .collect();
+        assert_eq!(en_py.len(), 35, "esperaba las 35 tuplas de PREDICADOS en vocabulario.py");
+        assert_eq!(predicados_modelo(), en_py, "rust y vocabulario.py se separaron");
+    }
+
+    #[test]
+    fn cada_predicado_tiene_familia() {
+        for p in PREDICADOS {
+            assert!(!p.familia.is_empty(), "«{}» sin familia", p.etiqueta);
+        }
+    }
+
+    #[test]
+    fn el_modelo_afinado_trae_sus_umbrales() {
+        // Sin afinado instalado, el base con su corte de siempre.
+        let base = Modelos::default();
+        assert_eq!(base.umbral_rel, 0.4);
+        assert!(base.umbrales_rel.is_empty());
+        // Con uno, los cortes del fichero y la poda como umbral imposible.
+        let dir = std::env::temp_dir().join(format!("legajo-modelos-{}", std::process::id()));
+        let afinado = dir.join(MODELO_AFINADO);
+        std::fs::create_dir_all(&afinado).unwrap();
+        std::fs::write(afinado.join("gliner_config.json"), "{}").unwrap();
+        std::fs::write(afinado.join("umbrales.json"),
+            r#"{"relaciones": {"ocupa el cargo": 0.65}, "podados": ["parte de"], "entidades": {"cargo": 0.6}}"#).unwrap();
+        std::env::set_var("LEGAJO_MODELOS", &dir);
+        let m = Modelos::para(&Rutas::default());
+        std::env::remove_var("LEGAJO_MODELOS");
+        let sin_bajar = faltan(&EstadoModelos::default(), &m);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(m.gliner, afinado.display().to_string());
+        assert_eq!(m.umbral_rel, 0.7);
+        assert_eq!(m.umbrales_rel.get("ocupa el cargo"), Some(&0.65));
+        assert!(m.umbrales_rel.get("parte de").copied().unwrap_or(0.0) > 1.0);
+        assert_eq!(m.umbrales_ent.get("cargo"), Some(&0.6));
+        assert!(sin_bajar.iter().all(|f| !f.starts_with("gliner:")), "el afinado instalado no es algo que bajar");
+    }
+
     #[test]
     fn ningun_predicado_admite_un_destino_que_no_puede_contener_nada() {
         // «parte de» era el único sin restricciones y absorbía el 38 % de todo
@@ -670,9 +890,9 @@ mod tests {
 
     #[test]
     fn hay_una_etiqueta_por_tipo_del_sistema() {
-        assert_eq!(ETIQUETAS.len(), 8);
+        assert_eq!(ETIQUETAS.len(), 7);
         // Las señuelo van al modelo pero no son tipos: no vuelven.
-        assert_eq!(etiquetas_modelo().len(), 8 + SENUELOS.len());
+        assert_eq!(etiquetas_modelo().len(), 7 + SENUELOS.len());
         for s in SENUELOS {
             assert_eq!(clave_de(s), s.to_lowercase(), "una señuelo no debe mapear a ningún tipo");
         }

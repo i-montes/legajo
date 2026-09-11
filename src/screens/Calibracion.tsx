@@ -5,10 +5,10 @@ import {
   alFinExtraccion, alProgresoExtraccion, aplicarCalibracion, avanceAnotacion, avanceExtraccion,
   alProgresoEntorno, alProgresoModelo, calibracionGuardada, calibrar, cancelarExtraccion,
   catalogoModelos, deshacerExtraccion, entornoEstado, instalarEntorno, iniciarExtraccion,
-  modelosPendientes, prepararModelos,
+  lotes as listarLotes, modelosPendientes, prepararModelos,
 } from "../lib/ipc";
 import type {
-  CatalogoModelos, EstadoEntorno, ProgresoEntorno, ProgresoExtraccion, ProgresoModelo,
+  CatalogoModelos, EstadoEntorno, LoteRow, ProgresoEntorno, ProgresoExtraccion, ProgresoModelo,
   ResultadoCalibracion,
 } from "../types";
 import type { EstadoApp } from "../App";
@@ -48,8 +48,15 @@ const ETAPAS: [Fase, string][] = [
 ];
 
 export default function Calibracion({ estado }: { estado: EstadoApp }) {
-  const { loteId } = estado;
+  const { loteId, conexionId } = estado;
   const [fase, setFase] = useState<Fase>("elegir");
+  /* Los lotes del archivo. Cuando hay más de uno se puede cambiar de lote aquí:
+     antes la sesión apuntaba a uno y volver a otro exigía tocar la base. */
+  const [lotesDelSitio, setLotesDelSitio] = useState<LoteRow[]>([]);
+  useEffect(() => {
+    if (conexionId == null) return;
+    listarLotes(conexionId).then(setLotesDelSitio).catch(() => setLotesDelSitio([]));
+  }, [conexionId, loteId]);
   const [catalogo, setCatalogo] = useState<CatalogoModelos | null>(null);
   /* Si el extractor está instalado en esta máquina. El instalador de Legajo no
      lo trae dentro —son 1,4 GB y encarecerían cada actualización— así que la
@@ -261,6 +268,14 @@ export default function Calibracion({ estado }: { estado: EstadoApp }) {
           </>
         }
       />
+
+      {lotesDelSitio.length > 1 && (
+        <SelectorLote
+          lotes={lotesDelSitio}
+          actual={loteId}
+          onElegir={(id) => { setFase("elegir"); setRes(null); setAplicada(false); estado.setLoteId(id); }}
+        />
+      )}
 
       <Etapas actual={fase} />
 
@@ -551,3 +566,26 @@ function Cifra({ v, pie, destacada }: { v: string; pie: string; destacada?: bool
   );
 }
 
+
+/* Qué lote se está calibrando, y con qué cambiarlo. Solo aparece cuando hay
+   más de uno: con un lote no hay decisión. La fecha y el tamaño distinguen
+   dos lotes con la misma etiqueta. */
+function SelectorLote({ lotes, actual, onElegir }: { lotes: LoteRow[]; actual: number | null; onElegir: (id: number) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "var(--hundida)", borderRadius: 10 }}>
+      <Rotulo>Lote</Rotulo>
+      <select
+        value={actual ?? ""}
+        aria-label="Lote de extracción activo"
+        onChange={(e) => { const id = Number(e.target.value); if (Number.isFinite(id) && id !== actual) onElegir(id); }}
+        style={{ flex: 1, fontFamily: "var(--font-sans)", fontSize: 13, color: "var(--t1)", background: "var(--superficie)", border: "1px solid var(--borde)", borderRadius: 6, padding: "5px 8px" }}
+      >
+        {lotes.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.etiqueta} · {num(l.articulos)} artículos, {l.calibrar} de calibración{l.calibrado ? " · calibrado" : ""} · {l.creado.slice(0, 10)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}

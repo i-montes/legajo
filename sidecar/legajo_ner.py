@@ -215,14 +215,14 @@ class Motor:
     def clave(self, etiqueta):
         return self.claves.get(etiqueta, etiqueta)
 
-    def procesar_articulo(self, parrafos, etiquetas, predicados, umbral, umbral_rel):
+    def procesar_articulo(self, parrafos, etiquetas, predicados, umbral, umbral_rel, umbrales_rel=None):
         """Todos los párrafos de un artículo, con lo que solo se sabe viéndolos
         juntos: quién habla, si es una entrevista."""
         quienes = hablantes(parrafos)
         ents_por_parrafo, rels_por_parrafo = [], []
         for texto in parrafos:
             base = sin_hablante(texto, quienes)
-            ents, rels = self.procesar(self.nlp(texto[base:]), etiquetas, predicados, umbral, umbral_rel)
+            ents, rels = self.procesar(self.nlp(texto[base:]), etiquetas, predicados, umbral, umbral_rel, umbrales_rel)
             if base:
                 # Las posiciones vuelven al sistema de coordenadas del párrafo
                 # entero, que es donde la revisión las busca.
@@ -233,10 +233,10 @@ class Motor:
             rels_por_parrafo.append(rels)
         return ents_por_parrafo, rels_por_parrafo
 
-    def procesar(self, doc, etiquetas, predicados, umbral, umbral_rel):
+    def procesar(self, doc, etiquetas, predicados, umbral, umbral_rel, umbrales_rel=None):
         """Entidades y relaciones de un párrafo, en una pasada por trozo.
 
-        Se le piden los trece predicados siempre. Antes se filtraban por los
+        Se le piden todos los predicados siempre. Antes se filtraban por los
         tipos presentes en el párrafo, pero eso exigía conocer las entidades
         antes de pedir las relaciones, y aquí salen juntas. Lo que vuelve mal
         unido —un predicado entre tipos que no admite— se descarta igual.
@@ -247,8 +247,11 @@ class Motor:
             if not trozo.strip():
                 continue
             if pedir:
+                # Al modelo se le pide con el corte más bajo de todos y se filtra
+                # después por predicado: cada uno tiene el suyo.
+                piso = min([umbral_rel] + [u for u in (umbrales_rel or {}).values() if u <= 1])
                 e, r = self.modelo.predict_relations(
-                    trozo, etiquetas, pedir, threshold=umbral, relation_threshold=umbral_rel
+                    trozo, etiquetas, pedir, threshold=umbral, relation_threshold=piso
                 )
             else:
                 e, r = self.modelo.predict_entities(trozo, etiquetas, threshold=umbral), []
@@ -263,6 +266,12 @@ class Motor:
                     continue
                 if clave == "persona" and c["text"].strip().lower() in PRONOMBRES:
                     continue
+                # Una persona es un nombre propio: lleva mayúscula en alguna
+                # parte, o es una cuenta («@petrogustavo»). «papá», «mamá»,
+                # «investigador», «hijo» salían con confianza 0,6–0,7 y son
+                # roles, no personas.
+                if clave == "persona" and not c["text"].lstrip().startswith("@") and c["text"] == c["text"].lower():
+                    continue
                 ents.append({
                     "texto": c["text"],
                     "inicio": c["start"] + desplazamiento,
@@ -272,10 +281,15 @@ class Motor:
                 })
             crudas.extend(r or [])
         ents = deduplicar(ents)
-        return ents, self.relaciones(crudas, ents, predicados, umbral_rel)
+        return ents, self.relaciones(crudas, ents, predicados, umbral_rel, umbrales_rel)
 
-    def relaciones(self, crudas, ents, predicados, umbral):
-        """Las relaciones que sobreviven al vocabulario.
+    def relaciones(self, crudas, ents, predicados, umbral, umbrales=None):
+        """Las relaciones que sobreviven al vocabulario y a su umbral.
+
+        `umbrales` es el corte por predicado que trae el modelo afinado; el que
+        no esté usa `umbral`, y uno mayor que 1 poda el predicado. Con 35
+        predicados no hay corte único que valga: «ocupa el cargo» acierta a
+        0,65 lo que «parte de» no acierta a ningún umbral.
 
         El modelo devuelve cada relación con el texto de sus dos extremos. Se
         les busca el tipo entre las entidades que quedaron —si un extremo cayó
@@ -285,13 +299,14 @@ class Motor:
         a revisar es gastar atención humana en descartarlo.
         """
         tipo_de = {e["texto"]: self.clave(e["etiqueta"]) for e in ents}
+        umbrales = umbrales or {}
         out = []
         for r in crudas:
             score = float(r.get("score", 0))
-            if score < umbral:
+            etiqueta = r.get("relation") or r.get("label") or ""
+            if score < umbrales.get(etiqueta, umbral):
                 continue
             a, b = _texto(r, "head"), _texto(r, "tail")
-            etiqueta = r.get("relation") or r.get("label") or ""
             # Nada se relaciona consigo mismo. Sale cuando la misma cadena
             # aparece dos veces en el párrafo y el modelo empareja las dos.
             if not a or not b or a == b:
@@ -401,12 +416,13 @@ def main():
                 predicados = pet.get("predicados") or []
                 umbral = float(pet.get("umbral", 0.35))
                 umbral_rel = float(pet.get("umbral_rel", 0.5))
+                umbrales_rel = {k: float(v) for k, v in (pet.get("umbrales_rel") or {}).items()}
 
                 # Párrafo a párrafo: la anotación manual guarda las posiciones
                 # dentro del párrafo, y comparar las dos cosas exige el mismo
                 # sistema de coordenadas.
                 ents_por_parrafo, rels_por_parrafo = motor.procesar_articulo(
-                    pet.get("parrafos") or [], etiquetas, predicados, umbral, umbral_rel
+                    pet.get("parrafos") or [], etiquetas, predicados, umbral, umbral_rel, umbrales_rel
                 )
 
                 responder({

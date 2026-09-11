@@ -233,6 +233,21 @@ export interface Caso {
   b: Candidata;
 }
 
+/** Una decisión sobre un par de nombres (core/src/db.rs `Resolucion`). */
+export interface Resolucion {
+  clave: string;
+  a: string;
+  b: string;
+  tipo: string;
+  /** `misma`, `distinta` o `posponer`. */
+  decision: string;
+  confianza: number;
+  /** `persona`, `regla`, `quien-ai` o `juez:<modelo>`. */
+  fuente: string;
+  motivo: string | null;
+  decidido_at: string;
+}
+
 
 
 export interface DensidadTipo { tipo: string; menciones: number; por_articulo: number }
@@ -460,6 +475,19 @@ export interface AristaGrafo {
   /** Años del primer y último artículo que lo afirman. */
   desde_anio: number | null;
   hasta_anio: number | null;
+  /** Cuántos artículos lo afirman en cada año. */
+  por_anio: [number, number][];
+}
+
+/** Un artículo y párrafo que afirman una relación del grafo. */
+export interface Evidencia {
+  wp_id: number;
+  pi: number;
+  titulo: string | null;
+  fecha: string | null;
+  enlace: string | null;
+  parrafo: string;
+  revisada: boolean;
 }
 
 export interface ResumenGrafo {

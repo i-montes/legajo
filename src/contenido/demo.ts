@@ -39,7 +39,6 @@ export const ARTICULOS: ArticuloDemo[] = [
       { pi: 2, needle: "El costo de no saber", tipo: "obra" },
       { pi: 2, needle: "Comisión de la Verdad", tipo: "organizacion" },
       { pi: 3, needle: "1.240 millones de pesos", tipo: "monto" },
-      { pi: 4, needle: "El Encuentro por la Memoria del Sinú", tipo: "evento" },
       { pi: 4, needle: "Lorica", tipo: "lugar" },
     ],
   },
@@ -201,7 +200,6 @@ export const PRECISIONES = [
   { k: "lugar", etiqueta: "Lugar", valor: "0,91", pct: 91 },
   { k: "cargo", etiqueta: "Cargo o rol", valor: "0,72", pct: 72 },
   { k: "ley", etiqueta: "Ley o norma", valor: "0,83", pct: 83 },
-  { k: "evento", etiqueta: "Evento", valor: "0,61", pct: 61 },
   { k: "obra", etiqueta: "Obra o publicación", valor: "0,58", pct: 58 },
   { k: "monto", etiqueta: "Monto o cifra", valor: "0,86", pct: 86 },
 ];

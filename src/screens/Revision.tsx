@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
-import { TIPOS, colorTipo, predicadosPara } from "../contenido/tipos";
+import { FAMILIAS, TIPOS, colorTipo, predicadosPara } from "../contenido/tipos";
+import type { Predicado } from "../contenido/tipos";
 import {
   apuntarTiempo, avanceAnotacion, cargarAnotacion, cerrarArticulo, descartarTiempo, guardarAnotacion,
   lexico as cargarLexico, muestra as cargarMuestra,
@@ -39,6 +40,11 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const [pendiente, setPendiente] = useState<Pendiente | null>(null);
   const [punto, setPunto] = useState<Punto | null>(null);
   const [relPicker, setRelPicker] = useState(false);
+  /* Con 35 predicados, entre dos personas encajan dieciocho: no caben en las
+     teclas 1—9. Cuando pasan de nueve, el menú pide primero la familia
+     (Familia, Trabajo, Política…) y después el predicado; esto guarda la
+     familia elegida. */
+  const [familiaSel, setFamiliaSel] = useState<string | null>(null);
   const [panel, setPanel] = useState(true);
   const reloj = useCronometro();
   const crono = reloj.segundos;
@@ -310,6 +316,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       });
     }
     setRelPicker(true);
+    setFamiliaSel(null);
     setPendiente(null);
   }, [relSel]);
 
@@ -317,12 +324,27 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      if (e.key === "Escape") { setPendiente(null); setPunto(null); setRelPicker(false); setRelSel([]); return; }
-      if (pendiente && /^[1-8]$/.test(e.key)) { e.preventDefault(); return marcar(TIPOS[+e.key - 1].k); }
-      if (relPicker && /^[1-9]$/.test(e.key)) {
+      if (e.key === "Escape") {
+        // Dentro de una familia, Escape vuelve a la lista de familias; fuera, cierra.
+        if (relPicker && familiaSel) { setFamiliaSel(null); return; }
+        setPendiente(null); setPunto(null); setRelPicker(false); setRelSel([]); return;
+      }
+      if (pendiente && /^[1-7]$/.test(e.key)) { e.preventDefault(); return marcar(TIPOS[+e.key - 1].k); }
+      if (relPicker && /^[0-9]$/.test(e.key)) {
         e.preventDefault();
         const opciones = predicadosDisponibles();
-        const p = opciones[+e.key - 1];
+        const { directo, familias, dentro } = menuPredicados(opciones, familiaSel);
+        if (e.key === "0") { setFamiliaSel(null); return; }
+        if (directo) {
+          const p = opciones[+e.key - 1];
+          return p ? crearRelacion(p.etiqueta) : undefined;
+        }
+        if (familiaSel === null) {
+          const f = familias[+e.key - 1];
+          if (f) setFamiliaSel(f.k);
+          return;
+        }
+        const p = dentro[+e.key - 1];
         return p ? crearRelacion(p.etiqueta) : undefined;
       }
       if (e.key === "r" || e.key === "R") { e.preventDefault(); return abrirRelacion(); }
@@ -340,7 +362,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [pendiente, relPicker, relSel, marcar, crearRelacion, abrirRelacion, enlazarAlias,
+  }, [pendiente, relPicker, relSel, familiaSel, marcar, crearRelacion, abrirRelacion, enlazarAlias,
       marcarDesigna, irArticulo, predicadosDisponibles]);
 
   function alSoltar() {
@@ -692,11 +714,36 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                   a && b ? `${recorta(a.texto)} → ${recorta(b.texto)}` : "Selecciona dos marcas"
                 }
               >
-                {opciones.map((p, k) => (
-                  <Opcion key={p.etiqueta} tecla={String(k + 1)} onClick={() => crearRelacion(p.etiqueta)} nota={p.nota}>
-                    {p.etiqueta}
-                  </Opcion>
-                ))}
+                {(() => {
+                  const { directo, familias, dentro } = menuPredicados(opciones, familiaSel);
+                  if (directo) {
+                    return opciones.map((p, k) => (
+                      <Opcion key={p.etiqueta} tecla={String(k + 1)} onClick={() => crearRelacion(p.etiqueta)} nota={p.nota}>
+                        {p.etiqueta}
+                      </Opcion>
+                    ));
+                  }
+                  if (familiaSel === null) {
+                    return familias.map((f, k) => (
+                      <Opcion key={f.k} tecla={String(k + 1)} onClick={() => setFamiliaSel(f.k)}
+                              nota={opciones.filter((p) => p.familia === f.k).map((p) => p.etiqueta).join(" · ")}>
+                        {f.etiqueta} <span style={{ color: "var(--t3)" }}>({opciones.filter((p) => p.familia === f.k).length})</span>
+                      </Opcion>
+                    ));
+                  }
+                  return (
+                    <>
+                      <Opcion tecla="0" onClick={() => setFamiliaSel(null)}>
+                        <span style={{ color: "var(--t3)" }}>← {FAMILIAS.find((f) => f.k === familiaSel)?.etiqueta}</span>
+                      </Opcion>
+                      {dentro.map((p, k) => (
+                        <Opcion key={p.etiqueta} tecla={String(k + 1)} onClick={() => crearRelacion(p.etiqueta)} nota={p.nota}>
+                          {p.etiqueta}
+                        </Opcion>
+                      ))}
+                    </>
+                  );
+                })()}
                 {/* Que no haya nada no siempre es un hueco del vocabulario:
                     casi siempre es que la relación existe al revés. No hay nada
                     que una un lugar con una persona porque lo que hay es
@@ -948,6 +995,18 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
 }
 
 const recorta = (t: string) => (t.length > 28 ? t.slice(0, 28) + "…" : t);
+
+/** Cómo se presenta la lista de predicados que encajan entre dos marcas.
+ *
+ *  Hasta nueve, directa: una tecla por predicado. Más de nueve, por familias:
+ *  primero se elige la familia (solo las que tienen algo que ofrecer) y después
+ *  el predicado dentro de ella, que sí cabe en 1—9. */
+export function menuPredicados(opciones: Predicado[], familiaSel: string | null) {
+  const directo = opciones.length <= 9;
+  const familias = FAMILIAS.filter((f) => opciones.some((p) => p.familia === f.k));
+  const dentro = familiaSel ? opciones.filter((p) => p.familia === familiaSel) : [];
+  return { directo, familias, dentro };
+}
 
 function Flotante({ x, y, titulo, children }: { x: number; y: number; titulo: string; children: React.ReactNode }) {
   return (

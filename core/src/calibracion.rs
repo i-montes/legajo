@@ -103,17 +103,20 @@ fn f1(vp: f64, fp: f64, fneg: f64) -> f64 {
 ///
 /// Subir el umbral quita falsos positivos pero también aciertos: el óptimo es
 /// donde el intercambio deja de compensar, y depende del tipo.
-fn mejor_umbral(props: &[&Propuesta], anadidas: f64) -> (f64, f64, f64) {
+fn mejor_umbral(props: &[&Propuesta], anadidas: f64, vigente: f64) -> (f64, f64, f64) {
     let base = {
         let vp = props.iter().filter(|p| p.aceptada).count() as f64;
         let fp = props.len() as f64 - vp;
         f1(vp, fp, anadidas)
     };
 
-    // Pasos enteros: acumular en coma flotante producía umbrales como
-    // 0,49999999999999994, que además de feos en la configuración hacen
-    // comparaciones frágiles.
-    let mut mejor = (UMBRAL_MIN, base);
+    // Se parte del corte vigente —el del modelo, o el que ya se había
+    // calibrado— y solo se mueve si otro mejora el F1. Las propuestas que
+    // quedaron por debajo del vigente no llegaron a la pantalla, así que un
+    // corte más bajo da el mismo F1 que el vigente sin ninguna evidencia; el
+    // empate no puede ganarlo el más bajo, porque así fue como un lote acabó
+    // con todo en 0,30 y «la», «el» y «…» propuestos como personas.
+    let mut mejor = (vigente, base);
     for t in cortes() {
         let sobre: Vec<_> = props.iter().filter(|p| p.score >= t).collect();
         let vp = sobre.iter().filter(|p| p.aceptada).count() as f64;
@@ -121,8 +124,6 @@ fn mejor_umbral(props: &[&Propuesta], anadidas: f64) -> (f64, f64, f64) {
         // Lo aceptado que cae por debajo del corte pasa a ser un fallo de cobertura.
         let perdidas = props.iter().filter(|p| p.aceptada && p.score < t).count() as f64;
         let s = f1(vp, fp, anadidas + perdidas);
-        // Ante empate gana el umbral más bajo: conserva más candidatos, y
-        // descartar de más es peor que proponer de más, que se borra con una tecla.
         if s > mejor.1 + 1e-9 {
             mejor = (t, s);
         }
@@ -131,6 +132,8 @@ fn mejor_umbral(props: &[&Propuesta], anadidas: f64) -> (f64, f64, f64) {
 }
 
 pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
+    // `vigente` se usa dos veces: para saber qué vio la persona y como punto
+    // de partida de cada corte.
     // Lo que la revisión estaba enseñando cuando la persona revisó. Una
     // propuesta que nunca llegó a la pantalla —por debajo del corte, o
     // bloqueada— no fue rechazada por nadie, y contarla como rechazo fabricaba
@@ -235,7 +238,8 @@ pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
         for t in tipos {
             let del_tipo: Vec<&Propuesta> = props.iter().filter(|p| p.tipo == t).collect();
             let add = *anadidas.get(&t).unwrap_or(&0) as f64;
-            let (umbral, antes, despues) = mejor_umbral(&del_tipo, add);
+            let desde = vigente.umbrales.get(&t).copied().unwrap_or(0.50);
+            let (umbral, antes, despues) = mejor_umbral(&del_tipo, add, desde);
             umbrales.insert(t.clone(), umbral);
             let acep = del_tipo.iter().filter(|p| p.aceptada).count() as i64;
             por_tipo.push(MarcadorTipo {
@@ -257,6 +261,12 @@ pub fn calibrar(db: &Db, lote_id: i64) -> Result<Resultado> {
             .collect();
         frec.sort_by(|a, b| b.2.cmp(&a.2));
         frec.truncate(20);
+
+        // Un tipo sin ninguna propuesta ni marca en lo revisado conserva su
+        // corte vigente: no hay con qué recalcularlo.
+        for (t, u) in &vigente.umbrales {
+            umbrales.entry(t.clone()).or_insert(*u);
+        }
 
         Ok(Resultado {
             articulos: ids.len() as i64,
@@ -286,7 +296,7 @@ mod tests {
             p("evento", 0.80, true), p("evento", 0.85, true), p("evento", 0.90, true),
         ];
         let refs: Vec<&Propuesta> = v.iter().collect();
-        let (umbral, antes, despues) = mejor_umbral(&refs, 0.0);
+        let (umbral, antes, despues) = mejor_umbral(&refs, 0.0, UMBRAL_MIN);
         assert!(umbral >= 0.5, "umbral {umbral}");
         assert_eq!(umbral, (umbral * 100.0).round() / 100.0, "el umbral debe ser un valor limpio");
         assert!(despues > antes, "{antes} → {despues}");
@@ -296,7 +306,7 @@ mod tests {
     fn no_toca_el_umbral_si_todo_se_acepta() {
         let v: Vec<Propuesta> = (0..6).map(|i| p("persona", 0.4 + i as f64 * 0.08, true)).collect();
         let refs: Vec<&Propuesta> = v.iter().collect();
-        let (umbral, antes, despues) = mejor_umbral(&refs, 0.0);
+        let (umbral, antes, despues) = mejor_umbral(&refs, 0.0, UMBRAL_MIN);
         assert_eq!(umbral, UMBRAL_MIN, "subirlo solo perdería aciertos");
         assert!((despues - antes).abs() < 1e-9);
     }
@@ -308,7 +318,7 @@ mod tests {
         let mut v = vec![p("persona", 0.35, false)];
         v.extend((0..12).map(|_| p("persona", 0.36, true)));
         let refs: Vec<&Propuesta> = v.iter().collect();
-        let (umbral, _, _) = mejor_umbral(&refs, 0.0);
+        let (umbral, _, _) = mejor_umbral(&refs, 0.0, UMBRAL_MIN);
         assert!(umbral < 0.4, "umbral {umbral}: cortaría doce aciertos por un fallo");
     }
 
@@ -318,6 +328,17 @@ mod tests {
     /// 0,3 —por debajo del corte, invisible en la revisión— contaba como dos
     /// rechazos, entraba en la lista de bloqueo, y la lista bloqueaba por texto
     /// sin mirar el tipo: 1.229 menciones de «Colombia» como lugar escondidas.
+    #[test]
+    fn sin_evidencia_el_corte_se_queda_donde_estaba() {
+        // Todo lo visible está por encima del vigente (0,7) y todo se aceptó:
+        // bajar no añade nada y subir pierde aciertos. El corte no se mueve, y
+        // sobre todo no cae a 0,30 por «ganar el empate el más bajo».
+        let props = vec![p("persona", 0.75, true), p("persona", 0.9, true), p("persona", 0.8, true)];
+        let refs: Vec<&Propuesta> = props.iter().collect();
+        let (umbral, _, _) = mejor_umbral(&refs, 0.0, 0.7);
+        assert_eq!(umbral, 0.7);
+    }
+
     #[test]
     fn lo_que_no_se_vio_no_se_rechazo() {
         let path = std::env::temp_dir()

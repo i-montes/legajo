@@ -33,9 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2 · El extractor: un solo proceso con el modelo. Se arranca antes
     //     de bajar nada, igual que en la app: si los modelos no cargan, no
     //     tiene sentido haber descargado cuerpos.
-    let (python, guion) = extraccion::localizar(&extraccion::Rutas::del_repo())?;
+    let rutas = extraccion::Rutas::del_repo();
+    let (python, guion) = extraccion::localizar(&rutas)?;
     let mut sc = extraccion::Sidecar::iniciar(&python, &guion).await?;
-    let modelos = extraccion::Modelos::default();
+    let modelos = extraccion::Modelos::para(&rutas);
     let ms = sc.cargar(&modelos).await?;
     println!("3 · modelo       {} · spaCy {} · relaciones {} · {:.1}s",
              modelos.gliner, modelos.spacy,
@@ -44,7 +45,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3 · Descarga y extracción en el mismo bucle, por tandas. Es lo que corre
     //     la app: una petición trae la tanda y el extractor la consume acto
     //     seguido, en vez de bajar el lote entero y luego recorrerlo otra vez.
-    let cal = db.calibracion(lote_id)?.unwrap_or_default();
+    let mut cal = db.calibracion(lote_id)?.unwrap_or_default();
+    if cal.umbrales.is_empty() && !modelos.umbrales_ent.is_empty() {
+        // Se guarda: es lo que la revisión enseña, lo que el grafo cuenta y el
+        // punto de partida de la calibración de la persona.
+        cal.umbrales = modelos.umbrales_ent.clone();
+        if cal.bloqueadas.is_empty() {
+            cal.bloqueadas = modelos.bloqueadas.clone();
+        }
+        db.guardar_calibracion(lote_id, &cal)?;
+    }
     let predicados = extraccion::predicados_modelo();
     let t = db.transporte(conn_id)?;
     let pendientes = db.pendientes_del_lote(lote_id, true, &[])?;
@@ -67,7 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (wp_id, texto) in db.textos_de(conn_id, tanda)? {
             let parrafos: Vec<String> = texto.split("\n\n")
                 .filter(|p| !p.trim().is_empty()).map(String::from).collect();
-            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
+            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados,
+                              modelos.umbral_rel, &modelos.umbrales_rel).await {
                 Ok((ents, rels, ms)) => {
                     let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
                     let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;

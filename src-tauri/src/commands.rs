@@ -811,7 +811,7 @@ pub struct ProgresoModelo {
 pub async fn preparar_modelos(app: AppHandle) -> Result<usize> {
     let r = rutas(&app);
     let est = extraccion::estado_modelos(&r).await?;
-    let pendientes = extraccion::faltan(&est, &extraccion::Modelos::default());
+    let pendientes = extraccion::faltan(&est, &extraccion::Modelos::para(&r));
     let n = pendientes.len();
 
     let app2 = app.clone();
@@ -827,8 +827,9 @@ pub async fn preparar_modelos(app: AppHandle) -> Result<usize> {
 /// Qué falta por bajar para poder extraer, sin bajar nada.
 #[tauri::command]
 pub async fn modelos_pendientes(app: AppHandle) -> Result<Vec<String>> {
-    let est = extraccion::estado_modelos(&rutas(&app)).await?;
-    Ok(extraccion::faltan(&est, &extraccion::Modelos::default()))
+    let r = rutas(&app);
+    let est = extraccion::estado_modelos(&r).await?;
+    Ok(extraccion::faltan(&est, &extraccion::Modelos::para(&r)))
 }
 
 // ── La capa de ejecución del extractor ───────────────────────────────────
@@ -971,9 +972,10 @@ pub fn iniciar_extraccion(
     let db = state.db.clone();
     let corriendo = state.extrayendo.clone();
     let cancelar = state.extraccion_cancelar.clone();
-    // El modelo es uno y no se elige: ver `Modelos` en core/src/extraccion.rs.
-    let modelos = extraccion::Modelos::default();
+    // El modelo es uno y no se elige: el afinado de Legajo si está instalado,
+    // el base si no. Ver `Modelos` en core/src/extraccion.rs.
     let rutas = rutas(&app);
+    let modelos = extraccion::Modelos::para(&rutas);
 
     tauri::async_runtime::spawn(async move {
         let _suelta = Suelta(corriendo);
@@ -1090,14 +1092,25 @@ async fn extraer(
     let ms_carga = sc.cargar(modelos).await?;
     let nota = if sc.relaciones_activas { "" } else { "sin relaciones: el modelo no las extrae" };
     // Qué corre y dónde, para que la pantalla lo diga en vez de suponerlo.
-    let corto = modelos.gliner.rsplit('/').next().unwrap_or(&modelos.gliner);
+    let corto = modelos.nombre_corto();
     let detalle = format!("{corto} · {}{}", sc.dispositivo.to_uppercase(), if nota.is_empty() { String::new() } else { format!(" · {nota}") });
     avisar("cargado", 0, total, 0, 0, 0, ms_carga, &detalle);
 
     // 3 · El recorrido, por tandas. Cada vuelta baja lo que le falte a su tanda
     //     y lo extrae acto seguido: una sola pasada sobre el lote en vez de
     //     dos, y lo descargado no se acumula esperando a que empiece el modelo.
-    let cal = db.calibracion(lote_id)?.unwrap_or_default();
+    let mut cal = db.calibracion(lote_id)?.unwrap_or_default();
+    // Un lote sin calibrar todavía usa los cortes por tipo que trae el modelo
+    // afinado, medidos sobre el oro; los de la persona, cuando los haya, mandan.
+    if cal.umbrales.is_empty() && !modelos.umbrales_ent.is_empty() {
+        // Se guarda: es lo que la revisión enseña, lo que el grafo cuenta y el
+        // punto de partida de la calibración de la persona.
+        cal.umbrales = modelos.umbrales_ent.clone();
+        if cal.bloqueadas.is_empty() {
+            cal.bloqueadas = modelos.bloqueadas.clone();
+        }
+        db.guardar_calibracion(lote_id, &cal)?;
+    }
     // Las relaciones salen en la misma pasada que las entidades: no hay
     // interruptor que apagar, ni ahorro por apagarlo.
     let predicados: Vec<String> = extraccion::predicados_modelo();
@@ -1149,7 +1162,8 @@ async fn extraer(
                 .map(String::from)
                 .collect();
 
-            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados, 0.4).await {
+            match sc.procesar(wp_id, &parrafos, &cal.umbrales, &predicados,
+                              modelos.umbral_rel, &modelos.umbrales_rel).await {
                 Ok((ents, rels, ms)) => {
                     let n = db.guardar_extraidas(lote_id, wp_id, &ents)?;
                     let nr = db.guardar_relaciones_extraidas(lote_id, wp_id, &rels)?;
@@ -1207,11 +1221,74 @@ pub async fn grafo_sin_nombrar(
 /// una limitación conocida y uno con un error escondido.
 #[tauri::command]
 pub async fn grafo_duplicados(
+    app: AppHandle,
     state: State<'_, AppState>,
     lote_id: i64,
 ) -> Result<Vec<legajo_core::resolucion::Caso>> {
     let db = state.db.clone();
-    en_hilo(move || legajo_core::resolucion::casos(&db, lote_id)).await
+    let dirs = extraccion::dirs_identidades(&rutas(&app));
+    en_hilo(move || {
+        // Lo que la base de identidades ya sabe se decide antes de preguntar:
+        // con fuente «identidades», visible y deshacible como lo demás.
+        let base = legajo_core::resolucion::BaseIdentidades::cargar(&dirs);
+        base.aplicar(&db, lote_id)?;
+        legajo_core::resolucion::casos(&db, lote_id)
+    }).await
+}
+
+/// Lo que ya se decidió sobre pares de nombres: por la persona, por el
+/// diccionario de Quién-AI o por el juez con LLM. El grafo funde lo «misma»
+/// venga de donde venga, así que hay que poder verlo y deshacerlo.
+#[tauri::command]
+pub async fn resoluciones_del_lote(
+    state: State<'_, AppState>,
+    lote_id: i64,
+) -> Result<Vec<legajo_core::db::Resolucion>> {
+    let db = state.db.clone();
+    en_hilo(move || db.resoluciones(lote_id)).await
+}
+
+/// Devuelve un par a la cola de dudas: la decisión pasa a «posponer» a nombre
+/// de la persona, y el grafo deja de fundirlo. No se borra, para que quede
+/// dicho que alguien lo miró y no estuvo de acuerdo con el juez.
+#[tauri::command]
+pub async fn deshacer_resolucion(
+    state: State<'_, AppState>,
+    lote_id: i64,
+    clave: String,
+) -> Result<()> {
+    let db = state.db.clone();
+    en_hilo(move || {
+        let previa = db.resoluciones(lote_id)?.into_iter().find(|r| r.clave == clave);
+        let Some(r) = previa else { return Ok(()) };
+        db.decidir_resolucion(lote_id, &r.clave, &r.a, &r.b, &r.tipo, "posponer", 0.0, "persona",
+                              Some(&format!("deshecho; antes «{}» según {}", r.decision, r.fuente)))
+    }).await
+}
+
+/// La persona afirma o niega un par desde el grafo.
+#[tauri::command]
+pub async fn decidir_par(
+    state: State<'_, AppState>,
+    lote_id: i64,
+    clave: String,
+    a: String,
+    b: String,
+    tipo: String,
+    misma: bool,
+) -> Result<()> {
+    let db = state.db.clone();
+    en_hilo(move || db.decidir_resolucion(lote_id, &clave, &a, &b, &tipo, if misma { "misma" } else { "distinta" },
+                                          1.0, "persona", None)).await
+}
+
+/// Los artículos y párrafos de los que sale una relación del grafo.
+#[tauri::command]
+pub async fn grafo_evidencia(
+    state: State<'_, AppState>, lote_id: i64, a: String, b: String, predicado: String,
+) -> Result<Vec<legajo_core::db::Evidencia>> {
+    let db = state.db.clone();
+    en_hilo(move || db.grafo_evidencia(lote_id, &a, &b, &predicado, 12)).await
 }
 
 #[tauri::command]
