@@ -45,3 +45,19 @@ sidecar/banco/*.json
 
 # Metadatos que WSL arrastra de Windows
 *:Zone.Identifier
+
+# Modelo afinado instalado para desarrollo (1,2 GB): se instala con
+# sidecar/instalar_modelo.py --destino sidecar/modelos
+sidecar/modelos/
+# Pesos y puntos de control de las corridas de entrenamiento (1,2 GB cada uno);
+# los RESULTADOS.md, informes y conjuntos exportados sí se guardan.
+sidecar/entrenamiento/**/lr*/
+sidecar/entrenamiento/**/curriculo-*/
+sidecar/entrenamiento/**/checkpoint-*/
+# Conjuntos exportados por exportar_patron.py (texto del archivo, 58 MB): se regeneran
+sidecar/entrenamiento/*/train*.jsonl
+sidecar/entrenamiento/*/val*.jsonl
+sidecar/entrenamiento/*/apartado*.jsonl
+sidecar/entrenamiento/*/prueba*.jsonl
+sidecar/entrenamiento/**/final/
+sidecar/entrenamiento/**/corrida/

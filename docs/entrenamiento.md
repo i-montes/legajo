@@ -439,3 +439,15 @@ añadido, es el mismo trabajo hecho con rigor y guardado.
 - MultiTACRED — https://aclanthology.org/2023.acl-long.210/
 - `gliner` (entrenamiento: `gliner.training.Trainer`) — https://github.com/urchade/GLiNER
 - Evaluación previa de LLM locales — [`llm.md`](llm.md); medición del modelo actual — [`pipeline.md`](pipeline.md); tamaño del patrón — [`plan-anotacion.md`](plan-anotacion.md)
+
+
+## Despliegue del afinado (2026-09-10)
+
+El modelo que corre en la app sale de `sidecar/entrenamiento/v5/lr2e-5-s42/final`
+(plata MiniMax v5 + oro de los lotes 1–8), instalado con `sidecar/instalar_modelo.py`.
+Sobre la prueba de 50 artículos que nunca se entrenó: entidades F1 0,86 con umbral por
+tipo, relaciones 0,47 con umbral por predicado (0,42 con un corte único de 0,7; el
+anotador que lo enseñó llega a 0,53). Los resultados de cada vuelta están en
+`sidecar/entrenamiento/{v1,v2,oro100,v5}/RESULTADOS.md`. La app amplió su
+vocabulario de 13 a los 35 predicados del entrenamiento; el menú de revisión los
+agrupa por familia cuando entre dos tipos encajan más de nueve.

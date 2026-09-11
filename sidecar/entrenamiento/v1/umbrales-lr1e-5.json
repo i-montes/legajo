@@ -1,0 +1,24 @@
+{
+ "relaciones": {
+  "ocupa el cargo": 0.55,
+  "padre o madre de": 0.65,
+  "hijo de": 0.5,
+  "apoy\u00f3 a": 0.6,
+  "miembro de": 0.65,
+  "aliado de": 0.7,
+  "parte de": 0.4,
+  "se reuni\u00f3 con": 0.7,
+  "c\u00f3nyuge o pareja de": 0.6,
+  "fund\u00f3": 0.35,
+  "trabaja en": 0.4,
+  "hermano de": 0.7
+ },
+ "entidades": {
+  "persona": 0.75,
+  "cargo": 0.5,
+  "lugar": 0.6,
+  "organizacion": 0.8,
+  "obra": 0.6,
+  "monto": 0.75
+ }
+}

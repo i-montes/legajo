@@ -1,0 +1,75 @@
+{
+ "etiqueta": "v2",
+ "ejemplos": {
+  "train": 4352,
+  "val": 248,
+  "apartado": 392
+ },
+ "hashes": {
+  "train": "a2702ac11df96a8a8b5a4eac9897896519600dbc062ec99925a1fb4bc0d6725b",
+  "val": "3f56fa4bb50046c3ec8116e3fc31b116ceda90774a0050369cfef4dced845373",
+  "apartado": "f681f1427d4b87e0602927ca92998d5e9e170edf3e4197802d352542b4ced98b"
+ },
+ "descartes": {
+  "solape_mismo_tipo": 659,
+  "rel_sin_extremo": 198,
+  "sin_entidades": 73,
+  "expandidas": 123,
+  "rel_tipos_no_admitidos": 11
+ },
+ "positivos_por_predicado": {
+  "ocupa el cargo": 4255,
+  "parte de": 1294,
+  "se reunió con": 1108,
+  "familiar de": 954,
+  "hermano de": 730,
+  "cónyuge o pareja de": 726,
+  "ubicado en": 681,
+  "apoyó a": 497,
+  "trabaja en": 417,
+  "aliado de": 412,
+  "aspira a": 324,
+  "hijo de": 322,
+  "criticó a": 225,
+  "citado en": 223,
+  "padre o madre de": 210,
+  "dirige": 192,
+  "miembro de": 179,
+  "opositor de": 134,
+  "nombró a": 124,
+  "destinado a": 113,
+  "investigado por": 75,
+  "asesor de": 72,
+  "socio de": 70,
+  "contrató a": 65,
+  "dueño de": 60,
+  "renunció a": 45,
+  "fundó": 43,
+  "sucedió a": 39,
+  "financia a": 31,
+  "autor de": 31,
+  "condenado por": 27,
+  "demandó a": 19,
+  "donó a": 13,
+  "sanciona con": 6,
+  "acusado de": 1
+ },
+ "entidades_por_etiqueta": {
+  "persona con nombre propio": 11624,
+  "nombre de organización, institución, empresa o partido": 6251,
+  "cargo público o título de un puesto": 5634,
+  "nombre propio de lugar": 2480,
+  "monto de dinero o cifra": 762,
+  "grupo genérico de personas": 581,
+  "nombre de ley, decreto, sentencia o norma jurídica": 516,
+  "título de libro, informe, periódico, revista o medio": 361
+ },
+ "tokens_por_ejemplo": {
+  "mediana": 65.0,
+  "p95": 117
+ },
+ "fuentes": {
+  "plata": 3921,
+  "oro": 1071
+ }
+}

@@ -1,0 +1,242 @@
+── exportar → sidecar/entrenamiento/v2
+{
+ "etiqueta": "v2",
+ "ejemplos": {
+  "train": 4352,
+  "val": 248,
+  "apartado": 392
+ },
+ "hashes": {
+  "train": "a2702ac11df96a8a8b5a4eac9897896519600dbc062ec99925a1fb4bc0d6725b",
+  "val": "3f56fa4bb50046c3ec8116e3fc31b116ceda90774a0050369cfef4dced845373",
+  "apartado": "f681f1427d4b87e0602927ca92998d5e9e170edf3e4197802d352542b4ced98b"
+ },
+ "descartes": {
+  "solape_mismo_tipo": 659,
+  "rel_sin_extremo": 198,
+  "sin_entidades": 73,
+  "expandidas": 123,
+  "rel_tipos_no_admitidos": 11
+ },
+ "positivos_por_predicado": {
+  "ocupa el cargo": 4255,
+  "parte de": 1294,
+  "se reunió con": 1108,
+  "familiar de": 954,
+  "hermano de": 730,
+  "cónyuge o pareja de": 726,
+  "ubicado en": 681,
+  "apoyó a": 497,
+  "trabaja en": 417,
+  "aliado de": 412,
+  "aspira a": 324,
+  "hijo de": 322,
+  "criticó a": 225,
+  "citado en": 223,
+  "padre o madre de": 210,
+  "dirige": 192,
+  "miembro de": 179,
+  "opositor de": 134,
+  "nombró a": 124,
+  "destinado a": 113,
+  "investigado por": 75,
+  "asesor de": 72,
+  "socio de": 70,
+  "contrató a": 65,
+  "dueño de": 60,
+  "renunció a": 45,
+  "fundó": 43,
+  "sucedió a": 39,
+  "financia a": 31,
+  "autor de": 31,
+  "condenado por": 27,
+  "demandó a": 19,
+  "donó a": 13,
+  "sanciona con": 6,
+  "acusado de": 1
+ },
+ "entidades_por_etiqueta": {
+  "persona con nombre propio": 11624,
+  "nombre de organización, institución, empresa o partido": 6251,
+  "cargo público o título de un puesto": 5634,
+  "nombre propio de lugar": 2480,
+  "monto de dinero o cifra": 762,
+  "grupo genérico de personas": 581,
+  "nombre de ley, decreto, sentencia o norma jurídica": 516,
+  "título de libro, informe, periódico, revista o medio": 361
+ },
+ "tokens_por_ejemplo": {
+  "mediana": 65.0,
+  "p95": 117
+ },
+ "fuentes": {
+  "plata": 3921,
+  "oro": 1071
+ }
+}
+
+→ /Users/imontes/lsv/legajo/sidecar/entrenamiento/v2
+{"ejemplos": {"train": 4352, "val": 248, "apartado": 392}, "fuentes": {"plata": 3921, "oro": 1071}, "descartes": {"solape_mismo_tipo": 659, "rel_sin_extremo": 198, "sin_entidades": 73, "expandidas": 123, "rel_tipos_no_admitidos": 11}, "tokens_por_ejemplo": {"mediana": 65.0, "p95": 117}}
+── entrenar lr=1e-5 → sidecar/entrenamiento/v2/lr1e-5
+entrenado en 22.8 min → sidecar/entrenamiento/v2/lr1e-5/final
+{'eval_loss': '27.11', 'eval_runtime': '8.145', 'eval_samples_per_second': '30.45', 'eval_steps_per_second': '3.806', 'epoch': '1'}
+{'eval_loss': '24.27', 'eval_runtime': '7.43', 'eval_samples_per_second': '33.38', 'eval_steps_per_second': '4.172', 'epoch': '2'}
+{'eval_loss': '23.02', 'eval_runtime': '7.525', 'eval_samples_per_second': '32.96', 'eval_steps_per_second': '4.12', 'epoch': '3'}
+{'train_runtime': '1366', 'train_samples_per_second': '9.561', 'train_steps_per_second': '1.195', 'train_loss': '22.45', 'epoch': '3'}
+── entrenar lr=2e-5 → sidecar/entrenamiento/v2/lr2e-5
+entrenado en 23.4 min → sidecar/entrenamiento/v2/lr2e-5/final
+{'eval_loss': '25.52', 'eval_runtime': '8.957', 'eval_samples_per_second': '27.69', 'eval_steps_per_second': '3.461', 'epoch': '1'}
+{'eval_loss': '23.61', 'eval_runtime': '9.88', 'eval_samples_per_second': '25.1', 'eval_steps_per_second': '3.138', 'epoch': '2'}
+{'eval_loss': '23.75', 'eval_runtime': '7.545', 'eval_samples_per_second': '32.87', 'eval_steps_per_second': '4.109', 'epoch': '3'}
+{'train_runtime': '1405', 'train_samples_per_second': '9.291', 'train_steps_per_second': '1.161', 'train_loss': '21.57', 'epoch': '3'}
+── evaluar sobre val
+
+val: 248 párrafos · umbral 0.5 / relaciones 0.5
+
+                        gliner-relex-multi-v1.                   final                   final
+persona                   0.89/0.89/0.89 (730)    0.90/0.98/0.94 (730)    0.92/0.98/0.95 (730)
+organizacion              0.61/0.85/0.71 (339)    0.67/0.91/0.77 (339)    0.70/0.90/0.79 (339)
+lugar                     0.73/0.39/0.51 (118)    0.65/0.78/0.71 (118)    0.65/0.80/0.72 (118)
+cargo                     0.81/0.31/0.45 (319)    0.65/0.81/0.72 (319)    0.63/0.80/0.71 (319)
+ley                       0.47/0.74/0.58 ( 23)    0.44/0.78/0.56 ( 23)    0.46/0.78/0.58 ( 23)
+obra                      0.38/0.36/0.37 ( 14)    0.28/0.36/0.31 ( 14)    0.31/0.36/0.33 ( 14)
+monto                     0.54/0.71/0.61 ( 42)    0.54/0.90/0.68 ( 42)    0.51/0.90/0.65 ( 42)
+ENTIDADES                       0.76/0.71/0.74          0.75/0.90/0.82          0.76/0.90/0.82
+ocupa el cargo            0.37/0.23/0.29 (264)    0.38/0.69/0.49 (265)    0.42/0.71/0.53 (265)
+parte de                  0.11/0.03/0.05 ( 65)    0.21/0.44/0.28 ( 70)    0.26/0.49/0.34 ( 70)
+familiar de               0.14/0.33/0.19 ( 33)    0.24/0.68/0.35 ( 50)    0.33/0.79/0.46 ( 53)
+se reunió con             0.12/0.08/0.10 ( 37)    0.12/0.67/0.20 ( 46)    0.12/0.59/0.19 ( 49)
+cónyuge o pareja de       0.51/0.67/0.58 ( 27)    0.61/0.84/0.70 ( 44)    0.62/0.89/0.73 ( 46)
+hermano de                0.21/0.79/0.33 ( 28)    0.42/0.88/0.57 ( 41)    0.39/0.98/0.56 ( 44)
+ubicado en                0.12/0.16/0.14 ( 43)    0.09/0.34/0.14 ( 44)    0.10/0.23/0.14 ( 43)
+apoyó a                   0.44/0.33/0.38 ( 24)    0.27/0.57/0.37 ( 23)    0.23/0.61/0.34 ( 23)
+aliado de                 0.24/0.29/0.26 ( 17)    0.15/0.57/0.24 ( 23)    0.14/0.55/0.23 ( 22)
+trabaja en                0.10/0.59/0.17 ( 22)    0.20/0.36/0.26 ( 22)    0.19/0.32/0.24 ( 22)
+destinado a               0.20/0.15/0.17 ( 13)    0.21/0.86/0.33 ( 21)    0.30/0.86/0.44 ( 21)
+aspira a                  0.40/0.19/0.26 ( 21)    0.31/0.57/0.40 ( 21)    0.26/0.57/0.36 ( 21)
+hijo de                   0.21/0.75/0.33 ( 20)    0.25/0.60/0.35 ( 20)    0.30/0.70/0.42 ( 20)
+citado en                 0.02/0.06/0.03 ( 16)    0.18/0.62/0.27 ( 16)    0.12/0.69/0.21 ( 16)
+padre o madre de          0.08/0.47/0.14 ( 15)    0.38/0.60/0.46 ( 15)    0.29/0.73/0.42 ( 15)
+criticó a                 0.09/0.07/0.08 ( 14)    0.19/0.29/0.23 ( 14)    0.19/0.36/0.25 ( 14)
+socio de                  0.05/0.33/0.08 (  9)    0.15/0.70/0.24 ( 10)    0.23/0.70/0.34 ( 10)
+dirige                    0.04/0.12/0.06 (  8)    0.16/0.50/0.24 (  8)    0.12/0.50/0.20 (  8)
+miembro de                0.02/0.62/0.03 (  8)    0.04/0.62/0.07 (  8)    0.05/0.62/0.09 (  8)
+dueño de                  0.38/0.50/0.43 (  6)    0.23/0.71/0.34 (  7)    0.22/1.00/0.36 (  6)
+fundó                     0.67/0.33/0.44 (  6)    0.50/0.67/0.57 (  6)    0.44/0.67/0.53 (  6)
+opositor de               0.15/0.50/0.24 (  4)    0.08/0.60/0.14 (  5)    0.10/0.40/0.15 (  5)
+contrató a                0.00/0.00/0.00 (  4)    0.00/0.00/0.00 (  4)    0.09/0.25/0.13 (  4)
+investigado por           0.00/0.00/0.00 (  4)    0.02/0.25/0.04 (  4)    0.01/0.25/0.02 (  4)
+sucedió a                 0.00/0.00/0.00 (  3)    0.40/0.67/0.50 (  3)    0.33/0.67/0.44 (  3)
+renunció a                0.00/0.00/0.00 (  2)    0.25/0.50/0.33 (  2)    0.20/0.50/0.29 (  2)
+nombró a                  0.50/0.50/0.50 (  2)    0.50/0.50/0.50 (  2)    0.20/0.50/0.29 (  2)
+sanciona con              0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)
+financia a                0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)
+asesor de                 0.00/0.00/0.00 (  1)    0.06/1.00/0.12 (  1)    0.00/0.00/0.00 (  1)
+RELACIONES                      0.14/0.27/0.19          0.22/0.63/0.33          0.24/0.65/0.35
+dirección correcta                         87%                     94%                     92%
+segundos                                    18                      18                      18
+
+→ sidecar/entrenamiento/v2/evaluacion-val.json
+── evaluar sobre apartado
+
+apartado: 392 párrafos · umbral 0.5 / relaciones 0.5
+
+                        gliner-relex-multi-v1.                   final                   final
+persona                   0.85/0.93/0.89 (556)    0.92/0.99/0.95 (556)    0.95/0.99/0.97 (556)
+organizacion              0.72/0.85/0.78 (436)    0.80/0.92/0.86 (436)    0.85/0.90/0.87 (436)
+lugar                     0.77/0.32/0.45 (155)    0.85/0.89/0.87 (155)    0.85/0.90/0.88 (155)
+cargo                     0.71/0.41/0.52 (260)    0.68/0.91/0.78 (260)    0.69/0.90/0.78 (260)
+ley                       0.33/0.77/0.47 ( 13)    0.33/1.00/0.49 ( 13)    0.35/0.92/0.51 ( 13)
+obra                      0.50/0.72/0.59 ( 18)    0.21/0.83/0.33 ( 18)    0.21/0.67/0.32 ( 18)
+monto                     0.83/0.64/0.73 ( 76)    0.68/0.95/0.79 ( 76)    0.65/0.95/0.77 ( 76)
+ENTIDADES                       0.77/0.74/0.75          0.78/0.94/0.85          0.81/0.93/0.86
+ocupa el cargo            0.52/0.37/0.43 (188)    0.57/0.90/0.70 (192)    0.55/0.85/0.67 (191)
+miembro de                0.10/0.72/0.17 ( 36)    0.22/0.69/0.33 ( 36)    0.27/0.78/0.40 ( 36)
+dirige                    0.22/0.23/0.22 ( 35)    0.38/0.28/0.32 ( 36)    0.52/0.34/0.41 ( 35)
+apoyó a                   0.50/0.14/0.22 ( 35)    0.18/0.34/0.24 ( 35)    0.35/0.37/0.36 ( 35)
+aliado de                 0.11/0.20/0.14 ( 15)    0.10/0.63/0.17 ( 19)    0.28/0.55/0.37 ( 20)
+opositor de               0.09/0.18/0.12 ( 11)    0.33/0.81/0.47 ( 16)    0.58/0.69/0.63 ( 16)
+trabaja en                0.04/0.38/0.07 ( 13)    0.11/0.33/0.17 ( 12)    0.17/0.42/0.24 ( 12)
+criticó a                 0.21/0.31/0.25 ( 13)    0.24/0.38/0.29 ( 13)    0.17/0.38/0.24 ( 13)
+se reunió con             0.25/0.57/0.35 (  7)    0.07/1.00/0.13 ( 13)    0.07/1.00/0.13 ( 13)
+investigado por           0.34/0.83/0.49 ( 12)    0.26/1.00/0.41 ( 12)    0.20/1.00/0.34 ( 12)
+citado en                 0.17/0.80/0.29 ( 10)    0.11/1.00/0.20 (  8)    0.11/1.00/0.19 (  9)
+parte de                  0.14/0.11/0.12 (  9)    0.02/0.30/0.04 ( 10)    0.02/0.33/0.05 (  9)
+aspira a                  0.05/0.11/0.07 (  9)    0.09/0.89/0.17 (  9)    0.08/0.89/0.15 (  9)
+hermano de                0.50/1.00/0.67 (  4)    0.70/1.00/0.82 (  7)    0.80/1.00/0.89 (  8)
+nombró a                  0.75/0.43/0.55 (  7)    0.33/0.43/0.38 (  7)    0.25/0.29/0.27 (  7)
+fundó                     0.00/0.00/0.00 (  5)    0.33/0.20/0.25 (  5)    0.40/0.40/0.40 (  5)
+sucedió a                 1.00/0.25/0.40 (  4)    0.67/0.50/0.57 (  4)    0.50/0.50/0.50 (  4)
+familiar de               0.14/0.50/0.22 (  2)    0.15/0.67/0.25 (  3)    0.27/1.00/0.42 (  4)
+cónyuge o pareja de       0.33/0.50/0.40 (  2)    0.33/1.00/0.50 (  4)    0.36/1.00/0.53 (  4)
+contrató a                0.00/0.00/0.00 (  3)    0.33/0.33/0.33 (  3)    0.22/0.67/0.33 (  3)
+dueño de                  0.00/0.00/0.00 (  2)    0.00/0.00/0.00 (  2)    0.00/0.00/0.00 (  2)
+ubicado en                0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)    0.00/0.00/0.00 (  1)
+autor de                  0.00/0.00/0.00 (  1)    0.07/1.00/0.12 (  1)    0.07/1.00/0.13 (  1)
+RELACIONES                      0.15/0.37/0.21          0.19/0.71/0.29          0.22/0.71/0.34
+dirección correcta                         99%                     99%                     99%
+segundos                                    24                      22                      22
+
+→ sidecar/entrenamiento/v2/evaluacion-apartado.json
+── umbrales por predicado (lr1e-5)
+Traceback (most recent call last):
+  File [35m"/Users/imontes/lsv/legajo/sidecar/umbrales.py"[0m, line [35m119[0m, in [35m<module>[0m
+    [31mmain[0m[1;31m()[0m
+    [31m~~~~[0m[1;31m^^[0m
+  File [35m"/Users/imontes/lsv/legajo/sidecar/umbrales.py"[0m, line [35m105[0m, in [35mmain[0m
+    pa, oa, ea, ota = [31mpuntuar[0m[1;31m(m, *leer(datos, args.medir_en))[0m
+                      [31m~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/imontes/lsv/legajo/sidecar/umbrales.py"[0m, line [35m38[0m, in [35mpuntuar[0m
+    ents_bajo, _ = [31mpredecir[0m[1;31m(m, meta["texto"], etiquetas, predicados, 0.1, 0.99)[0m
+                   [31m~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/imontes/lsv/legajo/sidecar/banco_relaciones.py"[0m, line [35m32[0m, in [35mpredecir[0m
+    e, r = [31mmodelo.predict_relations[0m[1;31m(texto, etiquetas, predicados, threshold=umbral, relation_threshold=umbral_rel)[0m
+           [31m~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/model.py"[0m, line [35m5605[0m, in [35mpredict_relations[0m
+    entities, rels = [31mself.inference[0m[1;31m([0m
+                     [31m~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31m[text],[0m
+        [1;31m^^^^^^^[0m
+    ...<8 lines>...
+        [1;31m**kwargs,[0m
+        [1;31m^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/torch/utils/_contextlib.py"[0m, line [35m124[0m, in [35mdecorate_context[0m
+    return func(*args, **kwargs)
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/model.py"[0m, line [35m5500[0m, in [35minference[0m
+    entity_outputs, relation_outputs = [31mself._process_batches[0m[1;31m([0m
+                                       [31m~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mdata_loader,[0m
+        [1;31m^^^^^^^^^^^^[0m
+    ...<8 lines>...
+        [1;31mreturn_relations=return_relations,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/model.py"[0m, line [35m5313[0m, in [35m_process_batches[0m
+    model_output = self.run_batch(
+        batch,
+    ...<4 lines>...
+        **external_inputs,
+    )
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/torch/utils/_contextlib.py"[0m, line [35m124[0m, in [35mdecorate_context[0m
+    return func(*args, **kwargs)
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/model.py"[0m, line [35m5218[0m, in [35mrun_batch[0m
+    model_output = self.model(**model_inputs, threshold=threshold, adjacency_threshold=adjacency_threshold)
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/torch/nn/modules/module.py"[0m, line [35m1783[0m, in [35m_wrapped_call_impl[0m
+    return [31mself._call_impl[0m[1;31m(*args, **kwargs)[0m
+           [31m~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/torch/nn/modules/module.py"[0m, line [35m1794[0m, in [35m_call_impl[0m
+    return forward_call(*args, **kwargs)
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/modeling/base.py"[0m, line [35m2916[0m, in [35mforward[0m
+    pair_idx, pair_mask, head_rep_selected, tail_rep_selected = [31mbuild_all_entity_pairs[0m[1;31m([0m
+                                                                [31m~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mtarget_span_rep, target_span_mask[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/imontes/lsv/legajo/.venv/lib/python3.14/site-packages/gliner/modeling/utils.py"[0m, line [35m467[0m, in [35mbuild_all_entity_pairs[0m
+    head_rep = [31mspan_rep[0m[1;31m[batch_idx, pair_idx[..., 0].clamp_min(0)][0m
+               [31m~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1;35mRuntimeError[0m: [35mInvalid buffer size: 16.89 GiB[0m

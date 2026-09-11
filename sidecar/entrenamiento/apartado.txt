@@ -1,0 +1,32 @@
+# Apartado: 30 artículos que nunca se entrenan. Semilla 2026. Generado por sidecar/apartar.py
+# wp_id	oid_news	fecha	tramo	seccion	palabras	url
+33424	66cc2a201dbc9e43fb1a6567	2010-02-26	2009-2015	silla-nacional	531	https://www.lasillavacia.com/silla-nacional/asi-la-corte-no-lo-hundiera-apoyo-popular-al-referendo-venia-a-la-baja/
+34320	66cc29681dbc9e43fb1a61e5	2010-09-30	2009-2015	silla-nacional	345	https://www.lasillavacia.com/silla-nacional/el-circulito-del-poder-los-altos-consejeros-de-santos/
+34807	66cc29021dbc9e43fb1a6001	2011-02-22	2009-2015	silla-nacional	460	https://www.lasillavacia.com/silla-nacional/los-pasos-del-nuevo-congreso/
+34851	66cc28fa1dbc9e43fb1a5fd4	2011-03-07	2009-2015	silla-nacional	888	https://www.lasillavacia.com/silla-nacional/el-ultimo-pataleo-de-ivan-moreno/
+38269	66cc25acfb69f0f09c6a5dc9	2013-11-30	2009-2015	silla-nacional	1001	https://www.lasillavacia.com/silla-nacional/memorias-olvidadas/
+38843	66cc2529fb69f0f09c6a5b8a	2014-06-06	2009-2015	silla-nacional	393	https://www.lasillavacia.com/silla-nacional/santos-se-juega-la-carta-de-zuluaga/
+39201	66cc24dafb69f0f09c6a5a27	2014-10-06	2009-2015	silla-nacional	312	https://www.lasillavacia.com/silla-nacional/panama-su-ultimo-dia-como-paraiso/
+39764	66cc245efb69f0f09c6a57f6	2015-04-22	2009-2015	silla-nacional	473	https://www.lasillavacia.com/silla-nacional/vargas-lleras-toca-el-cielo-opita/
+39839	66cc244dfb69f0f09c6a57a9	2015-05-15	2009-2015	silla-nacional	644	https://www.lasillavacia.com/silla-nacional/caribe/roce-en-el-vargasllerismo-por-el-aval-a-la-princesa-negra/
+40245	66cc23effb69f0f09c6a5613	2015-08-27	2009-2015	silla-nacional	969	https://www.lasillavacia.com/silla-nacional/la-inedita-historia-del-alcalde-que-se-invento-una-nueva-reeleccion/
+41852	66cc229cfb69f0f09c6a4fd3	2016-11-24	2016-2021	silla-nacional	393	https://www.lasillavacia.com/silla-nacional/noticias-rcn-la-vitrina-del-no/
+42727	66cc219082e235d82316edd8	2017-06-08	2016-2021	silla-nacional	377	https://www.lasillavacia.com/silla-nacional/planeacion-nacional-le-apuesta-a-los-tecnicos/
+43123	66cc213982e235d82316ec4b	2017-09-04	2016-2021	silla-nacional	960	https://www.lasillavacia.com/silla-nacional/region-sur/la-puja-en-el-huila-por-las-listas-uribistas-al-congreso/
+43507	66cc20e282e235d82316ead2	2017-11-28	2016-2021	silla-nacional	390	https://www.lasillavacia.com/silla-nacional/jovenes-presionan-a-favor-de-una-coalicion-ya-por-el-si/
+43920	66cc208982e235d82316e93a	2018-02-19	2016-2021	silla-nacional	638	https://www.lasillavacia.com/silla-nacional/bogota/el-punto-cristiano-que-se-anota-ordonez-en-bogota/
+44165	66cc204f82e235d82316e83e	2018-04-07	2016-2021	silla-nacional	889	https://www.lasillavacia.com/silla-nacional/antioquia/sin-luz-piedad-valencia-se-destine-el-trapo-rojo-en-quindio-a-favor-de-vargas/
+45145	66cc1f6d82e235d82316e469	2018-10-18	2016-2021	silla-nacional	1045	https://www.lasillavacia.com/silla-nacional/bogota/el-contralor-imputado-otro-impulso-para-la-centro-izquierda-cachaca/
+48608	66cc1c826b459c829f6daf5d	2019-04-16	2016-2021	silla-nacional	439	https://www.lasillavacia.com/silla-nacional/detector-visita-de-petro-a-parlamento-europeo-fue-una-farsa/
+46256	66bd8d2c4f0dc83ef8974bb3	2019-07-30	2016-2021	detector-de-mentiras	339	https://www.lasillavacia.com/detector-de-mentiras/detector-sobre-logros-de-mauricio-cardenas/
+47728	66bd8bb64f0dc83ef897452d	2020-06-23	2016-2021	detector-de-mentiras	355	https://www.lasillavacia.com/detector-de-mentiras/detector-uribe-si-agradecio-por-anuncio-de-publicidad-que-lo-homenajeo/
+51851	66bd88af4f0dc83ef89737c9	2022-07-15	2022-2026	detector-de-mentiras	441	https://www.lasillavacia.com/detector-de-mentiras/detector-gobierno-petro-si-propuso-impuesto-del-4-a-planes-de-telefonia-movil/
+52689	66bd87f84f0dc83ef8973476	2023-02-10	2022-2026	silla-nacional	886	https://www.lasillavacia.com/silla-nacional/petro-radiografia-de-un-presidente-tuitero/
+71482	67b1613dd3b4036865260f00	2023-03-23	2022-2026	en-vivo	328	https://www.lasillavacia.com/en-vivo/petro-rechazo-la-reforma-politica-que-su-gobierno-impulsa-en-congreso/
+52991	66bd87be4f0dc83ef8973362	2023-04-12	2022-2026	silla-nacional	1128	https://www.lasillavacia.com/silla-nacional/ricardo-roa-un-alfil-de-petro-en-la-presidencia-de-ecopetrol/
+161938	66bd878b4f0dc83ef8973275	2023-05-30	2022-2026	silla-nacional	488	https://www.lasillavacia.com/silla-nacional/detector-hector-abad-si-califico-a-petro-de-tramposo-2/
+162503	66bd86399ab6536d96a1c349	2023-08-04	2022-2026	silla-nacional	662	https://www.lasillavacia.com/silla-nacional/detector-petro-no-dijo-que-colombia-debe-imitar-el-modelo-venezolano-2/
+253880	67c7253f51fd054f5cb014a6	2024-04-24	2022-2026	en-vivo	482	https://www.lasillavacia.com/en-vivo/imprenta-nacional-ahora-entrara-al-proceso-de-expedicion-de-pasaportes/
+280070	67c71e8651fd054f5cb00d44	2024-08-14	2022-2026	en-vivo	344	https://www.lasillavacia.com/en-vivo/minsalud-tomara-todas-las-medidas-para-responder-a-viruela-simica-petro/
+311043	67c7186551fd054f5cb005e1	2024-12-10	2022-2026	en-vivo	302	https://www.lasillavacia.com/en-vivo/desayune-enterado-este-10-de-diciembre-de-2024/
+325034	67bac7a5e41a9a51011a2c61	2025-02-16	2022-2026	silla-nacional	875	https://www.lasillavacia.com/silla-nacional/6-mil-trinos-de-petro-analizados-con-ia-cada-vez-mas-largos-y-confusos/

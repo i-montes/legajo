@@ -1,0 +1,58 @@
+{
+ "relaciones": {
+  "ocupa el cargo": 0.7,
+  "se reuni\u00f3 con": 0.7,
+  "parte de": 0.7,
+  "trabaja en": 0.7,
+  "apoy\u00f3 a": 0.55,
+  "citado en": 0.75,
+  "miembro de": 0.7,
+  "critic\u00f3 a": 0.5,
+  "fund\u00f3": 0.3,
+  "dirige": 0.55,
+  "opositor de": 0.5,
+  "nombr\u00f3 a": 0.55,
+  "aspira a": 0.8,
+  "hermano de": 0.65,
+  "investigado por": 0.65,
+  "aliado de": 0.75,
+  "contrat\u00f3 a": 0.45,
+  "sucedi\u00f3 a": 0.45
+ },
+ "podados": [
+  "aliado de",
+  "contrat\u00f3 a",
+  "fund\u00f3",
+  "parte de"
+ ],
+ "f1_por_predicado": {
+  "ocupa el cargo": 0.7948051948051947,
+  "se reuni\u00f3 con": 0.2857142857142857,
+  "parte de": 0.13333333333333333,
+  "trabaja en": 0.3157894736842105,
+  "apoy\u00f3 a": 0.3333333333333333,
+  "citado en": 0.5263157894736842,
+  "miembro de": 0.3137254901960784,
+  "critic\u00f3 a": 0.4,
+  "fund\u00f3": 0.16129032258064516,
+  "dirige": 0.39024390243902435,
+  "opositor de": 0.26666666666666666,
+  "nombr\u00f3 a": 0.30769230769230765,
+  "aspira a": 0.46153846153846156,
+  "hermano de": 0.888888888888889,
+  "investigado por": 0.5714285714285715,
+  "aliado de": 0.19047619047619044,
+  "contrat\u00f3 a": 0.1904761904761905,
+  "sucedi\u00f3 a": 0.6
+ },
+ "entidades": {
+  "organizacion": 0.7,
+  "persona": 0.7,
+  "cargo": 0.55,
+  "lugar": 0.65,
+  "obra": 0.9,
+  "ley": 0.7,
+  "monto": 0.6
+ },
+ "elegidos_en": "apartado"
+}

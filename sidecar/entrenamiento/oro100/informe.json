@@ -1,0 +1,79 @@
+{
+ "etiqueta": "oro100",
+ "ejemplos": {
+  "train": 5062,
+  "val": 248,
+  "apartado": 392,
+  "prueba": 711
+ },
+ "hashes": {
+  "train": "0603db5ef5dd37b035299d8876ea3484ff03e5d68efef00003974a86a8871204",
+  "val": "fa700afa652351ff6fef61b634514a979f4b8bc7349af598a5fbc533e7658bdf",
+  "apartado": "f681f1427d4b87e0602927ca92998d5e9e170edf3e4197802d352542b4ced98b",
+  "prueba": "a18febbaed70e92dce470677b14a704f98aead88acfc76a31e63ca855d710b2f"
+ },
+ "descartes": {
+  "plata_pisada_por_oro": 0,
+  "parte_de_a_miembro_de": 921,
+  "solape_mismo_tipo": 665,
+  "rel_sin_extremo": 198,
+  "sin_entidades": 73,
+  "expandidas": 137,
+  "rel_tipos_no_admitidos": 10
+ },
+ "positivos_por_predicado": {
+  "ocupa el cargo": 4820,
+  "miembro de": 1200,
+  "se reunió con": 1132,
+  "familiar de": 982,
+  "hermano de": 744,
+  "cónyuge o pareja de": 738,
+  "ubicado en": 701,
+  "apoyó a": 560,
+  "trabaja en": 468,
+  "aliado de": 450,
+  "parte de": 398,
+  "aspira a": 348,
+  "hijo de": 329,
+  "dirige": 272,
+  "citado en": 249,
+  "criticó a": 242,
+  "padre o madre de": 224,
+  "opositor de": 162,
+  "nombró a": 137,
+  "destinado a": 113,
+  "investigado por": 100,
+  "socio de": 82,
+  "asesor de": 79,
+  "dueño de": 77,
+  "contrató a": 72,
+  "sucedió a": 57,
+  "renunció a": 48,
+  "fundó": 48,
+  "autor de": 43,
+  "financia a": 31,
+  "condenado por": 29,
+  "demandó a": 27,
+  "donó a": 20,
+  "sanciona con": 6,
+  "acusado de": 1
+ },
+ "entidades_por_etiqueta": {
+  "persona con nombre propio": 13228,
+  "nombre de organización, institución, empresa o partido": 7799,
+  "cargo público o título de un puesto": 6427,
+  "nombre propio de lugar": 3036,
+  "monto de dinero o cifra": 932,
+  "nombre de ley, decreto, sentencia o norma jurídica": 688,
+  "grupo genérico de personas": 581,
+  "título de libro, informe, periódico, revista o medio": 442
+ },
+ "tokens_por_ejemplo": {
+  "mediana": 62,
+  "p95": 113
+ },
+ "fuentes": {
+  "plata": 3921,
+  "oro": 2492
+ }
+}

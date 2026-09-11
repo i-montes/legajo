@@ -1,0 +1,38 @@
+{
+ "relaciones": {
+  "socio de": 0.65,
+  "due\u00f1o de": 0.6,
+  "miembro de": 0.65,
+  "critic\u00f3 a": 0.5,
+  "parte de": 0.45,
+  "trabaja en": 0.55,
+  "aspira a": 0.5,
+  "apoy\u00f3 a": 0.55,
+  "familiar de": 0.7,
+  "ocupa el cargo": 0.6,
+  "se reuni\u00f3 con": 0.8,
+  "c\u00f3nyuge o pareja de": 0.75,
+  "aliado de": 0.7,
+  "ubicado en": 0.6,
+  "destinado a": 0.65,
+  "hermano de": 0.7,
+  "dirige": 0.6,
+  "padre o madre de": 0.6,
+  "opositor de": 0.6,
+  "fund\u00f3": 0.6,
+  "hijo de": 0.7,
+  "contrat\u00f3 a": 0.5,
+  "citado en": 0.6,
+  "investigado por": 0.6,
+  "sucedi\u00f3 a": 0.55
+ },
+ "entidades": {
+  "organizacion": 0.65,
+  "monto": 0.75,
+  "persona": 0.6,
+  "lugar": 0.6,
+  "cargo": 0.5,
+  "ley": 0.8,
+  "obra": 0.65
+ }
+}

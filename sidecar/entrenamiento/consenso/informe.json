@@ -1,0 +1,79 @@
+{
+ "etiqueta": "consenso",
+ "ejemplos": {
+  "train": 5024,
+  "val": 244,
+  "apartado": 392,
+  "prueba": 711
+ },
+ "hashes": {
+  "train": "d73b93d574f8df3d00786a6955561db90935d78007c9718896d02c964823d76a",
+  "val": "f8280402aa7f30de12f4262a9274ad18854d92d5d327dc249dc2d3f386796a8e",
+  "apartado": "f681f1427d4b87e0602927ca92998d5e9e170edf3e4197802d352542b4ced98b",
+  "prueba": "a18febbaed70e92dce470677b14a704f98aead88acfc76a31e63ca855d710b2f"
+ },
+ "descartes": {
+  "plata_pisada_por_oro": 0,
+  "solape_mismo_tipo": 340,
+  "parte_de_a_miembro_de": 318,
+  "sin_entidades": 126,
+  "mencion_repetida": 80,
+  "rel_sin_extremo": 91,
+  "expandidas": 102,
+  "rel_tipos_no_admitidos": 10
+ },
+ "positivos_por_predicado": {
+  "ocupa el cargo": 3559,
+  "familiar de": 694,
+  "cónyuge o pareja de": 670,
+  "hermano de": 624,
+  "miembro de": 508,
+  "se reunió con": 486,
+  "trabaja en": 281,
+  "apoyó a": 279,
+  "ubicado en": 270,
+  "aliado de": 266,
+  "hijo de": 238,
+  "parte de": 185,
+  "dirige": 175,
+  "aspira a": 165,
+  "citado en": 133,
+  "padre o madre de": 133,
+  "criticó a": 102,
+  "opositor de": 96,
+  "nombró a": 88,
+  "dueño de": 61,
+  "investigado por": 58,
+  "socio de": 40,
+  "sucedió a": 38,
+  "contrató a": 38,
+  "asesor de": 35,
+  "fundó": 34,
+  "destinado a": 28,
+  "autor de": 27,
+  "renunció a": 27,
+  "demandó a": 19,
+  "donó a": 16,
+  "financia a": 14,
+  "condenado por": 11,
+  "sanciona con": 2
+ },
+ "entidades_por_etiqueta": {
+  "persona con nombre propio": 12688,
+  "nombre de organización, institución, empresa o partido": 6936,
+  "cargo público o título de un puesto": 5399,
+  "nombre propio de lugar": 2524,
+  "monto de dinero o cifra": 728,
+  "nombre de ley, decreto, sentencia o norma jurídica": 567,
+  "título de libro, informe, periódico, revista o medio": 333,
+  "grupo genérico de personas": 110
+ },
+ "tokens_por_ejemplo": {
+  "mediana": 62,
+  "p95": 113
+ },
+ "fuentes": {
+  "plata": 3878,
+  "oro": 2493
+ }
+}

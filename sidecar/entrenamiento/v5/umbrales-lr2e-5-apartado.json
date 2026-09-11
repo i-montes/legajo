@@ -1,0 +1,32 @@
+{
+ "relaciones": {
+  "ocupa el cargo": 0.6,
+  "se reuni\u00f3 con": 0.7,
+  "parte de": 0.6,
+  "trabaja en": 0.5,
+  "apoy\u00f3 a": 0.5,
+  "critic\u00f3 a": 0.6,
+  "miembro de": 0.5,
+  "citado en": 0.7,
+  "dirige": 0.45,
+  "fund\u00f3": 0.45,
+  "opositor de": 0.5,
+  "nombr\u00f3 a": 0.6,
+  "aspira a": 0.6,
+  "hermano de": 0.7,
+  "investigado por": 0.65,
+  "aliado de": 0.55,
+  "contrat\u00f3 a": 0.5,
+  "sucedi\u00f3 a": 0.55
+ },
+ "entidades": {
+  "organizacion": 0.55,
+  "persona": 0.55,
+  "cargo": 0.55,
+  "lugar": 0.6,
+  "obra": 0.7,
+  "ley": 0.7,
+  "monto": 0.6
+ },
+ "elegidos_en": "apartado"
+}

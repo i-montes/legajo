@@ -1,0 +1,43 @@
+{
+ "etiqueta": "humo",
+ "ejemplos": {
+  "train": 19,
+  "val": 2
+ },
+ "hashes": {
+  "train": "883bf6dbb3e68ca1959f98bf359cb32b0555126fe39b51bb70f6cb3795b35c74",
+  "val": "80447b265d75b12b847bbd5c477a9cfe98adefa13f54ffa94767ced9a296f367"
+ },
+ "descartes": {
+  "sin_entidades": 1
+ },
+ "positivos_por_predicado": {
+  "cónyuge o pareja de": 12,
+  "ocupa el cargo": 7,
+  "hermano de": 6,
+  "hijo de": 3,
+  "parte de": 3,
+  "apoyó a": 2,
+  "se reunió con": 2,
+  "renunció a": 1,
+  "trabaja en": 1,
+  "dueño de": 1
+ },
+ "entidades_por_etiqueta": {
+  "persona con nombre propio": 74,
+  "nombre de organización, institución, empresa o partido": 23,
+  "nombre propio de lugar": 16,
+  "cargo público o título de un puesto": 9,
+  "grupo genérico de personas": 8,
+  "título de libro, informe, periódico, revista o medio": 3,
+  "monto de dinero o cifra": 2,
+  "nombre de ley, decreto, sentencia o norma jurídica": 1
+ },
+ "tokens_por_ejemplo": {
+  "mediana": 66,
+  "p95": 153
+ },
+ "fuentes": {
+  "plata": 21
+ }
+}
