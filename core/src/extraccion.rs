@@ -408,9 +408,8 @@ const P: &str = "persona";
 const O: &str = "organizacion";
 const C: &str = "cargo";
 const L: &str = "lugar";
-const N: &str = "ley";
-const M: &str = "monto";
-const B: &str = "obra";
+// «ley», «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin
+// uso en la tabla, sus siglas (N, M, B) se quitaron para no dejar código muerto.
 
 /// Tiene que coincidir con `PREDICADOS` en `src/contenido/tipos.ts`, que es lo
 /// que ve la persona al relacionar dos marcas a mano, y con
@@ -421,46 +420,37 @@ const B: &str = "obra";
 pub const PREDICADOS: &[Predicado] = &[
     // generado desde sidecar/vocabulario.py: no editar a mano
     // Familia
-    Predicado { etiqueta: "padre o madre de",    familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: false },
-    Predicado { etiqueta: "hijo de",             familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: false },
-    Predicado { etiqueta: "hermano de",          familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
-    Predicado { etiqueta: "cónyuge o pareja de", familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
-    Predicado { etiqueta: "familiar de",         familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
-    // Trabajo e instituciones
-    Predicado { etiqueta: "ocupa el cargo",      familia: "laboral",   desde: &[P],      hasta: &[C],            simetrico: false },
-    Predicado { etiqueta: "trabaja en",          familia: "laboral",   desde: &[P],      hasta: &[O],            simetrico: false },
-    Predicado { etiqueta: "dirige",              familia: "laboral",   desde: &[P],      hasta: &[O, B],         simetrico: false },
-    Predicado { etiqueta: "fundó",               familia: "laboral",   desde: &[P, O],   hasta: &[O],            simetrico: false },
-    Predicado { etiqueta: "dueño de",            familia: "laboral",   desde: &[P, O],   hasta: &[O],            simetrico: false },
-    Predicado { etiqueta: "asesor de",           familia: "laboral",   desde: &[P],      hasta: &[P, O],         simetrico: false },
-    Predicado { etiqueta: "sucedió a",           familia: "laboral",   desde: &[P],      hasta: &[P],            simetrico: false },
-    Predicado { etiqueta: "nombró a",            familia: "laboral",   desde: &[P, O],   hasta: &[P],            simetrico: false },
-    Predicado { etiqueta: "renunció a",          familia: "laboral",   desde: &[P],      hasta: &[C, O],         simetrico: false },
-    Predicado { etiqueta: "parte de",            familia: "laboral",   desde: &[],       hasta: &[O, L, N],      simetrico: false },
+    Predicado { etiqueta: "cónyuge de",       familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    Predicado { etiqueta: "hijo de",          familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "hermano de",       familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    Predicado { etiqueta: "familiar de",      familia: "familiar",  desde: &[P],      hasta: &[P],            simetrico: true  },
+    // Cargos y trabajo
+    Predicado { etiqueta: "ocupa el cargo",   familia: "laboral",   desde: &[P],      hasta: &[C],            simetrico: false },
+    Predicado { etiqueta: "ocupó el cargo",   familia: "laboral",   desde: &[P],      hasta: &[C],            simetrico: false },
+    Predicado { etiqueta: "aspira al cargo",  familia: "laboral",   desde: &[P],      hasta: &[C],            simetrico: false },
+    Predicado { etiqueta: "nombró a",         familia: "laboral",   desde: &[P, O],   hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "sucedió a",        familia: "laboral",   desde: &[P],      hasta: &[P],            simetrico: false },
+    Predicado { etiqueta: "trabaja en",       familia: "laboral",   desde: &[P],      hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "dirige",           familia: "laboral",   desde: &[P],      hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "miembro de",       familia: "laboral",   desde: &[P],      hasta: &[O],            simetrico: false },
+    // Empresa y dinero
+    Predicado { etiqueta: "fundó",            familia: "empresa",   desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "propietario de",   familia: "empresa",   desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "socio de",         familia: "empresa",   desde: &[P],      hasta: &[P],            simetrico: true  },
+    Predicado { etiqueta: "parte de",         familia: "empresa",   desde: &[O],      hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "contrató a",       familia: "empresa",   desde: &[O, P],   hasta: &[O, P],         simetrico: false },
+    Predicado { etiqueta: "financia a",       familia: "empresa",   desde: &[P, O],   hasta: &[P, O],         simetrico: false },
     // Política
-    Predicado { etiqueta: "aliado de",           familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
-    Predicado { etiqueta: "opositor de",         familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
-    Predicado { etiqueta: "miembro de",          familia: "politica",  desde: &[P],      hasta: &[O],            simetrico: false },
-    Predicado { etiqueta: "aspira a",            familia: "politica",  desde: &[P, O],   hasta: &[C],            simetrico: false },
-    Predicado { etiqueta: "apoyó a",             familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
-    Predicado { etiqueta: "se reunió con",       familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
-    Predicado { etiqueta: "criticó a",           familia: "politica",  desde: &[P, O],   hasta: &[P, O, N],      simetrico: false },
-    // Dinero
-    Predicado { etiqueta: "financia a",          familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: false },
-    Predicado { etiqueta: "contrató a",          familia: "economica", desde: &[O, P],   hasta: &[O, P],         simetrico: false },
-    Predicado { etiqueta: "socio de",            familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: true  },
-    Predicado { etiqueta: "donó a",              familia: "economica", desde: &[P, O],   hasta: &[P, O],         simetrico: false },
-    Predicado { etiqueta: "destinado a",         familia: "economica", desde: &[M],      hasta: &[O, C, L, N],   simetrico: false },
+    Predicado { etiqueta: "apoya a",          familia: "politica",  desde: &[P, O],   hasta: &[P, O, C],      simetrico: false },
+    Predicado { etiqueta: "se opone a",       familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
     // Justicia
-    Predicado { etiqueta: "investigado por",     familia: "judicial",  desde: &[P, O],   hasta: &[O, N],         simetrico: false },
-    Predicado { etiqueta: "condenado por",       familia: "judicial",  desde: &[P, O],   hasta: &[O, N],         simetrico: false },
-    Predicado { etiqueta: "acusado de",          familia: "judicial",  desde: &[P, O],   hasta: &[N],            simetrico: false },
-    Predicado { etiqueta: "demandó a",           familia: "judicial",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
-    Predicado { etiqueta: "sanciona con",        familia: "judicial",  desde: &[N],      hasta: &[M],            simetrico: false },
-    // Lugar y fuente
-    Predicado { etiqueta: "ubicado en",          familia: "fuente",    desde: &[],       hasta: &[L],            simetrico: false },
-    Predicado { etiqueta: "citado en",           familia: "fuente",    desde: &[P, O],   hasta: &[O, B],         simetrico: false },
-    Predicado { etiqueta: "autor de",            familia: "fuente",    desde: &[P, O],   hasta: &[B],            simetrico: false },
+    Predicado { etiqueta: "investigado por",  familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "acusado por",      familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
+    Predicado { etiqueta: "condenado por",    familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
+    // Lugar
+    Predicado { etiqueta: "ubicado en",       familia: "lugar",     desde: &[P, O, L], hasta: &[L],            simetrico: false },
+    // Otro
+    Predicado { etiqueta: "vínculo sin tipo", familia: "otro",      desde: &[],       hasta: &[],             simetrico: true  },
     // fin de lo generado
 ];
 
@@ -812,7 +802,7 @@ mod tests {
             .filter_map(|r| r.split_once('"'))
             .map(|(n, _)| n.to_string())
             .collect();
-        assert_eq!(en_py.len(), 35, "esperaba las 35 tuplas de PREDICADOS en vocabulario.py");
+        assert_eq!(en_py.len(), 25, "esperaba las 25 tuplas de PREDICADOS en vocabulario.py");
         assert_eq!(predicados_modelo(), en_py, "rust y vocabulario.py se separaron");
     }
 
@@ -853,8 +843,11 @@ mod tests {
     fn ningun_predicado_admite_un_destino_que_no_puede_contener_nada() {
         // «parte de» era el único sin restricciones y absorbía el 38 % de todo
         // lo que devolvía el modelo, incluida la dirección imposible: un
-        // partido no es parte de una persona.
-        for p in PREDICADOS {
+        // partido no es parte de una persona. «vínculo sin tipo» es la
+        // excepción a propósito: es la reserva donde cae lo que un vínculo
+        // afirma pero no encaja en ninguna clase tipada, así que su falta de
+        // restricción es el diseño, no el descuido que este test vigila.
+        for p in PREDICADOS.iter().filter(|p| p.etiqueta != "vínculo sin tipo") {
             assert!(
                 !p.hasta.is_empty(),
                 "«{}» acepta cualquier destino: será el cajón de sastre del modelo",

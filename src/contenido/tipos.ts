@@ -24,10 +24,10 @@ export const colorTipo = (k: string) =>
 
 /* ── Predicados ───────────────────────────────────────────────────────────
    Cada uno declara entre qué tipos tiene sentido. El menú se filtra por los
-   tipos de las dos marcas elegidas, así que nunca se ven los treinta y cinco a
+   tipos de las dos marcas elegidas, así que nunca se ven los veinticinco a
    la vez ni se puede afirmar que un monto ocupa un cargo.
 
-   `aliado de` y `opositor de` son, en un archivo de poder colombiano, las dos
+   `apoya a` y `se opone a` son, en un archivo de poder colombiano, las dos
    relaciones que más veces explican una noticia. Estaban en el plan de la fase
    y se perdieron al implementar la pantalla.
 
@@ -36,7 +36,7 @@ export const colorTipo = (k: string) =>
    las mismas restricciones para no proponer lo imposible. Las dos —y la de
    `sidecar/vocabulario.py`, que es la que aprendió el modelo— las reescribe
    `sidecar/generar_vocabulario.py`; hay una prueba en Rust que falla si se
-   separan. Son 35 predicados en seis familias: cuando los que encajan entre dos
+   separan. Son 25 predicados en siete familias: cuando los que encajan entre dos
    tipos pasan de nueve, el menú pide primero la familia. */
 
 export interface Predicado {
@@ -56,96 +56,116 @@ const P = "persona";
 const O = "organizacion";
 const C = "cargo";
 const L = "lugar";
-const N = "ley";
-const M = "monto";
-const B = "obra";
+// «ley», «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin
+// uso en la tabla, sus siglas (N, M, B) se quitaron para que tsc no las marque
+// como muertas.
 
 /** Las familias, en el orden del menú. Coincide con `FAMILIAS` en
  *  `sidecar/vocabulario.py`. */
 export const FAMILIAS: { k: string; etiqueta: string }[] = [
   { k: "familiar", etiqueta: "Familia" },
-  { k: "laboral", etiqueta: "Trabajo e instituciones" },
+  { k: "laboral", etiqueta: "Cargos y trabajo" },
+  { k: "empresa", etiqueta: "Empresa y dinero" },
   { k: "politica", etiqueta: "Política" },
-  { k: "economica", etiqueta: "Dinero" },
   { k: "judicial", etiqueta: "Justicia" },
-  { k: "fuente", etiqueta: "Lugar y fuente" },
+  { k: "lugar", etiqueta: "Lugar" },
+  { k: "otro", etiqueta: "Otro" },
 ];
 
 /* Lo que se recuerda al elegir un predicado, donde más se confunden. */
 const NOTAS: Record<string, string> = {
-  "ocupa el cargo": "Lo ejerce ahora o lo ejercía según el texto. Si solo aspira, usa «aspira a».",
-  "aspira a": "Se postula, suena o busca el cargo. Marcarlo como «ocupa» sería falso.",
-  "aliado de": "Solo si el texto lo afirma, no si tú lo sabes.",
-  "opositor de": "Solo si el texto lo afirma, no si tú lo sabes.",
-  "familiar de": "Cuando el texto no dice cuál parentesco. Si dice padre, hijo, hermano o cónyuge, usa ese.",
-  "miembro de": "Pertenece a la organización o al partido. «Parte de» es para una organización dentro de otra.",
-  "parte de": "Pertenencia, no identidad. Va de la parte al todo: si las dos son la misma cosa, usa «=».",
-  "se reunió con": "Solo si el texto narra la reunión, no si trabajan juntos.",
-  "ubicado en": "Solo si el texto afirma la sede o el lugar, no porque lo sepas.",
-  "destinado a": "El destino de una partida: «10 mil millones para el bicentenario».",
-  "sanciona con": "La pena que una norma establece.",
-  "acusado de": "El delito o la norma de que se le acusa. Quien acusa va con «demandó a» o «investigado por».",
+  "ocupa el cargo": "Lo ejerce ahora según el texto. Si el texto dice «ex», «fue» o «entonces», usa «ocupó el cargo»; si solo se postula, «aspira al cargo».",
+  "ocupó el cargo": "Lo ejerció y ya no: «exministro», «fue alcalde», «el entonces gobernador».",
+  "aspira al cargo": "Se postula, suena o busca el cargo. Marcarlo como «ocupa» sería falso.",
+  "nombró a": "Quien nombra puede ser una persona o una organización; el nombrado es una persona.",
+  "sucedió a": "Reemplazó a otra persona en un cargo. De quien llega a quien se fue.",
+  "trabaja en": "Empleo o asesoría sin cargo nombrado. Si el texto da el cargo, usa «ocupa el cargo».",
+  "dirige": "Preside, gerencia o encabeza la organización.",
+  "miembro de": "Militancia en un partido o pertenencia a junta, comisión o colectivo. Un adjetivo («el liberal X») no basta.",
+  "fundó": "Creó la organización.",
+  "propietario de": "Dueño, accionista o socio de una empresa. Entre dos personas, usa «socio de».",
+  "socio de": "Dos personas socias en un negocio. Si el socio es de una empresa, «propietario de».",
+  "parte de": "Una organización dentro de otra: filial, dependencia, adscrita. Nunca una persona.",
+  "contrató a": "Contratación pública o privada afirmada en el texto.",
+  "financia a": "Financió, donó o aportó. Solo si el texto lo afirma.",
+  "apoya a": "Respaldo o alianza explícita. Solo si el texto lo afirma, no si tú lo sabes.",
+  "se opone a": "Oposición o crítica explícita. Solo si el texto lo afirma.",
+  "investigado por": "La organización que investiga: Fiscalía, Procuraduría, Contraloría, Corte.",
+  "acusado por": "La organización que imputa o acusa.",
+  "condenado por": "La organización que condena.",
+  "ubicado en": "Sede, residencia o contención geográfica. No el origen («el caleño X») ni el lugar de los hechos.",
+  "cónyuge de": "Esposo, esposa, pareja, compañero permanente, ex pareja.",
+  "hijo de": "La cabeza es el hijo: «Nicolás Petro» hijo de «Gustavo Petro».",
+  "hermano de": "Hermanos y hermanastros.",
+  "familiar de": "Cuando el parentesco es otro: tío, primo, sobrino, cuñado, suegro, nieto, padrino.",
+  "vínculo sin tipo": "El texto afirma un vínculo que no encaja en ninguna relación. Se conserva para revisión.",
 };
 
 const TABLA: Omit<Predicado, "nota">[] = [
   // generado desde sidecar/vocabulario.py: no editar a mano
   // Familia
-  { etiqueta: "padre o madre de",    familia: "familiar",  desde: [P],       hasta: [P], },
-  { etiqueta: "hijo de",             familia: "familiar",  desde: [P],       hasta: [P], },
-  { etiqueta: "hermano de",          familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
-  { etiqueta: "cónyuge o pareja de", familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
-  { etiqueta: "familiar de",         familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
-  // Trabajo e instituciones
-  { etiqueta: "ocupa el cargo",      familia: "laboral",   desde: [P],       hasta: [C], },
-  { etiqueta: "trabaja en",          familia: "laboral",   desde: [P],       hasta: [O], },
-  { etiqueta: "dirige",              familia: "laboral",   desde: [P],       hasta: [O, B], },
-  { etiqueta: "fundó",               familia: "laboral",   desde: [P, O],    hasta: [O], },
-  { etiqueta: "dueño de",            familia: "laboral",   desde: [P, O],    hasta: [O], },
-  { etiqueta: "asesor de",           familia: "laboral",   desde: [P],       hasta: [P, O], },
-  { etiqueta: "sucedió a",           familia: "laboral",   desde: [P],       hasta: [P], },
-  { etiqueta: "nombró a",            familia: "laboral",   desde: [P, O],    hasta: [P], },
-  { etiqueta: "renunció a",          familia: "laboral",   desde: [P],       hasta: [C, O], },
-  { etiqueta: "parte de",            familia: "laboral",   desde: [],        hasta: [O, L, N], },
+  { etiqueta: "cónyuge de",       familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
+  { etiqueta: "hijo de",          familia: "familiar",  desde: [P],       hasta: [P], },
+  { etiqueta: "hermano de",       familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
+  { etiqueta: "familiar de",      familia: "familiar",  desde: [P],       hasta: [P],             simetrico: true, },
+  // Cargos y trabajo
+  { etiqueta: "ocupa el cargo",   familia: "laboral",   desde: [P],       hasta: [C], },
+  { etiqueta: "ocupó el cargo",   familia: "laboral",   desde: [P],       hasta: [C], },
+  { etiqueta: "aspira al cargo",  familia: "laboral",   desde: [P],       hasta: [C], },
+  { etiqueta: "nombró a",         familia: "laboral",   desde: [P, O],    hasta: [P], },
+  { etiqueta: "sucedió a",        familia: "laboral",   desde: [P],       hasta: [P], },
+  { etiqueta: "trabaja en",       familia: "laboral",   desde: [P],       hasta: [O], },
+  { etiqueta: "dirige",           familia: "laboral",   desde: [P],       hasta: [O], },
+  { etiqueta: "miembro de",       familia: "laboral",   desde: [P],       hasta: [O], },
+  // Empresa y dinero
+  { etiqueta: "fundó",            familia: "empresa",   desde: [P, O],    hasta: [O], },
+  { etiqueta: "propietario de",   familia: "empresa",   desde: [P, O],    hasta: [O], },
+  { etiqueta: "socio de",         familia: "empresa",   desde: [P],       hasta: [P],             simetrico: true, },
+  { etiqueta: "parte de",         familia: "empresa",   desde: [O],       hasta: [O], },
+  { etiqueta: "contrató a",       familia: "empresa",   desde: [O, P],    hasta: [O, P], },
+  { etiqueta: "financia a",       familia: "empresa",   desde: [P, O],    hasta: [P, O], },
   // Política
-  { etiqueta: "aliado de",           familia: "politica",  desde: [P, O],    hasta: [P, O],          simetrico: true, },
-  { etiqueta: "opositor de",         familia: "politica",  desde: [P, O],    hasta: [P, O],          simetrico: true, },
-  { etiqueta: "miembro de",          familia: "politica",  desde: [P],       hasta: [O], },
-  { etiqueta: "aspira a",            familia: "politica",  desde: [P, O],    hasta: [C], },
-  { etiqueta: "apoyó a",             familia: "politica",  desde: [P, O],    hasta: [P, O], },
-  { etiqueta: "se reunió con",       familia: "politica",  desde: [P, O],    hasta: [P, O],          simetrico: true, },
-  { etiqueta: "criticó a",           familia: "politica",  desde: [P, O],    hasta: [P, O, N], },
-  // Dinero
-  { etiqueta: "financia a",          familia: "economica", desde: [P, O],    hasta: [P, O], },
-  { etiqueta: "contrató a",          familia: "economica", desde: [O, P],    hasta: [O, P], },
-  { etiqueta: "socio de",            familia: "economica", desde: [P, O],    hasta: [P, O],          simetrico: true, },
-  { etiqueta: "donó a",              familia: "economica", desde: [P, O],    hasta: [P, O], },
-  { etiqueta: "destinado a",         familia: "economica", desde: [M],       hasta: [O, C, L, N], },
+  { etiqueta: "apoya a",          familia: "politica",  desde: [P, O],    hasta: [P, O, C], },
+  { etiqueta: "se opone a",       familia: "politica",  desde: [P, O],    hasta: [P, O], },
   // Justicia
-  { etiqueta: "investigado por",     familia: "judicial",  desde: [P, O],    hasta: [O, N], },
-  { etiqueta: "condenado por",       familia: "judicial",  desde: [P, O],    hasta: [O, N], },
-  { etiqueta: "acusado de",          familia: "judicial",  desde: [P, O],    hasta: [N], },
-  { etiqueta: "demandó a",           familia: "judicial",  desde: [P, O],    hasta: [P, O], },
-  { etiqueta: "sanciona con",        familia: "judicial",  desde: [N],       hasta: [M], },
-  // Lugar y fuente
-  { etiqueta: "ubicado en",          familia: "fuente",    desde: [],        hasta: [L], },
-  { etiqueta: "citado en",           familia: "fuente",    desde: [P, O],    hasta: [O, B], },
-  { etiqueta: "autor de",            familia: "fuente",    desde: [P, O],    hasta: [B], },
+  { etiqueta: "investigado por",  familia: "judicial",  desde: [P, O],    hasta: [O], },
+  { etiqueta: "acusado por",      familia: "judicial",  desde: [P, O],    hasta: [O], },
+  { etiqueta: "condenado por",    familia: "judicial",  desde: [P, O],    hasta: [O], },
+  // Lugar
+  { etiqueta: "ubicado en",       familia: "lugar",     desde: [P, O, L], hasta: [L], },
+  // Otro
+  { etiqueta: "vínculo sin tipo", familia: "otro",      desde: [],        hasta: [],              simetrico: true, },
   // fin de lo generado
 ];
 
 export const PREDICADOS: Predicado[] = TABLA.map((p) => ({ ...p, nota: NOTAS[p.etiqueta] }));
 
+const SIN_TIPO = "vínculo sin tipo";
+
 /** Los que tienen sentido entre dos tipos concretos.
  *
- *  Puede devolver una lista vacía, y eso es información: que el vocabulario no
- *  une un lugar con una persona no es un hueco, es que lo que existe va al
- *  revés —«persona ubicado en lugar»—. Antes se devolvían los trece cuando nada
- *  encajaba, con la idea de no bloquear a quien anota; pero trece opciones de
- *  las que ninguna aplica no es libertad, es ruido, y además dejaba cuatro
- *  fuera del alcance de las teclas 1—9. */
+ *  Ya no puede devolver una lista vacía: «vínculo sin tipo» no tiene
+ *  restricciones de tipo (`desde`/`hasta` vacíos), así que encaja con
+ *  cualquier par y siempre queda como reserva. Antes se devolvían los trece
+ *  predicados cuando ninguno encajaba, para no bloquear a quien anota; luego,
+ *  sin reserva todavía, la lista vacía era la respuesta honesta. Cuando lo
+ *  único que ofrece este par es la reserva —que el vocabulario no une un lugar
+ *  con una persona no es un hueco, es que lo que existe va al revés,
+ *  «persona ubicado en lugar»— es la interfaz la que sugiere mirar el par al
+ *  revés, con `sugerirInversa`. */
 export function predicadosPara(tipoA: string, tipoB: string): Predicado[] {
   const encaja = (p: Predicado) =>
     (p.desde.length === 0 || p.desde.includes(tipoA)) &&
     (p.hasta.length === 0 || p.hasta.includes(tipoB));
   return PREDICADOS.filter(encaja);
+}
+
+/** Las relaciones tipadas que sí existen al invertir el par (tipoB, tipoA),
+ *  sin contar la reserva «vínculo sin tipo»: como esa encaja en cualquier
+ *  sentido, no es una pista de que el orden estaba al revés. Sirve para
+ *  cuando `predicadosPara(tipoA, tipoB)` solo ofrece la reserva: así se sabe
+ *  si el par tiene sentido tipado al revés («lugar», «persona» no tiene nada
+ *  tipado, pero «persona», «lugar» sí: «ubicado en»). */
+export function sugerirInversa(tipoA: string, tipoB: string): Predicado[] {
+  return predicadosPara(tipoB, tipoA).filter((p) => p.etiqueta !== SIN_TIPO);
 }

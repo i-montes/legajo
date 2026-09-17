@@ -3167,7 +3167,7 @@ mod tests {
 
     #[test]
     fn el_espejo_de_una_relacion_simetrica_no_llega_a_guardarse() {
-        /* Ser aliado es mutuo: «A aliado de B» y «B aliado de A» son el mismo
+        /* Ser socio es mutuo: «A socio de B» y «B socio de A» son el mismo
            hecho. Filtrarlo en el extractor no bastaba, porque una persona
            también puede marcar las dos a mano y esas no pasan por ahí. */
         let path = std::env::temp_dir()
@@ -3188,16 +3188,16 @@ mod tests {
             &[m("mA", 0, 0, 1, "Santos", "persona"),
               m("mB", 0, 5, 6, "Uribe", "persona"),
               m("mC", 0, 9, 10, "Petro", "persona")],
-            &[rel("r1", "mA", "mB", "aliado de", "vigente"),
-              rel("r2", "mB", "mA", "aliado de", "vigente"),
-              rel("r3", "mA", "mA", "aliado de", "vigente"),
+            &[rel("r1", "mA", "mB", "socio de", "vigente"),
+              rel("r2", "mB", "mA", "socio de", "vigente"),
+              rel("r3", "mA", "mA", "socio de", "vigente"),
               // Asimétrica: los dos sentidos son afirmaciones distintas y las
               // dos se guardan; una es falsa, pero eso se corrige, no se funde.
               rel("r4", "mA", "mC", "trabaja en", "vigente"),
               rel("r5", "mC", "mA", "trabaja en", "vigente")]).unwrap();
 
         let (_, rs) = db.anotacion(1, 100).unwrap();
-        let aliados: Vec<_> = rs.iter().filter(|r| r.predicado == "aliado de").collect();
+        let aliados: Vec<_> = rs.iter().filter(|r| r.predicado == "socio de").collect();
         assert_eq!(aliados.len(), 1, "el espejo y el lazo debían caer: {rs:?}");
         assert_eq!((aliados[0].a_mid.as_str(), aliados[0].b_mid.as_str()), ("mA", "mB"),
                    "los extremos quedan en orden fijo");
@@ -3207,7 +3207,7 @@ mod tests {
         // Y lo que propone el modelo: gana la de más confianza.
         use crate::extraccion::RelacionExtraida;
         let ex = |a: &str, b: &str, s: f64| RelacionExtraida {
-            a: a.into(), b: b.into(), predicado: "aliado de".into(), score: s,
+            a: a.into(), b: b.into(), predicado: "socio de".into(), score: s,
         };
         db.guardar_relaciones_extraidas(1, 100,
             &[vec![ex("Santos", "Uribe", 0.71), ex("Uribe", "Santos", 0.88),

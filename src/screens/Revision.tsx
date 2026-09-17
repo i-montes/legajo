@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
-import { FAMILIAS, TIPOS, colorTipo, predicadosPara } from "../contenido/tipos";
+import { FAMILIAS, TIPOS, colorTipo, predicadosPara, sugerirInversa } from "../contenido/tipos";
 import type { Predicado } from "../contenido/tipos";
 import {
   apuntarTiempo, avanceAnotacion, cargarAnotacion, cerrarArticulo, descartarTiempo, guardarAnotacion,
@@ -701,15 +701,19 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             const a = menciones.find((m) => m.mid === relSel[0]);
             const b = menciones.find((m) => m.mid === relSel[1]);
             const opciones = predicadosDisponibles();
-            const alReves = opciones.length === 0 && a && b
-              ? predicadosPara(b.tipo, a.tipo)
+            // «vínculo sin tipo» encaja en cualquier par, así que `opciones`
+            // ya nunca está vacía. La pista de inversión se activa cuando es
+            // lo único que hay: nada tipado une este par en este sentido.
+            const soloSinTipo = opciones.length > 0 && opciones.every((p) => p.etiqueta === "vínculo sin tipo");
+            const alReves = soloSinTipo && a && b
+              ? sugerirInversa(a.tipo, b.tipo)
               : [];
             return (
               <Flotante
                 x={punto.x}
                 y={punto.y}
                 titulo={
-                  /* La dirección importa y antes no se veía: «A opositor de B»
+                  /* La dirección importa y antes no se veía: «A se opone a B»
                      no dice lo mismo si se invierte el orden de selección. */
                   a && b ? `${recorta(a.texto)} → ${recorta(b.texto)}` : "Selecciona dos marcas"
                 }
@@ -744,18 +748,20 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                     </>
                   );
                 })()}
-                {/* Que no haya nada no siempre es un hueco del vocabulario:
-                    casi siempre es que la relación existe al revés. No hay nada
-                    que una un lugar con una persona porque lo que hay es
-                    «persona ubicado en lugar». */}
-                {opciones.length === 0 && a && b && (
+                {/* Que lo único tipado sea la reserva no siempre es un hueco
+                    del vocabulario: casi siempre es que la relación existe al
+                    revés. No hay nada tipado que una un lugar con una persona
+                    porque lo que hay es «persona ubicado en lugar». La reserva
+                    «vínculo sin tipo» sigue arriba, en el menú, de cualquier
+                    forma. */}
+                {soloSinTipo && a && b && (
                   <div style={{ padding: "5px 8px 8px" }}>
                     <div style={{ display: "flex", gap: 7, alignItems: "baseline" }}>
                       <Glifo estado="neutro" size={10} />
                       <span className="t-menor" style={{ color: "var(--t2)", lineHeight: 1.55 }}>
                         {alReves.length > 0
-                          ? `Nada une ${a.tipo} con ${b.tipo}, pero al revés sí: ${alReves.map((p) => `«${p.etiqueta}»`).join(", ")}.`
-                          : `El vocabulario no tiene ninguna relación entre ${a.tipo} y ${b.tipo}, en ningún sentido.`}
+                          ? `Nada tipado une ${a.tipo} con ${b.tipo}, pero al revés sí: ${alReves.map((p) => `«${p.etiqueta}»`).join(", ")}.`
+                          : `El vocabulario no tiene ninguna relación tipada entre ${a.tipo} y ${b.tipo}, en ningún sentido.`}
                       </span>
                     </div>
                   </div>
