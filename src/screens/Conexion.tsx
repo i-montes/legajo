@@ -8,6 +8,7 @@ import {
 import type { ConexionGuardada, Discovery, Identidad, PasoAutorizacion, SesionRecuperada } from "../types";
 import type { EstadoApp } from "../App";
 import { nombreEnFrase, pasoDe, type Paso } from "../contenido/pasos";
+import { completar } from "../lib/correo";
 
 type Fase = "reposo" | "verificando" | "conectado" | "error";
 
@@ -72,6 +73,19 @@ function instalacion(d: Discovery): string {
   if (d.transport.kind === "wpcom") partes.push("Alojado en WordPress.com");
   return partes.length ? partes.join(" · ") : "WordPress";
 }
+
+/* Los dos cierres de la pantalla, escritos una sola vez.
+   Estaban repartidos entre el `disabled` de un botón y el `onEnter` de un
+   campo, y se escaparon por ahí: el botón sí exigía el correo y la tecla Enter
+   no, así que pulsar Enter sobre la dirección llevaba a pedir la contraseña sin
+   correo. Y allí «Comprobar y guardar» no hacía nada, porque la petición de
+   prueba va con el correo y la contraseña juntos: faltaba un dato que en esa
+   pantalla ya no se podía escribir. */
+export const puedeConectar = (url: string, correo: string) =>
+  url.trim() !== "" && correo.trim() !== "";
+
+export const puedeComprobar = (correo: string, secreto: string) =>
+  correo.trim() !== "" && secreto.trim() !== "";
 
 export default function Conexion({
   estado,
@@ -186,7 +200,7 @@ export default function Conexion({
   }
 
   async function comprobar() {
-    if (!hallazgo || !correo.trim() || !secreto.trim()) return;
+    if (!hallazgo || !puedeComprobar(correo, secreto)) return;
     setProbando(true);
     setErrorCred(null);
     setPreparando(0);
@@ -308,7 +322,7 @@ export default function Conexion({
             onChange={setUrl}
             placeholder="tumedio.co"
             autoFocus
-            onEnter={() => fase !== "verificando" && conectar()}
+            onEnter={() => fase !== "verificando" && puedeConectar(url, correo) && conectar()}
           />
           {/* El correo y no el usuario: casi nadie sabe cuál es su nombre de
               usuario en WordPress, y el correo lo sabe todo el mundo porque es
@@ -321,8 +335,8 @@ export default function Conexion({
             value={correo}
             onChange={setCorreo}
             placeholder="tu@medio.co"
-            type="email"
-            onEnter={() => fase !== "verificando" && conectar()}
+            completa={(v) => completar(v, url)}
+            onEnter={() => fase !== "verificando" && puedeConectar(url, correo) && conectar()}
           />
         </div>
 
@@ -330,7 +344,7 @@ export default function Conexion({
 
         {fase === "reposo" && (
           <div>
-            <Boton onClick={() => conectar()} disabled={!url.trim() || !correo.trim()}>
+            <Boton onClick={() => conectar()} disabled={!puedeConectar(url, correo)}>
               Conectar con WordPress
             </Boton>
             <div style={{ height: 14 }} />
@@ -481,14 +495,29 @@ export default function Conexion({
                     </ol>
                   )}
 
-                  {/* Solo la contraseña: el correo ya se dio al principio. Va
+                  {/* La contraseña, y el correo solo si falta. Va
                       en monoespaciada y a la vista porque WordPress la enseña
                       una sola vez en grupos de cuatro, y ocultarla haría
                       imposible comprobar que se pegó entera, que es el fallo
                       más común. Se borra del campo en cuanto se guarda. */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "16px 0 0" }}>
+                    {/* Si el correo falta —se llegó hasta aquí sin él, o se
+                        reabrió la app sobre un medio ya guardado— se pide aquí
+                        en vez de dejar el botón mudo: el formulario de arriba
+                        ya no está a la vista y no habría dónde escribirlo. */}
+                    {!correo.trim() && (
+                      <Campo
+                        etiqueta="Tu correo en ese WordPress"
+                        ayuda="El mismo con el que inicias sesión. Va junto a la contraseña en la petición de prueba."
+                        value={correo}
+                        onChange={setCorreo}
+                        placeholder="tu@medio.co"
+                        completa={(v) => completar(v, hallazgo?.resolved_origin ?? url)}
+                        autoFocus
+                      />
+                    )}
                     <Campo
-                      etiqueta={`Contraseña de aplicación para ${correo}`}
+                      etiqueta={correo.trim() ? `Contraseña de aplicación para ${correo}` : "Contraseña de aplicación"}
                       ayuda="Los espacios dan igual: WordPress la acepta con ellos o sin ellos."
                       value={secreto}
                       onChange={setSecreto}
@@ -509,7 +538,7 @@ export default function Conexion({
                     <Boton
                       variante="secundario"
                       onClick={comprobar}
-                      disabled={probando || !secreto.trim()}
+                      disabled={probando || !puedeComprobar(correo, secreto)}
                     >
                       {probando ? "Comprobando…" : "Comprobar y guardar"}
                     </Boton>

@@ -131,6 +131,7 @@ export function Campo({
   type = "text",
   autoFocus,
   mono,
+  completa,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -145,35 +146,94 @@ export function Campo({
   type?: string;
   autoFocus?: boolean;
   mono?: boolean;
+  /** Lo que falta por escribir, dado lo escrito. Se pinta en gris dentro del
+   *  propio campo y se toma con Tab. El campo no sabe de qué va la sugerencia:
+   *  recibe el resto ya calculado y solo se encarga de enseñarlo y aceptarlo. */
+  completa?: (valor: string) => string;
 }) {
+  /* La sugerencia va dentro del campo y no en una lista flotante: es una
+     ayuda, no un menú, y una lista taparía lo que hay justo debajo. El fondo
+     pasa al envoltorio para que el gris se vea por debajo del input. */
+  const resto = completa?.(value) ?? "";
+  const tomar = () => onChange(value + resto);
+  /* `selectionStart` es null en los `type` que no admiten selección —email
+     entre ellos—, y entonces no hay forma de saber si el cursor está al final:
+     la flecha se queda como flecha y Tab sigue completando. */
+  const alFinal = (el: HTMLInputElement) => {
+    try {
+      return el.selectionStart === value.length && el.selectionEnd === value.length;
+    } catch {
+      return false;
+    }
+  };
+
   /* El campo va envuelto en su etiqueta y no al lado: un `placeholder` se borra
      en cuanto se escribe la primera letra, que es justo cuando hace falta saber
      qué se estaba rellenando. La etiqueta se queda. */
   const entrada = (
-    <input
-      type={type}
-      value={value}
-      autoFocus={autoFocus}
-      spellCheck={false}
-      placeholder={placeholder}
-      aria-label={etiqueta ? undefined : placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
-      style={{
-        width: "100%",
-        height: 44,
-        padding: "0 14px",
-        background: "var(--hundida)",
-        border: "1px solid var(--borde)",
-        borderRadius: 8,
-        color: "var(--t1)",
-        fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)",
-        fontSize: 14.5,
-        outline: "none",
-      }}
-      onFocus={(e) => (e.currentTarget.style.borderColor = "var(--acento)")}
-      onBlur={(e) => (e.currentTarget.style.borderColor = "var(--borde)")}
-    />
+    <div style={{ position: "relative", background: "var(--hundida)", borderRadius: 8 }}>
+      {resto && (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 1,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 14px",
+            fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)",
+            fontSize: 14.5,
+            color: "var(--t3)",
+            whiteSpace: "pre",
+            overflow: "hidden",
+            pointerEvents: "none",
+          }}
+        >
+          <span style={{ color: "transparent" }}>{value}</span>
+          {resto}
+        </div>
+      )}
+      <input
+        type={type}
+        value={value}
+        autoFocus={autoFocus}
+        spellCheck={false}
+        placeholder={placeholder}
+        aria-label={etiqueta ? undefined : placeholder}
+        aria-autocomplete={completa ? "inline" : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          // Tab completa en vez de salir del campo; el segundo Tab ya sale,
+          // porque para entonces no queda resto que tomar.
+          if (resto && e.key === "Tab" && !e.shiftKey) {
+            e.preventDefault();
+            tomar();
+            return;
+          }
+          if (resto && e.key === "ArrowRight" && alFinal(e.currentTarget)) {
+            e.preventDefault();
+            tomar();
+            return;
+          }
+          if (e.key === "Enter") onEnter?.();
+        }}
+        style={{
+          width: "100%",
+          height: 44,
+          padding: "0 14px",
+          position: "relative",
+          background: "transparent",
+          border: "1px solid var(--borde)",
+          borderRadius: 8,
+          color: "var(--t1)",
+          fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)",
+          fontSize: 14.5,
+          outline: "none",
+        }}
+        onFocus={(e) => (e.currentTarget.style.borderColor = "var(--acento)")}
+        onBlur={(e) => (e.currentTarget.style.borderColor = "var(--borde)")}
+      />
+    </div>
   );
 
   if (!etiqueta && !ayuda) return entrada;
