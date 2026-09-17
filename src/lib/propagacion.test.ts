@@ -5,7 +5,7 @@ import {
   propagarEnDocumento, soltarAlias, textoDeArbol, unirAlias,
 } from "./propagacion";
 import type { NodoMarca } from "./propagacion";
-import { FAMILIAS, PREDICADOS, predicadosPara } from "../contenido/tipos";
+import { FAMILIAS, PREDICADOS, predicadosPara, sugerirInversa } from "../contenido/tipos";
 import { revisar } from "./revision";
 import type { EntradaLexico, Mencion } from "../types";
 
@@ -351,6 +351,21 @@ describe("predicados", () => {
     // «persona ubicado en lugar». Saberlo permite proponer el intercambio.
     expect(predicadosPara("lugar", "persona").map((p) => p.etiqueta)).toEqual(["vínculo sin tipo"]);
     expect(predicadosPara("persona", "lugar").map((p) => p.etiqueta)).toContain("ubicado en");
+  });
+
+  it("sugerirInversa encuentra lo tipado que hay al invertir el par", () => {
+    // «lugar, persona» no tiene nada tipado, pero al revés («persona, lugar»)
+    // está «ubicado en». La reserva nunca cuenta como pista de inversión.
+    const inv = sugerirInversa("lugar", "persona").map((p) => p.etiqueta);
+    expect(inv).toContain("ubicado en");
+    expect(inv).not.toContain("vínculo sin tipo");
+  });
+
+  it("sugerirInversa no ofrece nada cuando tampoco hay nada tipado al revés", () => {
+    // Ninguno de los 25 predicados admite «obra» ni «monto»: ni derecho ni
+    // al revés hay algo tipado que unir.
+    expect(sugerirInversa("obra", "monto")).toEqual([]);
+    expect(sugerirInversa("monto", "obra")).toEqual([]);
   });
 
   it("dentro de cada familia, la lista filtrada cabe en las teclas 1—9", () => {

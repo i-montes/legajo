@@ -140,17 +140,32 @@ const TABLA: Omit<Predicado, "nota">[] = [
 
 export const PREDICADOS: Predicado[] = TABLA.map((p) => ({ ...p, nota: NOTAS[p.etiqueta] }));
 
+const SIN_TIPO = "vínculo sin tipo";
+
 /** Los que tienen sentido entre dos tipos concretos.
  *
- *  Puede devolver una lista vacía, y eso es información: que el vocabulario no
- *  une un lugar con una persona no es un hueco, es que lo que existe va al
- *  revés —«persona ubicado en lugar»—. Antes se devolvían los trece cuando nada
- *  encajaba, con la idea de no bloquear a quien anota; pero trece opciones de
- *  las que ninguna aplica no es libertad, es ruido, y además dejaba cuatro
- *  fuera del alcance de las teclas 1—9. */
+ *  Ya no puede devolver una lista vacía: «vínculo sin tipo» no tiene
+ *  restricciones de tipo (`desde`/`hasta` vacíos), así que encaja con
+ *  cualquier par y siempre queda como reserva. Antes se devolvían los trece
+ *  predicados cuando ninguno encajaba, para no bloquear a quien anota; luego,
+ *  sin reserva todavía, la lista vacía era la respuesta honesta. Cuando lo
+ *  único que ofrece este par es la reserva —que el vocabulario no une un lugar
+ *  con una persona no es un hueco, es que lo que existe va al revés,
+ *  «persona ubicado en lugar»— es la interfaz la que sugiere mirar el par al
+ *  revés, con `sugerirInversa`. */
 export function predicadosPara(tipoA: string, tipoB: string): Predicado[] {
   const encaja = (p: Predicado) =>
     (p.desde.length === 0 || p.desde.includes(tipoA)) &&
     (p.hasta.length === 0 || p.hasta.includes(tipoB));
   return PREDICADOS.filter(encaja);
+}
+
+/** Las relaciones tipadas que sí existen al invertir el par (tipoB, tipoA),
+ *  sin contar la reserva «vínculo sin tipo»: como esa encaja en cualquier
+ *  sentido, no es una pista de que el orden estaba al revés. Sirve para
+ *  cuando `predicadosPara(tipoA, tipoB)` solo ofrece la reserva: así se sabe
+ *  si el par tiene sentido tipado al revés («lugar», «persona» no tiene nada
+ *  tipado, pero «persona», «lugar» sí: «ubicado en»). */
+export function sugerirInversa(tipoA: string, tipoB: string): Predicado[] {
+  return predicadosPara(tipoB, tipoA).filter((p) => p.etiqueta !== SIN_TIPO);
 }
