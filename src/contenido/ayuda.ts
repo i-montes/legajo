@@ -45,7 +45,7 @@ export const REGLAS: Regla[] = [
   {
     titulo: "Marca lo que el texto afirma, no lo que sabes",
     texto:
-      "Si el texto dice «el Gobernador de Antioquia» sin nombrarlo, no lo resuelvas de memoria. Fusionarlo con su nombre es trabajo del paso 7, con evidencia. Vale igual para «aliado de» y «opositor de».",
+      "Si el texto dice «el Gobernador de Antioquia» sin nombrarlo, no lo resuelvas de memoria. Fusionarlo con su nombre es trabajo del paso 7, con evidencia. Vale igual para «apoya a» y «se opone a».",
   },
   {
     titulo: "El cargo y la persona van separados",

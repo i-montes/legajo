@@ -315,8 +315,8 @@ describe("cabeAnidada", () => {
 describe("predicados", () => {
   it("entre dos personas ofrece las relaciones de poder", () => {
     const e = predicadosPara("persona", "persona").map((p) => p.etiqueta);
-    expect(e).toContain("aliado de");
-    expect(e).toContain("opositor de");
+    expect(e).toContain("apoya a");
+    expect(e).toContain("se opone a");
     expect(e).toContain("familiar de");
     expect(e).not.toContain("ocupa el cargo");
   });
@@ -324,37 +324,37 @@ describe("predicados", () => {
   it("persona y cargo separa ocupar de aspirar", () => {
     const e = predicadosPara("persona", "cargo").map((p) => p.etiqueta);
     expect(e).toContain("ocupa el cargo");
-    expect(e).toContain("aspira a");
+    expect(e).toContain("aspira al cargo");
     expect(e).not.toContain("familiar de");
   });
 
-  it("un monto solo puede ir a un destino", () => {
+  it("un monto ya no tiene predicados tipados: solo queda la reserva", () => {
+    // Las 25 clases finas no incluyen ningún predicado con «monto» en sus
+    // extremos; lo único que encaja siempre es «vínculo sin tipo».
     const e = predicadosPara("monto", "organizacion").map((p) => p.etiqueta);
-    expect(e).toContain("destinado a");
-    expect(e).not.toContain("ocupa el cargo");
-    // «evento» no se entrena: ningún predicado lo admite ya como destino.
-    expect(predicadosPara("monto", "evento")).toEqual([]);
+    expect(e).toEqual(["vínculo sin tipo"]);
+    expect(predicadosPara("monto", "evento").map((p) => p.etiqueta)).toEqual(["vínculo sin tipo"]);
   });
 
-  it("no ofrece nada cuando de verdad no hay nada que ofrecer", () => {
+  it("cuando nada tipado encaja, queda la reserva: ya no hay lista vacía", () => {
     /* Antes se devolvían los trece predicados cuando ninguno encajaba, para no
-       bloquear a quien anota. Pero trece opciones de las que ninguna aplica no
-       es libertad: es ruido, y además dejaba cuatro fuera del alcance de las
-       teclas 1—9. La lista vacía es la respuesta honesta, y la pantalla la
-       aprovecha para sugerir invertir el orden. */
-    expect(predicadosPara("obra", "monto")).toEqual([]);
-    expect(predicadosPara("lugar", "persona")).toEqual([]);
+       bloquear a quien anota; luego, la lista vacía como respuesta honesta.
+       Ahora «vínculo sin tipo» admite cualquier par y es la reserva: el texto
+       puede afirmar un vínculo que no encaja en ninguna clase tipada, y eso
+       también se anota. */
+    expect(predicadosPara("obra", "monto").map((p) => p.etiqueta)).toEqual(["vínculo sin tipo"]);
+    expect(predicadosPara("lugar", "persona").map((p) => p.etiqueta)).toEqual(["vínculo sin tipo"]);
   });
 
-  it("cuando el par no encaja, suele encajar al revés", () => {
-    // «lugar → persona» no existe porque lo que existe es «persona ubicado en
-    // lugar». Saberlo permite proponer el intercambio en vez de rendirse.
-    expect(predicadosPara("lugar", "persona")).toEqual([]);
+  it("cuando el par no encaja tipado, suele encajar al revés", () => {
+    // «lugar → persona» solo tiene la reserva porque lo tipado que existe es
+    // «persona ubicado en lugar». Saberlo permite proponer el intercambio.
+    expect(predicadosPara("lugar", "persona").map((p) => p.etiqueta)).toEqual(["vínculo sin tipo"]);
     expect(predicadosPara("persona", "lugar").map((p) => p.etiqueta)).toContain("ubicado en");
   });
 
   it("dentro de cada familia, la lista filtrada cabe en las teclas 1—9", () => {
-    /* Con 35 predicados, entre dos personas encajan más de nueve; el menú
+    /* Con 25 predicados, entre dos personas encajan más de nueve; el menú
        pide entonces la familia primero. Lo que tiene que caber en 1—9 es cada
        familia por separado, y las familias mismas. */
     expect(FAMILIAS.length).toBeLessThanOrEqual(9);
@@ -367,14 +367,14 @@ describe("predicados", () => {
     }
   });
 
-  it("los 35 predicados tienen familia conocida y la familia se conoce", () => {
-    expect(PREDICADOS.length).toBe(35);
+  it("los 25 predicados tienen familia conocida y la familia se conoce", () => {
+    expect(PREDICADOS.length).toBe(25);
     for (const p of PREDICADOS) expect(FAMILIAS.map((f) => f.k)).toContain(p.familia);
   });
 
   it("el parentesco concreto y el genérico conviven", () => {
     const e = predicadosPara("persona", "persona").map((p) => p.etiqueta);
-    for (const x of ["padre o madre de", "hijo de", "hermano de", "cónyuge o pareja de", "familiar de"]) expect(e).toContain(x);
+    for (const x of ["cónyuge de", "hijo de", "hermano de", "familiar de"]) expect(e).toContain(x);
     expect(e).toContain("sucedió a");
   });
 });

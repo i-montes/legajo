@@ -37,6 +37,8 @@ import sys
 import time
 from collections import Counter
 
+from vocabulario import PREDICADOS_ANTERIORES, traducir_anterior
+
 GLINER_POR_DEFECTO = "knowledgator/gliner-relex-multi-v1.0"
 SPACY_POR_DEFECTO = "es_core_news_sm"
 
@@ -241,7 +243,8 @@ class Motor:
         antes de pedir las relaciones, y aquí salen juntas. Lo que vuelve mal
         unido —un predicado entre tipos que no admite— se descarta igual.
         """
-        pedir = [p["etiqueta"] for p in predicados]
+        # El modelo afinado aprendió las 35 etiquetas viejas; se le pide con ellas y se traduce después.
+        pedir = list(PREDICADOS_ANTERIORES) if predicados else []
         ents, crudas = [], []
         for trozo, desplazamiento in trozos_por_oracion(doc):
             if not trozo.strip():
@@ -299,6 +302,9 @@ class Motor:
         a revisar es gastar atención humana en descartarlo.
         """
         tipo_de = {e["texto"]: self.clave(e["etiqueta"]) for e in ents}
+        # `umbrales` viene del afinado viejo (umbrales.json) e indexa por sus
+        # 35 etiquetas; el corte se aplica con la etiqueta vieja, antes de
+        # traducir a la clase nueva.
         umbrales = umbrales or {}
         out = []
         for r in crudas:
@@ -314,6 +320,12 @@ class Motor:
             ta, tb = tipo_de.get(a), tipo_de.get(b)
             if ta is None or tb is None:
                 continue
+            traducida = traducir_anterior(etiqueta, ta, tb)
+            if traducida is None:
+                continue
+            etiqueta, invertir = traducida
+            if invertir:
+                a, b, ta, tb = b, a, tb, ta
             if not any(p["etiqueta"] == etiqueta for p in aplicables(predicados, ta, tb)):
                 continue
             out.append({"a": a, "b": b, "predicado": etiqueta, "score": round(score, 4)})

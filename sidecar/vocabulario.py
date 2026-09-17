@@ -39,62 +39,143 @@ P, O, L, C, N, B, M = "persona", "organizacion", "lugar", "cargo", "ley", "obra"
 TODOS = [P, O, L, C, N, B, M]
 
 # (etiqueta, familia, desde, hasta, simetrico). `desde`/`hasta` vacíos = cualquier tipo.
+# Son las 25 clases finas de enrel (docs/superpowers/specs/2026-09-16-enrel-diseno.md §3.2),
+# escritas como predicados para que la capa de revisión no necesite atributos.
 PREDICADOS = [
-    # familiar
-    ("padre o madre de",     "familiar",  [P],       [P],             False),
-    ("hijo de",              "familiar",  [P],       [P],             False),
-    ("hermano de",           "familiar",  [P],       [P],             True),
-    ("cónyuge o pareja de",  "familiar",  [P],       [P],             True),
-    ("familiar de",          "familiar",  [P],       [P],             True),
-    # laboral e institucional
-    ("ocupa el cargo",       "laboral",   [P],       [C],             False),
-    ("trabaja en",           "laboral",   [P],       [O],             False),
-    ("dirige",               "laboral",   [P],       [O, B],          False),
-    ("fundó",                "laboral",   [P, O],    [O],             False),
-    ("dueño de",             "laboral",   [P, O],    [O],             False),
-    ("asesor de",            "laboral",   [P],       [P, O],          False),
-    ("sucedió a",            "laboral",   [P],       [P],             False),
-    ("nombró a",             "laboral",   [P, O],    [P],             False),
-    ("renunció a",           "laboral",   [P],       [C, O],          False),
-    ("parte de",             "laboral",   [],        [O, L, N],       False),
+    # familia
+    # la cabeza es el hijo
+    ("cónyuge de",        "familiar",  [P],       [P],          True),
+    ("hijo de",           "familiar",  [P],       [P],          False),
+    ("hermano de",        "familiar",  [P],       [P],          True),
+    # tío, primo, sobrino, cuñado, suegro…
+    ("familiar de",       "familiar",  [P],       [P],          True),
+    # cargos y trabajo
+    # estado actual
+    ("ocupa el cargo",    "laboral",   [P],       [C],          False),
+    # estado anterior: «ex», «fue», «entonces»
+    ("ocupó el cargo",    "laboral",   [P],       [C],          False),
+    # candidato, precandidato
+    ("aspira al cargo",   "laboral",   [P],       [C],          False),
+    ("nombró a",          "laboral",   [P, O],    [P],          False),
+    ("sucedió a",         "laboral",   [P],       [P],          False),
+    # empleo o asesoría sin cargo nombrado
+    ("trabaja en",        "laboral",   [P],       [O],          False),
+    ("dirige",            "laboral",   [P],       [O],          False),
+    # militancia, junta, comisión, colectivo
+    ("miembro de",        "laboral",   [P],       [O],          False),
+    # empresa y dinero
+    ("fundó",             "empresa",   [P, O],    [O],          False),
+    # dueño, accionista, socio de una empresa
+    ("propietario de",    "empresa",   [P, O],    [O],          False),
+    # socios entre personas
+    ("socio de",          "empresa",   [P],       [P],          True),
+    # filial, dependencia, adscrita
+    ("parte de",          "empresa",   [O],       [O],          False),
+    ("contrató a",        "empresa",   [O, P],    [O, P],       False),
+    # incluye donaciones
+    ("financia a",        "empresa",   [P, O],    [P, O],       False),
     # política
-    ("aliado de",            "politica",  [P, O],    [P, O],          True),
-    ("opositor de",          "politica",  [P, O],    [P, O],          True),
-    ("miembro de",           "politica",  [P],       [O],             False),
-    ("aspira a",             "politica",  [P, O],    [C],             False),
-    ("apoyó a",              "politica",  [P, O],    [P, O],          False),
-    ("se reunió con",        "politica",  [P, O],    [P, O],          True),
-    ("criticó a",            "politica",  [P, O],    [P, O, N],       False),
-    # económica
-    ("financia a",           "economica", [P, O],    [P, O],          False),
-    ("contrató a",           "economica", [O, P],    [O, P],          False),
-    ("socio de",             "economica", [P, O],    [P, O],          True),
-    ("donó a",               "economica", [P, O],    [P, O],          False),
-    ("destinado a",          "economica", [M],       [O, C, L, N],    False),
-    # judicial
-    ("investigado por",      "judicial",  [P, O],    [O, N],          False),
-    ("condenado por",        "judicial",  [P, O],    [O, N],          False),
-    ("acusado de",           "judicial",  [P, O],    [N],             False),
-    ("demandó a",            "judicial",  [P, O],    [P, O],          False),
-    ("sanciona con",         "judicial",  [N],       [M],             False),
-    # ubicación y fuente
-    ("ubicado en",           "fuente",    [],        [L],             False),
-    ("citado en",            "fuente",    [P, O],    [O, B],          False),
-    ("autor de",             "fuente",    [P, O],    [B],             False),
+    # respaldo o alianza explícita
+    ("apoya a",           "politica",  [P, O],    [P, O, C],    False),
+    # oposición o crítica explícita
+    ("se opone a",        "politica",  [P, O],    [P, O],       False),
+    # justicia
+    ("investigado por",   "judicial",  [P, O],    [O],          False),
+    ("acusado por",       "judicial",  [P, O],    [O],          False),
+    ("condenado por",     "judicial",  [P, O],    [O],          False),
+    # lugar
+    # sede, residencia o contención geográfica
+    ("ubicado en",        "lugar",     [P, O, L], [L],          False),
+    # reserva
+    ("vínculo sin tipo",  "otro",      [],        [],           True),
 ]
-# El plan dice «31» redondeando; la tabla de docs/entrenamiento.md §2.2 tiene estos 35.
-assert len(PREDICADOS) == 35
+assert len(PREDICADOS) == 25
 
-# Cómo se llama cada familia en el menú de la app, en el orden en que se ofrecen.
 FAMILIAS = {
     "familiar": "Familia",
-    "laboral": "Trabajo e instituciones",
+    "laboral": "Cargos y trabajo",
+    "empresa": "Empresa y dinero",
     "politica": "Política",
-    "economica": "Dinero",
     "judicial": "Justicia",
-    "fuente": "Lugar y fuente",
+    "lugar": "Lugar",
+    "otro": "Otro",
 }
 assert set(FAMILIAS) == {f for _, f, *_ in PREDICADOS}
+
+# Las 35 etiquetas que aprendió el modelo afinado anterior. El sidecar sigue
+# pidiéndole con ellas y traduce lo que devuelve con `traducir_anterior`.
+PREDICADOS_ANTERIORES = [
+    "padre o madre de", "hijo de", "hermano de", "cónyuge o pareja de", "familiar de",
+    "ocupa el cargo", "trabaja en", "dirige", "fundó", "dueño de", "asesor de", "sucedió a", "nombró a", "renunció a", "parte de",
+    "aliado de", "opositor de", "miembro de", "aspira a", "apoyó a", "se reunió con", "criticó a",
+    "financia a", "contrató a", "socio de", "donó a", "destinado a",
+    "investigado por", "condenado por", "acusado de", "demandó a", "sanciona con",
+    "ubicado en", "citado en", "autor de",
+]
+assert len(PREDICADOS_ANTERIORES) == 35
+
+SIN_TIPO = "vínculo sin tipo"
+
+# Traducción de cada etiqueta vieja. Un valor puede ser una cadena (destino
+# fijo), una tupla (destino, invertir) o una función (tipo_a, tipo_b) → destino.
+_TRADUCCION = {
+    "padre o madre de": ("hijo de", True),
+    "hijo de": "hijo de",
+    "hermano de": "hermano de",
+    "cónyuge o pareja de": "cónyuge de",
+    "familiar de": "familiar de",
+    "ocupa el cargo": "ocupa el cargo",
+    "aspira a": "aspira al cargo",
+    "renunció a": lambda ta, tb: "ocupó el cargo" if tb == C else SIN_TIPO,
+    "nombró a": "nombró a",
+    "sucedió a": "sucedió a",
+    "trabaja en": "trabaja en",
+    "asesor de": lambda ta, tb: "trabaja en" if tb == O else SIN_TIPO,
+    "dirige": lambda ta, tb: "dirige" if tb == O else SIN_TIPO,
+    "miembro de": "miembro de",
+    "parte de": lambda ta, tb: "miembro de" if (ta, tb) == (P, O) else ("parte de" if (ta, tb) == (O, O) else SIN_TIPO),
+    "fundó": "fundó",
+    "dueño de": "propietario de",
+    "socio de": lambda ta, tb: "socio de" if (ta, tb) == (P, P) else ("propietario de" if tb == O and ta in (P, O) else SIN_TIPO),
+    "contrató a": "contrató a",
+    "financia a": "financia a",
+    "donó a": "financia a",
+    "aliado de": "apoya a",
+    "apoyó a": "apoya a",
+    "opositor de": "se opone a",
+    "criticó a": lambda ta, tb: "se opone a" if tb in (P, O) else SIN_TIPO,
+    "investigado por": lambda ta, tb: "investigado por" if tb == O else SIN_TIPO,
+    "acusado de": lambda ta, tb: "acusado por" if tb == O else SIN_TIPO,
+    "condenado por": lambda ta, tb: "condenado por" if tb == O else SIN_TIPO,
+    "ubicado en": lambda ta, tb: "ubicado en" if ta in (P, O, L) and tb == L else SIN_TIPO,
+    "se reunió con": SIN_TIPO, "citado en": SIN_TIPO, "autor de": SIN_TIPO,
+    "destinado a": SIN_TIPO, "sanciona con": SIN_TIPO, "demandó a": SIN_TIPO,
+}
+assert set(_TRADUCCION) == set(PREDICADOS_ANTERIORES)
+
+_ADMITE = {e: (set(d), set(h)) for e, _, d, h, _ in PREDICADOS}
+
+
+def traducir_anterior(etiqueta_vieja, tipo_a, tipo_b):
+    """(etiqueta_nueva, invertir) para una relación del modelo viejo, o None si la etiqueta no existe.
+
+    Si el destino no admite los tipos de los extremos, cae en «vínculo sin tipo»,
+    que admite cualquier par. `invertir` dice que cabeza y cola se intercambian."""
+    regla = _TRADUCCION.get(etiqueta_vieja)
+    if regla is None:
+        return None
+    invertir = False
+    if isinstance(regla, tuple):
+        destino, invertir = regla
+    elif callable(regla):
+        destino = regla(tipo_a, tipo_b)
+    else:
+        destino = regla
+    ta, tb = (tipo_b, tipo_a) if invertir else (tipo_a, tipo_b)
+    desde, hasta = _ADMITE[destino]
+    if destino != SIN_TIPO and ((desde and ta not in desde) or (hasta and tb not in hasta)):
+        return (SIN_TIPO, False)
+    return (destino, invertir)
 
 # En el formato que usan `aplicables()` y `sin_espejos()` de legajo_ner.py.
 PREDICADOS_DICT = [
