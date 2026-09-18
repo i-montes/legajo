@@ -1,4 +1,4 @@
-"""El esquema que se entrena: siete tipos de entidad y 31 predicados.
+"""El esquema que se entrena: siete tipos de entidad y 26 predicados.
 
 Es la fuente única para las herramientas de Python del plan de entrenamiento
 (docs/plan-entrenamiento.md §3). La app lleva la misma tabla en
@@ -152,7 +152,7 @@ _TRADUCCION = {
     "acusado de": lambda ta, tb: "acusado por" if tb == O else SIN_TIPO,
     "condenado por": lambda ta, tb: "condenado por" if tb == O else SIN_TIPO,
     "ubicado en": lambda ta, tb: "ubicado en" if ta in (P, O, L) and tb == L else SIN_TIPO,
-    "se reunió con": SIN_TIPO, "citado en": SIN_TIPO, "autor de": SIN_TIPO,
+    "se reunió con": SIN_TIPO, "citado en": SIN_TIPO, "autor de": "impulsa",
     "destinado a": SIN_TIPO, "sanciona con": SIN_TIPO, "demandó a": SIN_TIPO,
 }
 assert set(_TRADUCCION) == set(PREDICADOS_ANTERIORES)

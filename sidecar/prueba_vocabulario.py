@@ -6,7 +6,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from vocabulario import FAMILIAS, PREDICADOS, PREDICADOS_ANTERIORES, traducir_anterior  # noqa: E402
+from vocabulario import FAMILIAS, PREDICADOS, PREDICADOS_ANTERIORES, SIN_TIPO, traducir_anterior  # noqa: E402
 
 ESPERADOS = [
     "cónyuge de", "hijo de", "hermano de", "familiar de",
@@ -51,8 +51,12 @@ def main():
     assert traducir_anterior("investigado por", "persona", "ley") == ("vínculo sin tipo", False)
     assert traducir_anterior("ubicado en", "persona", "lugar") == ("ubicado en", False)
     assert traducir_anterior("ubicado en", "monto", "lugar") == ("vínculo sin tipo", False)
-    for viejo in ("se reunió con", "citado en", "autor de", "destinado a", "sanciona con", "demandó a"):
+    for viejo in ("se reunió con", "citado en", "destinado a", "sanciona con", "demandó a"):
         assert traducir_anterior(viejo, "persona", "organizacion") == ("vínculo sin tipo", False), viejo
+    # autor de una ley es un acto legislativo: se traduce a impulsa; sobre
+    # cualquier otro tipo (libro, atentado, etc.) cae a vínculo sin tipo
+    assert traducir_anterior("autor de", "persona", "ley") == ("impulsa", False)
+    assert traducir_anterior("autor de", "persona", "organizacion") == (SIN_TIPO, False)
     print("vocabulario nuevo: ok")
 
 
