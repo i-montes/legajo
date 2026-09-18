@@ -408,8 +408,9 @@ const P: &str = "persona";
 const O: &str = "organizacion";
 const C: &str = "cargo";
 const L: &str = "lugar";
-// «ley», «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin
-// uso en la tabla, sus siglas (N, M, B) se quitaron para no dejar código muerto.
+const N: &str = "ley";
+// «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin uso en
+// la tabla, sus siglas (M, B) se quitaron para no dejar código muerto.
 
 /// Tiene que coincidir con `PREDICADOS` en `src/contenido/tipos.ts`, que es lo
 /// que ve la persona al relacionar dos marcas a mano, y con
@@ -441,8 +442,8 @@ pub const PREDICADOS: &[Predicado] = &[
     Predicado { etiqueta: "contrató a",       familia: "empresa",   desde: &[O, P],   hasta: &[O, P],         simetrico: false },
     Predicado { etiqueta: "financia a",       familia: "empresa",   desde: &[P, O],   hasta: &[P, O],         simetrico: false },
     // Política
-    Predicado { etiqueta: "apoya a",          familia: "politica",  desde: &[P, O],   hasta: &[P, O, C],      simetrico: false },
-    Predicado { etiqueta: "se opone a",       familia: "politica",  desde: &[P, O],   hasta: &[P, O],         simetrico: false },
+    Predicado { etiqueta: "apoya a",          familia: "politica",  desde: &[P, O],   hasta: &[P, O, C, N],   simetrico: false },
+    Predicado { etiqueta: "se opone a",       familia: "politica",  desde: &[P, O],   hasta: &[P, O, N],      simetrico: false },
     // Justicia
     Predicado { etiqueta: "investigado por",  familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
     Predicado { etiqueta: "acusado por",      familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
