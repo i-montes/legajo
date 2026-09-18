@@ -409,7 +409,7 @@ const O: &str = "organizacion";
 const C: &str = "cargo";
 const L: &str = "lugar";
 const N: &str = "ley";
-// «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin uso en
+// «monto» y «obra» no admiten ninguno de los 26 predicados finos; sin uso en
 // la tabla, sus siglas (M, B) se quitaron para no dejar código muerto.
 
 /// Tiene que coincidir con `PREDICADOS` en `src/contenido/tipos.ts`, que es lo
@@ -444,6 +444,7 @@ pub const PREDICADOS: &[Predicado] = &[
     // Política
     Predicado { etiqueta: "apoya a",          familia: "politica",  desde: &[P, O],   hasta: &[P, O, C, N],   simetrico: false },
     Predicado { etiqueta: "se opone a",       familia: "politica",  desde: &[P, O],   hasta: &[P, O, N],      simetrico: false },
+    Predicado { etiqueta: "impulsa",          familia: "politica",  desde: &[P, O],   hasta: &[N],            simetrico: false },
     // Justicia
     Predicado { etiqueta: "investigado por",  familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
     Predicado { etiqueta: "acusado por",      familia: "judicial",  desde: &[P, O],   hasta: &[O],            simetrico: false },
@@ -803,7 +804,7 @@ mod tests {
             .filter_map(|r| r.split_once('"'))
             .map(|(n, _)| n.to_string())
             .collect();
-        assert_eq!(en_py.len(), 25, "esperaba las 25 tuplas de PREDICADOS en vocabulario.py");
+        assert_eq!(en_py.len(), 26, "esperaba las 26 tuplas de PREDICADOS en vocabulario.py");
         assert_eq!(predicados_modelo(), en_py, "rust y vocabulario.py se separaron");
     }
 

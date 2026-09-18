@@ -12,7 +12,7 @@ ESPERADOS = [
     "cónyuge de", "hijo de", "hermano de", "familiar de",
     "ocupa el cargo", "ocupó el cargo", "aspira al cargo", "nombró a", "sucedió a", "trabaja en", "dirige", "miembro de",
     "fundó", "propietario de", "socio de", "parte de", "contrató a", "financia a",
-    "apoya a", "se opone a",
+    "apoya a", "se opone a", "impulsa",
     "investigado por", "acusado por", "condenado por",
     "ubicado en",
     "vínculo sin tipo",

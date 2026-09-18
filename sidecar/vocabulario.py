@@ -39,7 +39,7 @@ P, O, L, C, N, B, M = "persona", "organizacion", "lugar", "cargo", "ley", "obra"
 TODOS = [P, O, L, C, N, B, M]
 
 # (etiqueta, familia, desde, hasta, simetrico). `desde`/`hasta` vacíos = cualquier tipo.
-# Son las 25 clases finas de enrel (docs/superpowers/specs/2026-09-16-enrel-diseno.md §3.2),
+# Son las 26 clases finas de enrel (docs/superpowers/specs/2026-09-16-enrel-diseno.md §3.2),
 # escritas como predicados para que la capa de revisión no necesite atributos.
 PREDICADOS = [
     # familia
@@ -79,6 +79,10 @@ PREDICADOS = [
     ("apoya a",           "politica",  [P, O],    [P, O, C, N], False),
     # oposición o crítica explícita, también a una ley o proyecto
     ("se opone a",        "politica",  [P, O],    [P, O, N],    False),
+    # acto legislativo sobre una norma: la radica, la redacta, es su ponente,
+    # la saca adelante, la sanciona. Gana sobre «apoya a» cuando hay acto, no
+    # solo postura declarada; hundirla o archivarla es «se opone a».
+    ("impulsa",           "politica",  [P, O],    [N],          False),
     # justicia
     ("investigado por",   "judicial",  [P, O],    [O],          False),
     ("acusado por",       "judicial",  [P, O],    [O],          False),
@@ -89,7 +93,7 @@ PREDICADOS = [
     # reserva
     ("vínculo sin tipo",  "otro",      [],        [],           True),
 ]
-assert len(PREDICADOS) == 25
+assert len(PREDICADOS) == 26
 
 FAMILIAS = {
     "familiar": "Familia",
