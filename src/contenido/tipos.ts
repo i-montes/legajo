@@ -56,9 +56,10 @@ const P = "persona";
 const O = "organizacion";
 const C = "cargo";
 const L = "lugar";
-// «ley», «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin
-// uso en la tabla, sus siglas (N, M, B) se quitaron para que tsc no las marque
-// como muertas.
+const N = "ley";
+// «monto» y «obra» no admiten ninguno de los 25 predicados finos; sin uso en
+// la tabla, sus siglas (M, B) se quitaron para que tsc no las marque como
+// muertas.
 
 /** Las familias, en el orden del menú. Coincide con `FAMILIAS` en
  *  `sidecar/vocabulario.py`. */
@@ -88,8 +89,8 @@ const NOTAS: Record<string, string> = {
   "parte de": "Una organización dentro de otra: filial, dependencia, adscrita. Nunca una persona.",
   "contrató a": "Contratación pública o privada afirmada en el texto.",
   "financia a": "Financió, donó o aportó. Solo si el texto lo afirma.",
-  "apoya a": "Respaldo o alianza explícita. Solo si el texto lo afirma, no si tú lo sabes.",
-  "se opone a": "Oposición o crítica explícita. Solo si el texto lo afirma.",
+  "apoya a": "Respaldo o alianza explícita, también a una ley o proyecto: quien lo radica, lo impulsa o vota a favor. Solo si el texto lo afirma, no si tú lo sabes.",
+  "se opone a": "Oposición o crítica explícita, también a una ley o proyecto: quien la critica, vota en contra o la hunde. Solo si el texto lo afirma.",
   "investigado por": "La organización que investiga: Fiscalía, Procuraduría, Contraloría, Corte.",
   "acusado por": "La organización que imputa o acusa.",
   "condenado por": "La organización que condena.",
@@ -125,8 +126,8 @@ const TABLA: Omit<Predicado, "nota">[] = [
   { etiqueta: "contrató a",       familia: "empresa",   desde: [O, P],    hasta: [O, P], },
   { etiqueta: "financia a",       familia: "empresa",   desde: [P, O],    hasta: [P, O], },
   // Política
-  { etiqueta: "apoya a",          familia: "politica",  desde: [P, O],    hasta: [P, O, C], },
-  { etiqueta: "se opone a",       familia: "politica",  desde: [P, O],    hasta: [P, O], },
+  { etiqueta: "apoya a",          familia: "politica",  desde: [P, O],    hasta: [P, O, C, N], },
+  { etiqueta: "se opone a",       familia: "politica",  desde: [P, O],    hasta: [P, O, N], },
   // Justicia
   { etiqueta: "investigado por",  familia: "judicial",  desde: [P, O],    hasta: [O], },
   { etiqueta: "acusado por",      familia: "judicial",  desde: [P, O],    hasta: [O], },

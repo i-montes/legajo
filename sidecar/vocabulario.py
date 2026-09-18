@@ -75,10 +75,10 @@ PREDICADOS = [
     # incluye donaciones
     ("financia a",        "empresa",   [P, O],    [P, O],       False),
     # política
-    # respaldo o alianza explícita
-    ("apoya a",           "politica",  [P, O],    [P, O, C],    False),
-    # oposición o crítica explícita
-    ("se opone a",        "politica",  [P, O],    [P, O],       False),
+    # respaldo o alianza explícita, también a una ley o proyecto
+    ("apoya a",           "politica",  [P, O],    [P, O, C, N], False),
+    # oposición o crítica explícita, también a una ley o proyecto
+    ("se opone a",        "politica",  [P, O],    [P, O, N],    False),
     # justicia
     ("investigado por",   "judicial",  [P, O],    [O],          False),
     ("acusado por",       "judicial",  [P, O],    [O],          False),
@@ -143,7 +143,7 @@ _TRADUCCION = {
     "aliado de": "apoya a",
     "apoyó a": "apoya a",
     "opositor de": "se opone a",
-    "criticó a": lambda ta, tb: "se opone a" if tb in (P, O) else SIN_TIPO,
+    "criticó a": "se opone a",
     "investigado por": lambda ta, tb: "investigado por" if tb == O else SIN_TIPO,
     "acusado de": lambda ta, tb: "acusado por" if tb == O else SIN_TIPO,
     "condenado por": lambda ta, tb: "condenado por" if tb == O else SIN_TIPO,
