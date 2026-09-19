@@ -446,7 +446,7 @@ describe("predicados", () => {
   });
 
   it("un monto ya no tiene predicados tipados: solo queda la reserva", () => {
-    // Las 26 clases finas no incluyen ningún predicado con «monto» en sus
+    // Las 27 clases finas no incluyen ningún predicado con «monto» en sus
     // extremos; lo único que encaja siempre es «vínculo sin tipo».
     const e = predicadosPara("monto", "organizacion").map((p) => p.etiqueta);
     expect(e).toEqual(["vínculo sin tipo"]);
@@ -479,14 +479,14 @@ describe("predicados", () => {
   });
 
   it("sugerirInversa no ofrece nada cuando tampoco hay nada tipado al revés", () => {
-    // Ninguno de los 26 predicados admite «obra» ni «monto»: ni derecho ni
+    // Ninguno de los 27 predicados admite «obra» ni «monto»: ni derecho ni
     // al revés hay algo tipado que unir.
     expect(sugerirInversa("obra", "monto")).toEqual([]);
     expect(sugerirInversa("monto", "obra")).toEqual([]);
   });
 
   it("dentro de cada familia, la lista filtrada cabe en las teclas 1—9", () => {
-    /* Con 26 predicados, entre dos personas encajan más de nueve; el menú
+    /* Con 27 predicados, entre dos personas encajan más de nueve; el menú
        pide entonces la familia primero. Lo que tiene que caber en 1—9 es cada
        familia por separado, y las familias mismas. */
     expect(FAMILIAS.length).toBeLessThanOrEqual(9);
@@ -499,9 +499,16 @@ describe("predicados", () => {
     }
   });
 
-  it("los 26 predicados tienen familia conocida y la familia se conoce", () => {
-    expect(PREDICADOS.length).toBe(26);
+  it("los 27 predicados tienen familia conocida y la familia se conoce", () => {
+    expect(PREDICADOS.length).toBe(27);
     for (const p of PREDICADOS) expect(FAMILIAS.map((f) => f.k)).toContain(p.familia);
+  });
+
+  it("persona → organizacion ofrece «trabaja en», «miembro de» y «estudió en»", () => {
+    expect(predicadosPara("persona", "organizacion").map((p) => p.etiqueta)).toEqual([
+      "trabaja en", "dirige", "miembro de", "estudió en", "fundó", "propietario de", "contrató a",
+      "financia a", "apoya a", "se opone a", "investigado por", "acusado por", "condenado por", "vínculo sin tipo",
+    ]);
   });
 
   it("el parentesco concreto y el genérico conviven", () => {

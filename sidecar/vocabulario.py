@@ -1,4 +1,4 @@
-"""El esquema que se entrena: siete tipos de entidad y 26 predicados.
+"""El esquema que se entrena: siete tipos de entidad y 27 predicados.
 
 Es la fuente única para las herramientas de Python del plan de entrenamiento
 (docs/plan-entrenamiento.md §3). La app lleva la misma tabla en
@@ -39,7 +39,7 @@ P, O, L, C, N, B, M = "persona", "organizacion", "lugar", "cargo", "ley", "obra"
 TODOS = [P, O, L, C, N, B, M]
 
 # (etiqueta, familia, desde, hasta, simetrico). `desde`/`hasta` vacíos = cualquier tipo.
-# Son las 26 clases finas de enrel (docs/superpowers/specs/2026-09-16-enrel-diseno.md §3.2),
+# Son las 27 clases finas de enrel (docs/superpowers/specs/2026-09-16-enrel-diseno.md §3.2),
 # escritas como predicados para que la capa de revisión no necesite atributos.
 PREDICADOS = [
     # familia
@@ -63,6 +63,9 @@ PREDICADOS = [
     ("dirige",            "laboral",   [P],       [O],          False),
     # militancia, junta, comisión, colectivo
     ("miembro de",        "laboral",   [P],       [O],          False),
+    # pregrado, posgrado, maestría, doctorado, o el título obtenido allí;
+    # dictar clase, ser decano o rector es «trabaja en», no esto
+    ("estudió en",        "laboral",   [P],       [O],          False),
     # empresa y dinero
     ("fundó",             "empresa",   [P, O],    [O],          False),
     # dueño, accionista, socio de una empresa
@@ -93,7 +96,7 @@ PREDICADOS = [
     # reserva
     ("vínculo sin tipo",  "otro",      [],        [],           True),
 ]
-assert len(PREDICADOS) == 26
+assert len(PREDICADOS) == 27
 
 FAMILIAS = {
     "familiar": "Familia",
