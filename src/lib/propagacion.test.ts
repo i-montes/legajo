@@ -164,6 +164,92 @@ describe("aplicarLexico", () => {
   });
 });
 
+describe("título anotable (pi = -1)", () => {
+  /* Medido sobre el oro: el 75 % de los 125 artículos tiene en el título una
+     entidad ya marcada en el cuerpo y nunca ofrecida en el título. Para un
+     clasificador de tokens eso enseña «Petro no es persona» cuarenta
+     caracteres antes de enseñar lo contrario. Estas pruebas cubren que la
+     propagación llegue también ahí, y que hacerlo no mueva ni un índice del
+     cuerpo: las anotaciones ya guardadas por el usuario apuntan a `pi` 0..n
+     del cuerpo, y esos números no pueden cambiar. */
+
+  it("ocurrencias encuentra el título cuando se pasa, con pi = -1", () => {
+    const tramos = ocurrencias(["Petro habló ayer."], "Petro", "Detector: Petro no llamó a la calma");
+    const delTitulo = tramos.filter((t) => t.pi === -1);
+    expect(delTitulo).toHaveLength(1);
+    expect(delTitulo[0]).toMatchObject({ ini: 10, fin: 15 });
+  });
+
+  it("sin título no busca nada ahí: mismo comportamiento que antes de esta función existir", () => {
+    expect(ocurrencias(["Petro habló ayer."], "Petro")).toHaveLength(1);
+    expect(ocurrencias(["Petro habló ayer."], "Petro", null)).toHaveLength(1);
+    expect(ocurrencias(["Petro habló ayer."], "Petro", "")).toHaveLength(1);
+  });
+
+  it("respeta límites de palabra en el título: «Cali» no casa dentro de «California»", () => {
+    const tramos = ocurrencias(["Un viaje."], "Cali", "Inversión llega desde California");
+    expect(tramos.filter((t) => t.pi === -1)).toHaveLength(0);
+  });
+
+  it("buscar en el título no desplaza los índices del cuerpo", () => {
+    const parrafos = ["Primero.", "Segundo con Petro."];
+    const tramos = ocurrencias(parrafos, "Petro", "Petro y su gabinete");
+    const delCuerpo = tramos.filter((t) => t.pi !== -1);
+    expect(delCuerpo).toEqual([{ pi: 1, ini: 12, fin: 17 }]);
+  });
+
+  it("propagarEnDocumento marca también el título, como auto = true", () => {
+    const parrafos = ["Petro llegó a la reunión."];
+    const nuevas = propagarEnDocumento(parrafos, "Petro", "persona", [], "Petro no llamó a la calma");
+    const delTitulo = nuevas.find((n) => n.pi === -1);
+    expect(delTitulo).toBeDefined();
+    expect(delTitulo?.auto).toBe(true);
+    expect(delTitulo?.texto).toBe("Petro");
+  });
+
+  it("propagarEnDocumento sin título no toca el título ni falla", () => {
+    const nuevas = propagarEnDocumento(["Petro llegó."], "Petro", "persona", []);
+    expect(nuevas.every((n) => n.pi !== -1)).toBe(true);
+  });
+
+  it("propagar al título no cambia los pi del cuerpo", () => {
+    const parrafos = ["Uno.", "Dos con Petro.", "Tres."];
+    const ya: Mencion[] = [{ mid: "x", pi: 1, ini: 8, fin: 13, texto: "Petro", tipo: "persona", auto: false }];
+    const nuevas = propagarEnDocumento(parrafos, "Petro", "persona", ya, "Petro en el título");
+    // La única marca nueva en el cuerpo, si la hay, sigue apuntando a pi = 1;
+    // ninguna aparece en 0, 2 ni en ningún otro índice que no sea -1 o 1.
+    for (const n of nuevas) {
+      expect([1, -1]).toContain(n.pi);
+    }
+  });
+
+  it("una entidad que no se propaga (monto) tampoco se propone en el título", () => {
+    const nuevas = propagarEnDocumento(["Costó 50 mil millones."], "50 mil millones", "monto", [], "50 mil millones en obras");
+    expect(nuevas).toHaveLength(0);
+  });
+
+  it("aplicarLexico también prende el título", () => {
+    const ms = aplicarLexico(["Un artículo sobre política."], [lex("Petro", "persona")], "Petro insiste en el punto");
+    const delTitulo = ms.find((m) => m.pi === -1);
+    expect(delTitulo).toBeDefined();
+    expect(delTitulo?.auto).toBe(true);
+    expect(delTitulo?.texto).toBe("Petro");
+  });
+
+  it("aplicarLexico sin título no revienta ni marca nada con pi = -1", () => {
+    const ms = aplicarLexico(["Petro habló."], [lex("Petro", "persona")]);
+    expect(ms.every((m) => m.pi !== -1)).toBe(true);
+    expect(ms).toHaveLength(1);
+    expect(ms[0].pi).toBe(0);
+  });
+
+  it("el orden final antepone el título (pi = -1) a los párrafos del cuerpo", () => {
+    const ms = aplicarLexico(["Petro llegó."], [lex("Petro", "persona")], "Petro no llamó a la calma");
+    expect(ms[0].pi).toBe(-1);
+    expect(ms[ms.length - 1].pi).toBe(0);
+  });
+});
+
 describe("alias", () => {
   const m = (mid: string, texto: string, tipo = "persona", grupo?: string): Mencion =>
     ({ mid, pi: 0, ini: 0, fin: texto.length, texto, tipo, auto: false, grupo });

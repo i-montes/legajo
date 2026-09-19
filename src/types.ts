@@ -182,6 +182,9 @@ export interface FilaAnotable {
 
 export interface Mencion {
   mid: string;
+  /** Índice del párrafo dentro del cuerpo, empezando en 0. `-1` es el título:
+   *  un párrafo anotable más (ver core/src/contenido.rs), fuera del cuerpo
+   *  para no desplazar los índices 0..n de las anotaciones ya guardadas. */
   pi: number;
   ini: number;
   fin: number;

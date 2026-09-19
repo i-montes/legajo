@@ -137,7 +137,10 @@ def oro_de_legajo(db, wps_ap):
                 pi = mid_a_idx[am][0]
                 rel_por_pi.setdefault(pi, []).append({"a": mid_a_idx[am][1], "b": mid_a_idx[bm][1], "predicado": pred, "cuando": cuando})
         for pi, ents in por_pi.items():
-            if pi < len(ps):
+            # pi = -1 es el título (ver core/src/contenido.rs): no es un
+            # párrafo del cuerpo y `ps[-1]` lo confundiría con el último.
+            # El extractor entrena por párrafo; el título no entra todavía.
+            if pi >= 0 and pi < len(ps):
                 filas.append({"wp_id": wp, "pi": pi, "texto": ps[pi], "entidades": [e for e in ents if e["tipo"]],
                               "relaciones": rel_por_pi.get(pi, []), "fuente": "oro", "conjunto": "apartado" if wp in wps_ap else "train"})
     return filas

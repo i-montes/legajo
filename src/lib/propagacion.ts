@@ -59,31 +59,45 @@ export function plegar(s: string): string {
 
    Lo mismo con las tildes: en el archivo abundan «Monteria», «Bogota» o
    «Ivan», y son la misma entidad que las bien acentuadas. */
-export function ocurrencias(parrafos: string[], aguja: string): Tramo[] {
+function ocurrenciasEnTexto(pi: number, texto: string, patron: string): Tramo[] {
+  const out: Tramo[] = [];
+  const plano = plegar(texto);
+  // Si el plegado no conservó la longitud, las posiciones no serían fiables.
+  if (plano.length !== texto.length) return out;
+  let desde = 0;
+  for (;;) {
+    const i = plano.indexOf(patron, desde);
+    if (i < 0) break;
+    const fin = i + patron.length;
+    if (!esLetra(texto[i - 1]) && !esLetra(texto[fin])) out.push({ pi, ini: i, fin });
+    desde = i + patron.length;
+  }
+  return out;
+}
+
+/** El título es el párrafo `pi = -1` (ver core/src/contenido.rs): así las
+ *  anotaciones que ya existen sobre el cuerpo, con sus índices 0..n, no se
+ *  mueven ni uno cuando el título entra a anotarse. `titulo` es opcional y
+ *  por defecto no se busca en él, así que las llamadas que no lo pasan se
+ *  comportan exactamente como antes. */
+export function ocurrencias(parrafos: string[], aguja: string, titulo?: string | null): Tramo[] {
   const out: Tramo[] = [];
   if (aguja.trim().length < 2) return out;
   const patron = plegar(aguja);
-  parrafos.forEach((texto, pi) => {
-    const plano = plegar(texto);
-    // Si el plegado no conservó la longitud, las posiciones no serían fiables.
-    if (plano.length !== texto.length) return;
-    let desde = 0;
-    for (;;) {
-      const i = plano.indexOf(patron, desde);
-      if (i < 0) break;
-      const fin = i + patron.length;
-      if (!esLetra(texto[i - 1]) && !esLetra(texto[fin])) out.push({ pi, ini: i, fin });
-      desde = i + patron.length;
-    }
-  });
+  parrafos.forEach((texto, pi) => out.push(...ocurrenciasEnTexto(pi, texto, patron)));
+  if (titulo) out.push(...ocurrenciasEnTexto(-1, titulo, patron));
   return out;
 }
 
 /* El texto de una marca es siempre el del documento, no el del patrón.
    Si se buscó «Twitter» y en el párrafo dice «twitter», la marca tiene que
    guardar «twitter»: la evaluación compara cadenas contra lo que el modelo
-   devuelve, y ahí una diferencia de caja sería un fallo inventado. */
-const trozo = (parrafos: string[], t: Tramo) => parrafos[t.pi].slice(t.ini, t.fin);
+   devuelve, y ahí una diferencia de caja sería un fallo inventado.
+
+   `t.pi === -1` es el título: no vive en `parrafos`, e indexar `parrafos[-1]`
+   devolvería `undefined` en silencio en vez de fallar. */
+const trozo = (parrafos: string[], t: Tramo, titulo?: string | null) =>
+  t.pi === -1 ? (titulo ?? "").slice(t.ini, t.fin) : parrafos[t.pi].slice(t.ini, t.fin);
 
 export const solapa = (t: Tramo, ms: { pi: number; ini: number; fin: number }[]) =>
   ms.some((m) => m.pi === t.pi && t.ini < m.fin && t.fin > m.ini);
@@ -138,16 +152,23 @@ export function absorberSueltas(menciones: Mencion[]): Mencion[] {
   return cambio ? out : menciones;
 }
 
-/** Las demás apariciones de un texto recién marcado, sin pisar lo que ya hay. */
+/** Las demás apariciones de un texto recién marcado, sin pisar lo que ya hay.
+ *
+ *  `titulo` extiende la búsqueda al título del artículo (`pi = -1`): una
+ *  entidad marcada en el cuerpo se propone también ahí si aparece igual, con
+ *  límites de palabra. Es el mismo mecanismo que ya baja los minutos por
+ *  artículo, aplicado al único párrafo que hasta ahora quedaba fuera —y que
+ *  medido sobre el oro es donde vive el 75 % de las entidades que el título
+ *  repite sin marcar. */
 export function propagarEnDocumento(
-  parrafos: string[], texto: string, tipo: string, existentes: Mencion[]
+  parrafos: string[], texto: string, tipo: string, existentes: Mencion[], titulo?: string | null
 ): Mencion[] {
   if (!sePropaga(tipo)) return [];
   const acumulado = [...existentes];
   const nuevas: Mencion[] = [];
-  for (const t of ocurrencias(parrafos, texto)) {
+  for (const t of ocurrencias(parrafos, texto, titulo)) {
     if (solapa(t, acumulado)) continue;
-    const suyo = trozo(parrafos, t);
+    const suyo = trozo(parrafos, t, titulo);
     const m: Mencion = {
       mid: nuevoId(), pi: t.pi, ini: t.ini, fin: t.fin,
       texto: suyo, tipo, auto: true,
@@ -168,18 +189,18 @@ export function propagarEnDocumento(
  *  Las entradas ambiguas —el mismo texto con tipos distintos en el archivo— se
  *  dejan fuera: proponer el tipo equivocado cuesta más de corregir que de
  *  marcar desde cero, y encima ancla a quien anota. */
-export function aplicarLexico(parrafos: string[], lexico: EntradaLexico[]): Mencion[] {
+export function aplicarLexico(parrafos: string[], lexico: EntradaLexico[], titulo?: string | null): Mencion[] {
   const out: Mencion[] = [];
   const utiles = lexico
     .filter((e) => !e.ambigua && sePropaga(e.tipo) && e.texto.trim().length >= 3)
     .sort((a, b) => b.texto.length - a.texto.length);
 
   for (const e of utiles) {
-    for (const t of ocurrencias(parrafos, e.texto)) {
+    for (const t of ocurrencias(parrafos, e.texto, titulo)) {
       if (solapa(t, out)) continue;
       out.push({
         mid: nuevoId(), pi: t.pi, ini: t.ini, fin: t.fin,
-        texto: trozo(parrafos, t), tipo: e.tipo, auto: true,
+        texto: trozo(parrafos, t, titulo), tipo: e.tipo, auto: true,
       });
     }
   }

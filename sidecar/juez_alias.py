@@ -93,10 +93,18 @@ def contextos(con, lote, nombre, maximo):
         fila = con.execute("SELECT text_plain FROM articles WHERE wp_id=?", (wp,)).fetchone()
         if not fila or not fila[0]:
             continue
-        parrafos = [p for p in fila[0].split("\n\n") if p.strip()]
-        if pi >= len(parrafos):
-            continue
-        p = parrafos[pi]
+        # pi = -1 es el título (ver core/src/contenido.rs), no un párrafo del
+        # cuerpo: `parrafos[-1]` lo confundiría en silencio con el último.
+        if pi == -1:
+            titulo = con.execute("SELECT title FROM census WHERE wp_id=?", (wp,)).fetchone()
+            p = titulo[0] if titulo and titulo[0] else None
+            if not p:
+                continue
+        else:
+            parrafos = [x for x in fila[0].split("\n\n") if x.strip()]
+            if pi < 0 or pi >= len(parrafos):
+                continue
+            p = parrafos[pi]
         i = p.find(nombre)
         if i < 0:
             i = 0
