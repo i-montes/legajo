@@ -173,6 +173,20 @@ pub struct SesionRecuperada {
     pub sitio: Option<Discovery>,
 }
 
+pub(crate) async fn guardar_sesion_impl(
+    db: Arc<Db>,
+    connection_id: Option<i64>,
+    paso: String,
+    progreso: i64,
+    taxonomia: Option<String>,
+    lote_id: Option<i64>,
+) -> Result<()> {
+    en_hilo(move || {
+        db.guardar_sesion(connection_id, &paso, progreso, taxonomia.as_deref(), lote_id)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn guardar_sesion(
     state: State<'_, AppState>,
@@ -182,16 +196,10 @@ pub async fn guardar_sesion(
     taxonomia: Option<String>,
     lote_id: Option<i64>,
 ) -> Result<()> {
-    let db = state.db.clone();
-    en_hilo(move || {
-        db.guardar_sesion(connection_id, &paso, progreso, taxonomia.as_deref(), lote_id)
-    })
-    .await
+    guardar_sesion_impl(state.db.clone(), connection_id, paso, progreso, taxonomia, lote_id).await
 }
 
-#[tauri::command]
-pub async fn cargar_sesion(state: State<'_, AppState>) -> Result<Option<SesionRecuperada>> {
-    let db = state.db.clone();
+pub(crate) async fn cargar_sesion_impl(db: Arc<Db>) -> Result<Option<SesionRecuperada>> {
     let s = en_hilo(move || db.cargar_sesion()).await?;
     Ok(s.map(|s| {
         // Un descubrimiento ilegible —por un cambio de formato entre versiones—
@@ -213,16 +221,24 @@ pub async fn cargar_sesion(state: State<'_, AppState>) -> Result<Option<SesionRe
 }
 
 #[tauri::command]
+pub async fn cargar_sesion(state: State<'_, AppState>) -> Result<Option<SesionRecuperada>> {
+    cargar_sesion_impl(state.db.clone()).await
+}
+
+#[tauri::command]
 pub async fn olvidar_sesion(state: State<'_, AppState>) -> Result<()> {
     let db = state.db.clone();
     en_hilo(move || db.olvidar_sesion()).await
 }
 
 /// Índice del primer artículo sin cerrar dentro de la muestra.
+pub(crate) async fn reanudar_anotacion_impl(db: Arc<Db>, lote_id: i64) -> Result<Option<i64>> {
+    en_hilo(move || db.siguiente_sin_cerrar(lote_id)).await
+}
+
 #[tauri::command]
 pub async fn reanudar_anotacion(state: State<'_, AppState>, lote_id: i64) -> Result<Option<i64>> {
-    let db = state.db.clone();
-    en_hilo(move || db.siguiente_sin_cerrar(lote_id)).await
+    reanudar_anotacion_impl(state.db.clone(), lote_id).await
 }
 
 // ── Pertenencia al sitio ─────────────────────────────────────────────────
@@ -600,13 +616,31 @@ pub async fn perfil_archivo(
 
 // ── Los artículos del lote ───────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn muestra(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<FilaAnotable>> {
-    let db = state.db.clone();
+/// Cuerpo real de `muestra`, sin el `State` de Tauri.
+///
+/// El modo servidor lo llama igual que la ventana: ninguno de estos comandos
+/// de revisión toca el `AppHandle`, así que desacoplarlos es solo mover el
+/// `en_hilo(...)` a una función que reciba el `Arc<Db>` en vez del `State`.
+pub(crate) async fn muestra_impl(db: Arc<Db>, lote_id: i64) -> Result<Vec<FilaAnotable>> {
     en_hilo(move || db.muestra(lote_id)).await
 }
 
+#[tauri::command]
+pub async fn muestra(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<FilaAnotable>> {
+    muestra_impl(state.db.clone(), lote_id).await
+}
+
 // ── Anotación ────────────────────────────────────────────────────────────
+
+pub(crate) async fn guardar_anotacion_impl(
+    db: Arc<Db>,
+    lote_id: i64,
+    wp_id: i64,
+    menciones: Vec<Mencion>,
+    relaciones: Vec<RelacionFila>,
+) -> Result<()> {
+    en_hilo(move || db.guardar_anotacion(lote_id, wp_id, &menciones, &relaciones)).await
+}
 
 #[tauri::command]
 pub async fn guardar_anotacion(
@@ -616,8 +650,7 @@ pub async fn guardar_anotacion(
     menciones: Vec<Mencion>,
     relaciones: Vec<RelacionFila>,
 ) -> Result<()> {
-    let db = state.db.clone();
-    en_hilo(move || db.guardar_anotacion(lote_id, wp_id, &menciones, &relaciones)).await
+    guardar_anotacion_impl(state.db.clone(), lote_id, wp_id, menciones, relaciones).await
 }
 
 /// Lo que la pantalla de revisión tiene que pintar para un artículo.
@@ -626,13 +659,11 @@ pub async fn guardar_anotacion(
 /// sirve lo que propuso el modelo, ya filtrado por la calibración vigente: es la
 /// diferencia entre corregir y empezar de cero, y es la razón de que revisar
 /// unas decenas de artículos sea un rato y no una semana.
-#[tauri::command]
-pub async fn anotacion(
-    state: State<'_, AppState>,
+pub(crate) async fn anotacion_impl(
+    db: Arc<Db>,
     lote_id: i64,
     wp_id: i64,
 ) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
-    let db = state.db.clone();
     en_hilo(move || {
         let (menciones, relaciones) = db.anotacion(lote_id, wp_id)?;
         if menciones.is_empty() && relaciones.is_empty() {
@@ -643,12 +674,27 @@ pub async fn anotacion(
     .await
 }
 
+#[tauri::command]
+pub async fn anotacion(
+    state: State<'_, AppState>,
+    lote_id: i64,
+    wp_id: i64,
+) -> Result<(Vec<Mencion>, Vec<RelacionFila>)> {
+    anotacion_impl(state.db.clone(), lote_id, wp_id).await
+}
+
 /// Cierra un artículo: guarda el tiempo real que costó anotarlo.
 ///
 /// Es la medida que justifica la fase entera. Se guarda por artículo y no en
 /// agregado para poder mirar después la mediana y la curva de aprendizaje por
 /// separado: proyectar desde los primeros artículos sobreestima el coste,
 /// a veces al doble.
+pub(crate) async fn cerrar_articulo_impl(
+    db: Arc<Db>, lote_id: i64, wp_id: i64, segundos: i64, menciones: i64,
+) -> Result<()> {
+    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, true)).await
+}
+
 #[tauri::command]
 pub async fn cerrar_articulo(
     state: State<'_, AppState>,
@@ -657,14 +703,19 @@ pub async fn cerrar_articulo(
     segundos: i64,
     menciones: i64,
 ) -> Result<()> {
-    let db = state.db.clone();
-    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, true)).await
+    cerrar_articulo_impl(state.db.clone(), lote_id, wp_id, segundos, menciones).await
 }
 
 /// Guardado periódico del cronómetro mientras se anota.
 ///
 /// No marca el artículo como terminado: solo deja constancia de los minutos ya
 /// invertidos, para que cerrar la ventana a mitad no los borre.
+pub(crate) async fn apuntar_tiempo_impl(
+    db: Arc<Db>, lote_id: i64, wp_id: i64, segundos: i64, menciones: i64,
+) -> Result<()> {
+    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, false)).await
+}
+
 #[tauri::command]
 pub async fn apuntar_tiempo(
     state: State<'_, AppState>,
@@ -673,27 +724,41 @@ pub async fn apuntar_tiempo(
     segundos: i64,
     menciones: i64,
 ) -> Result<()> {
-    let db = state.db.clone();
-    en_hilo(move || db.registrar_tiempo(lote_id, wp_id, segundos, menciones, false)).await
+    apuntar_tiempo_impl(state.db.clone(), lote_id, wp_id, segundos, menciones).await
+}
+
+pub(crate) async fn tiempo_articulo_impl(db: Arc<Db>, lote_id: i64, wp_id: i64) -> Result<i64> {
+    en_hilo(move || db.tiempo_de(lote_id, wp_id)).await
 }
 
 #[tauri::command]
 pub async fn tiempo_articulo(state: State<'_, AppState>, lote_id: i64, wp_id: i64) -> Result<i64> {
-    let db = state.db.clone();
-    en_hilo(move || db.tiempo_de(lote_id, wp_id)).await
+    tiempo_articulo_impl(state.db.clone(), lote_id, wp_id).await
 }
 
 /// Lo anotado hasta ahora, para pre-marcar los artículos siguientes.
-#[tauri::command]
-pub async fn lexico(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<EntradaLexico>> {
-    let db = state.db.clone();
+pub(crate) async fn lexico_impl(db: Arc<Db>, lote_id: i64) -> Result<Vec<EntradaLexico>> {
     en_hilo(move || db.lexico(lote_id)).await
 }
 
 #[tauri::command]
-pub async fn descartar_tiempo(state: State<'_, AppState>, lote_id: i64, wp_id: i64) -> Result<()> {
-    let db = state.db.clone();
+pub async fn lexico(state: State<'_, AppState>, lote_id: i64) -> Result<Vec<EntradaLexico>> {
+    lexico_impl(state.db.clone(), lote_id).await
+}
+
+pub(crate) async fn descartar_tiempo_impl(db: Arc<Db>, lote_id: i64, wp_id: i64) -> Result<()> {
     en_hilo(move || db.descartar_tiempo(lote_id, wp_id)).await
+}
+
+#[tauri::command]
+pub async fn descartar_tiempo(state: State<'_, AppState>, lote_id: i64, wp_id: i64) -> Result<()> {
+    descartar_tiempo_impl(state.db.clone(), lote_id, wp_id).await
+}
+
+pub(crate) async fn tiempos_dudosos_impl(
+    db: Arc<Db>, lote_id: i64,
+) -> Result<Vec<(i64, i64, i64, String)>> {
+    en_hilo(move || db.tiempos_dudosos(lote_id)).await
 }
 
 #[tauri::command]
@@ -701,14 +766,16 @@ pub async fn tiempos_dudosos(
     state: State<'_, AppState>,
     lote_id: i64,
 ) -> Result<Vec<(i64, i64, i64, String)>> {
-    let db = state.db.clone();
-    en_hilo(move || db.tiempos_dudosos(lote_id)).await
+    tiempos_dudosos_impl(state.db.clone(), lote_id).await
+}
+
+pub(crate) async fn avance_anotacion_impl(db: Arc<Db>, lote_id: i64) -> Result<(i64, i64)> {
+    en_hilo(move || db.avance_anotacion(lote_id)).await
 }
 
 #[tauri::command]
 pub async fn avance_anotacion(state: State<'_, AppState>, lote_id: i64) -> Result<(i64, i64)> {
-    let db = state.db.clone();
-    en_hilo(move || db.avance_anotacion(lote_id)).await
+    avance_anotacion_impl(state.db.clone(), lote_id).await
 }
 
 // ── Alcance ──────────────────────────────────────────────────────────────
@@ -775,10 +842,13 @@ pub async fn crear_lote(
     .await
 }
 
+pub(crate) async fn lotes_impl(db: Arc<Db>, connection_id: i64) -> Result<Vec<LoteRow>> {
+    en_hilo(move || db.lotes(connection_id)).await
+}
+
 #[tauri::command]
 pub async fn lotes(state: State<'_, AppState>, connection_id: i64) -> Result<Vec<LoteRow>> {
-    let db = state.db.clone();
-    en_hilo(move || db.lotes(connection_id)).await
+    lotes_impl(state.db.clone(), connection_id).await
 }
 
 /// El catálogo, con cada modelo marcado según esté ya en la máquina o no.
@@ -900,17 +970,20 @@ fn terminos_de_lote(db: &Db, lote_id: i64, elegidos: &[i64]) -> Result<Vec<i64>>
 }
 
 /// La cola de trabajo del paso 7: qué categorías tiene el lote y qué falta.
-#[tauri::command]
-pub async fn categorias_del_lote(
-    state: State<'_, AppState>, lote_id: i64,
-) -> Result<ColaCategorias> {
-    let db = state.db.clone();
+pub(crate) async fn categorias_del_lote_impl(db: Arc<Db>, lote_id: i64) -> Result<ColaCategorias> {
     en_hilo(move || {
         let categorias = db.categorias_del_lote(lote_id)?;
         let (sueltos, sueltos_hechos) = db.sueltos_del_lote(lote_id)?;
         Ok(ColaCategorias { categorias, sueltos, sueltos_hechos })
     })
     .await
+}
+
+#[tauri::command]
+pub async fn categorias_del_lote(
+    state: State<'_, AppState>, lote_id: i64,
+) -> Result<ColaCategorias> {
+    categorias_del_lote_impl(state.db.clone(), lote_id).await
 }
 
 #[derive(Serialize)]
@@ -1283,12 +1356,17 @@ pub async fn decidir_par(
 }
 
 /// Los artículos y párrafos de los que sale una relación del grafo.
+pub(crate) async fn grafo_evidencia_impl(
+    db: Arc<Db>, lote_id: i64, a: String, b: String, predicado: String,
+) -> Result<Vec<legajo_core::db::Evidencia>> {
+    en_hilo(move || db.grafo_evidencia(lote_id, &a, &b, &predicado, 12)).await
+}
+
 #[tauri::command]
 pub async fn grafo_evidencia(
     state: State<'_, AppState>, lote_id: i64, a: String, b: String, predicado: String,
 ) -> Result<Vec<legajo_core::db::Evidencia>> {
-    let db = state.db.clone();
-    en_hilo(move || db.grafo_evidencia(lote_id, &a, &b, &predicado, 12)).await
+    grafo_evidencia_impl(state.db.clone(), lote_id, a, b, predicado).await
 }
 
 #[tauri::command]

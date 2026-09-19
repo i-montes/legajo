@@ -280,6 +280,12 @@ impl Db {
         let conn = Sqlite::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Con el modo servidor puede haber dos escritores sobre el mismo
+        // archivo: esta ventana local y el HTTP atendiendo al Mac. WAL ya deja
+        // leer mientras se escribe, pero dos escrituras que se solapan sin
+        // esto fallan al instante con "database is locked" en vez de esperar
+        // su turno el tiempo razonable que tardan en desocuparse solas.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let db = Self { conn: Mutex::new(conn) };
         db.migrate()?;
         solo_para_su_dueno(path);
@@ -691,6 +697,16 @@ impl Db {
                 taxonomia      TEXT,
                 lote_id      INTEGER,
                 guardado_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            -- El token del modo servidor. Una sola fila, como la sesión: se
+            -- genera la primera vez que se pide y de ahí en adelante viaja con
+            -- la base, para que encender y apagar el servidor entre arranques
+            -- de la app no invalide lo que la persona ya copió a mano en el
+            -- Mac.
+            CREATE TABLE IF NOT EXISTS servidor_http (
+                id    INTEGER PRIMARY KEY CHECK (id = 1),
+                token TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS jobs (
@@ -2454,6 +2470,41 @@ impl Db {
         Ok(())
     }
 
+    // ── Servidor HTTP ──────────────────────────────────────────────────────
+
+    /// El token guardado, si el servidor ya se encendió alguna vez en esta base.
+    pub fn token_servidor(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let r = conn.query_row("SELECT token FROM servidor_http WHERE id = 1", [], |r| r.get(0));
+        match r {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Guarda el token. Se llama una sola vez, la primera vez que se enciende
+    /// el servidor en esta base; de ahí en adelante `token_servidor` lo
+    /// encuentra y no se vuelve a generar.
+    pub fn guardar_token_servidor(&self, token: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO servidor_http (id, token) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET token = excluded.token",
+            [token],
+        )?;
+        Ok(())
+    }
+
+    /// Cuántos lotes hay en total, de cualquier conexión. Lo pide `/api/salud`
+    /// para que el Mac pueda comprobar de un vistazo que está hablando con la
+    /// base correcta y no con una recién creada.
+    pub fn contar_lotes(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM lotes", [], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
     /// Primer artículo de la muestra que todavía no se ha cerrado.
     ///
     /// Reanudar en el índice cero obligaría a pasar de nuevo por todo lo ya
@@ -2587,6 +2638,7 @@ mod tests {
             "La Silla", "https://www.lasillavacia.com", "{}", "REST directo",
             Some("La Silla Vacia"), Some(84_343), r#"{"x":1}"#).unwrap();
         db.guardar_sesion(Some(conn_id), "perfil", 1, None, Some(1)).unwrap();
+        db.guardar_token_servidor("PRUE-BATO-KEN0-0000").unwrap();
 
         db.con(|c| {
             c.execute_batch(&format!("
@@ -2648,6 +2700,12 @@ mod tests {
 
         db.delete_connection(conn_id).unwrap();
 
+        // `servidor_http` no cuelga de `connections` como el resto —el token
+        // es de la máquina, no del sitio— pero como aquí solo hay un medio a
+        // la vez, olvidarlo es un reinicio de la base entera y no una
+        // cascada: `delete_connection` vacía todas las tablas cuando no
+        // queda ninguna conexión, y el token se genera de nuevo la próxima
+        // vez que se pida (ver `token_o_crear` en el modo servidor).
         for t in &todas {
             let n = cuenta(&db, t);
             assert_eq!(n, 0, "«{t}» conservó {n} filas del sitio olvidado");
