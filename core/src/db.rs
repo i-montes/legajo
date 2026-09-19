@@ -24,6 +24,9 @@ pub struct Sesion {
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct Mencion {
     pub mid: String,
+    /// Indice del parrafo del cuerpo, desde 0. `-1` es el titulo: un parrafo
+    /// anotable mas (ver contenido.rs) que vive fuera del cuerpo para no
+    /// desplazar los indices 0..n de las anotaciones que ya existen.
     pub pi: i64,
     pub ini: i64,
     pub fin: i64,
@@ -1783,12 +1786,21 @@ impl Db {
             if !(quiere(&fa, a) && quiere(&fb, b)) || !vistos.insert((wp, pi)) {
                 continue;
             }
-            let parrafo: Option<String> = conn.query_row(
-                "SELECT text_plain FROM articles WHERE connection_id = ?1 AND wp_id = ?2",
-                rusqlite::params![conn_id, wp], |r| r.get(0)).ok();
-            let parrafo = parrafo
-                .and_then(|t| t.split("\n\n").filter(|p| !p.trim().is_empty()).nth(pi as usize).map(str::to_string))
-                .unwrap_or_default();
+            // pi = -1 es el título (ver core/src/contenido.rs): no es un
+            // párrafo del cuerpo, y `pi as usize` lo envolvería en un índice
+            // enorme que `nth` simplemente no encuentra, devolviendo un
+            // párrafo vacío en vez de decir la verdad, que es que la relación
+            // vive en el titular.
+            let parrafo = if pi == -1 {
+                titulo.clone().unwrap_or_default()
+            } else {
+                let cuerpo: Option<String> = conn.query_row(
+                    "SELECT text_plain FROM articles WHERE connection_id = ?1 AND wp_id = ?2",
+                    rusqlite::params![conn_id, wp], |r| r.get(0)).ok();
+                cuerpo
+                    .and_then(|t| t.split("\n\n").filter(|p| !p.trim().is_empty()).nth(pi as usize).map(str::to_string))
+                    .unwrap_or_default()
+            };
             out.push(Evidencia { wp_id: wp, pi, titulo, fecha, enlace, parrafo, revisada: revisada != 0 });
             if out.len() as i64 >= limite {
                 break;
@@ -3257,6 +3269,103 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert!(ev[0].parrafo.contains("presidente desde 2022"), "{:?}", ev[0].parrafo);
         assert_eq!(ev[0].titulo.as_deref(), Some("Una nota"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn una_marca_del_titulo_se_guarda_y_se_lee_con_pi_menos_uno() {
+        /* El título es un párrafo anotable más, con `pi = -1` (ver
+           core/src/contenido.rs): `ini`/`fin` son desplazamientos dentro del
+           título, igual que los del cuerpo lo son dentro de su párrafo. */
+        let (db, path) = base_de_cargos("titulo-pi-menos-uno");
+
+        db.guardar_anotacion(1, 10,
+            &[m("m1", -1, 0, 6, "El Papa", "persona"),
+              m("m2", 0, 0, 5, "Petro", "persona")],
+            &[]).unwrap();
+
+        let (ms, _) = db.anotacion(1, 10).unwrap();
+        let del_titulo = ms.iter().find(|x| x.mid == "m1").expect("la marca del título debe leerse de vuelta");
+        assert_eq!(del_titulo.pi, -1);
+        assert_eq!((del_titulo.ini, del_titulo.fin), (0, 6));
+        assert_eq!(del_titulo.texto, "El Papa");
+
+        let del_cuerpo = ms.iter().find(|x| x.mid == "m2").expect("la marca del cuerpo debe seguir ahí");
+        assert_eq!(del_cuerpo.pi, 0, "el índice del párrafo del cuerpo no se desplaza por que exista el título");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn los_indices_del_cuerpo_no_se_mueven_al_anotar_tambien_el_titulo() {
+        /* Esta es la propiedad que protege el trabajo ya hecho: `anotaciones`
+           se referencia por (lote_id, wp_id, mid, pi, ini, fin). Si el título
+           entrara como pi = 0 habría que renumerar los párrafos del cuerpo, y
+           cada anotación ya guardada por un humano apuntaría al párrafo
+           equivocado. Con pi = -1 los índices 0..n del cuerpo quedan intactos
+           tanto si el título se anota como si no. */
+        let (db, path) = base_de_cargos("indices-cuerpo-intactos");
+
+        // Solo el cuerpo, sin tocar el título: los índices de referencia.
+        db.guardar_anotacion(1, 10,
+            &[m("m1", 0, 0, 5, "Petro", "persona"),
+              m("m2", 1, 0, 9, "presidente", "cargo")],
+            &[]).unwrap();
+        let (antes, _) = db.anotacion(1, 10).unwrap();
+        let pis_antes: Vec<i64> = { let mut v: Vec<i64> = antes.iter().map(|x| x.pi).collect(); v.sort(); v };
+        assert_eq!(pis_antes, vec![0, 1]);
+
+        // Ahora se añade también una marca en el título, sobre el mismo artículo.
+        db.guardar_anotacion(1, 10,
+            &[m("m1", 0, 0, 5, "Petro", "persona"),
+              m("m2", 1, 0, 9, "presidente", "cargo"),
+              m("m3", -1, 0, 5, "Petro", "persona")],
+            &[]).unwrap();
+        let (despues, _) = db.anotacion(1, 10).unwrap();
+
+        let cuerpo_m1 = despues.iter().find(|x| x.mid == "m1").unwrap();
+        let cuerpo_m2 = despues.iter().find(|x| x.mid == "m2").unwrap();
+        assert_eq!(cuerpo_m1.pi, 0, "sigue en el párrafo 0, el título no lo desplazó");
+        assert_eq!(cuerpo_m2.pi, 1, "sigue en el párrafo 1, el título no lo desplazó");
+
+        let titulo_m3 = despues.iter().find(|x| x.mid == "m3").unwrap();
+        assert_eq!(titulo_m3.pi, -1);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn la_evidencia_de_una_relacion_en_el_titulo_usa_el_titulo_no_el_ultimo_parrafo() {
+        /* pi = -1 no puede tratarse como índice de array: `pi as usize` lo
+           envuelve a un número enorme y `.nth()` no encuentra nada, así que sin
+           este caso explícito la evidencia habría quedado vacía en vez de
+           mostrar el titular. */
+        let path = std::env::temp_dir()
+            .join(format!("legajo-test-{}-evidencia-titulo.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        {
+            let c = db.conn.lock().unwrap();
+            c.execute_batch(
+                "INSERT INTO connections (id, label, resolved_origin, transport_json, transport_label, discovery_json)
+                   VALUES (1,'x','https://x','{}','d','{}');
+                 INSERT INTO lotes (id, connection_id, label) VALUES (1, 1, 'l');
+                 INSERT INTO census (connection_id, wp_id, date, title, link) VALUES
+                   (1, 100, '2023-05-01', 'Petro llama a la calma', 'https://x/nota');
+                 INSERT INTO articles (connection_id, wp_id, html_raw, text_plain) VALUES
+                   (1, 100, '', 'Primer párrafo del cuerpo.\n\nSegundo, y último, párrafo del cuerpo.');
+                 INSERT INTO anotaciones (lote_id, wp_id, mid, pi, ini, fin, texto, tipo) VALUES
+                   (1, 100, 'm1', -1, 0, 5, 'Petro', 'persona'),
+                   (1, 100, 'm2', 0, 0, 11, 'la prudencia', 'cargo');
+                 INSERT INTO relaciones (lote_id, wp_id, rid, a_mid, b_mid, predicado, cuando) VALUES
+                   (1, 100, 'r1', 'm1', 'm2', 'ocupa el cargo', 'vigente');",
+            ).unwrap();
+        }
+        let ev = db.grafo_evidencia(1, "Petro", "la prudencia", "ocupa el cargo", 5).unwrap();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].pi, -1);
+        assert_eq!(ev[0].parrafo, "Petro llama a la calma", "debe traer el título, no envolver a `parrafos[-1]`");
+        assert!(!ev[0].parrafo.contains("último, párrafo"), "no puede confundirse con el último párrafo del cuerpo");
         let _ = std::fs::remove_file(path);
     }
 

@@ -68,6 +68,14 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     () => (fila?.texto ?? "").split("\n\n").filter((p) => p.trim().length > 0),
     [fila?.texto]
   );
+  /* El título es una unidad anotable más, con `pi = -1` (ver
+     core/src/contenido.rs): no vive en `parrafos`, así que cualquier lectura
+     por índice tiene que pasar por aquí en vez de indexar el array — un
+     `parrafos[-1]` devolvería `undefined` en silencio. */
+  const textoDelParrafo = useCallback(
+    (pi: number) => (pi === -1 ? fila?.titulo ?? "" : parrafos[pi] ?? ""),
+    [fila?.titulo, parrafos]
+  );
 
   // ── carga de la muestra ────────────────────────────────────────────────
   /* Al abrir se reanuda en el primer artículo sin cerrar, no en el primero de
@@ -122,7 +130,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
           setOrigen(virgen ? "modelo" : null);
           return;
         }
-        const previas = aplicarLexico(parrafos, lexico);
+        const previas = aplicarLexico(parrafos, lexico, fila.titulo);
         setMenciones(previas);
         setPreMarcadas(previas.length);
         setOrigen(previas.length > 0 ? "lexico" : null);
@@ -218,7 +226,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     setMenciones((ms) => {
       if (!cabeAnidada(nueva, ms)) return ms;
       const conNueva = [...ms, nueva];
-      const gemelas = propagarEnDocumento(parrafos, pendiente.texto, tipo, conNueva);
+      const gemelas = propagarEnDocumento(parrafos, pendiente.texto, tipo, conNueva, fila?.titulo);
       if (gemelas.length > 0) {
         setUltimaPropagacion({ texto: pendiente.texto, n: gemelas.length });
       }
@@ -227,7 +235,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     setPendiente(null);
     setPunto(null);
     window.getSelection()?.removeAllRanges();
-  }, [pendiente, parrafos]);
+  }, [pendiente, parrafos, fila?.titulo]);
 
   const crearRelacion = useCallback((pred: string) => {
     if (relSel.length !== 2) return;
@@ -246,12 +254,12 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                ya no está vigente, y hacérselo teclear a la persona cuando el
                texto lo grita sería trabajo regalado. Sigue siendo una
                sugerencia: un clic la cambia. */
-            cuando: vigenciaSugerida(parrafos[ma?.pi ?? 0] ?? "") ?? "vigente",
+            cuando: vigenciaSugerida(textoDelParrafo(ma?.pi ?? 0)) ?? "vigente",
           }]
     );
     setRelSel([]);
     setRelPicker(false);
-  }, [relSel, menciones, parrafos]);
+  }, [relSel, menciones, textoDelParrafo]);
 
   /* Declarar que una marca señala a alguien concreto al que el texto no
      nombra: «el Gobernador de Antioquia», «la cooperativa». No le cambia el
@@ -610,9 +618,36 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span>·</span>
               <span className="t-mono">#{fila.wp_id}</span>
             </div>
-            <h1 className="t-titular" style={{ margin: "0 0 var(--esp-8)" }}>
-              {fila.titulo ?? "(sin título)"}
-            </h1>
+            {/* El título es un párrafo anotable más, con `pi = -1`: no viene del
+                cuerpo (`parrafos`), así que no desplaza sus índices 0..n, pero se
+                marca exactamente igual. Se distingue con un filo de color y su
+                propio rótulo, para que quede claro que aquí también se puede
+                seleccionar texto y no es solo un encabezado de pantalla. */}
+            {fila.titulo ? (
+              <div
+                style={{
+                  margin: "0 0 var(--esp-8)",
+                  padding: "6px 12px",
+                  borderLeft: "3px solid var(--acento)",
+                  background: "var(--acento-suave)",
+                  borderRadius: "0 6px 6px 0",
+                }}
+              >
+                <div className="t-rotulo" style={{ marginBottom: 3 }}>Título</div>
+                <h1
+                  className="t-titular"
+                  data-p={-1}
+                  title="El título también se anota: selecciona texto para marcarlo."
+                  style={{ margin: 0 }}
+                >
+                  {pintar(arbolDeParrafo(fila.titulo, menciones, -1))}
+                </h1>
+              </div>
+            ) : (
+              <h1 className="t-titular" style={{ margin: "0 0 var(--esp-8)", color: "var(--t3)" }}>
+                (sin título)
+              </h1>
+            )}
 
             {sinCuerpo ? (
               /* Ya no debería pasar: la revisión solo recorre el conjunto de
