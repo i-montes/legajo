@@ -104,14 +104,25 @@ sudo apt install -y pkg-config libwebkit2gtk-4.1-dev libsoup-3.0-dev \
   libayatana-appindicator3-dev
 ```
 
-### WSL
+### Wayland y WSL
 
-La app desactiva sola el renderizador DMABUF de WebKitGTK cuando detecta que corre
-bajo WSL. Sin eso la ventana se muere entre segundos y media hora después de
-abrirse, con un `Error flushing display: Broken pipe` que no dice nada útil: WSLg
-no ofrece el paso de GPU que ese renderizador da por hecho. En un escritorio Linux
-con GPU real no se toca nada, porque ahí DMABUF es la ruta rápida. Se puede forzar
-a mano exportando `WEBKIT_DISABLE_DMABUF_RENDERER` antes de arrancar.
+La app desactiva sola el renderizador DMABUF de WebKitGTK cuando corre bajo Wayland
+o bajo WSL. Son dos fallos distintos con el mismo remedio:
+
+- **Wayland.** MESA registra la superficie en el protocolo de sincronización
+  explícita y luego confirma un buffer sin punto de adquisición. Un compositor
+  estricto —Hyprland lo es— cierra la conexión de inmediato con
+  `wp_linux_drm_syncobj_surface_v1: "Missing acquire timeline"`, que sale por
+  consola como `Error 71 (Protocol error) dispatching to Wayland display`. La
+  ventana no llega a verse. MESA no ofrece ninguna variable para apagar ese
+  camino, así que se apaga el de WebKit.
+- **WSL.** WSLg no ofrece el paso de GPU que el renderizador da por hecho. Ahí la
+  ventana sí abre, pero se muere entre segundos y media hora después con un
+  `Error flushing display: Broken pipe` que no dice nada útil. Este caso además
+  renuncia a la composición acelerada; Wayland no lo necesita.
+
+Definir `WEBKIT_DISABLE_DMABUF_RENDERER` a mano manda siempre sobre la detección,
+incluido ponerla a `0` para recuperar la ruta rápida donde de verdad funcione.
 
 ### Credenciales
 
