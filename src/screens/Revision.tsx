@@ -692,8 +692,20 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             )}
           </div>
 
-          <Boton variante="secundario" onClick={() => void cerrarYSeguir()} style={{ whiteSpace: "nowrap" }}>
-            Cerrar y seguir
+          {/* Sobre un artículo ya cerrado el botón dice «Seguir» y no «Cerrar y
+              seguir»: no queda nada que cerrar, y anunciar un cierre sobre algo
+              cerrado hace dudar de si volver atrás rompe la medición —que es
+              justo el miedo que estos botones vienen a quitar—. El gesto es el
+              mismo; lo que cambia es que ahora no promete lo que no hace. */}
+          <Boton
+            variante="secundario"
+            onClick={() => void cerrarYSeguir()}
+            title={cerrado
+              ? "Este artículo ya está cerrado: esto solo pasa al siguiente, sin volver a cerrarlo ni tocar su medición."
+              : "Da este artículo por terminado, guarda su medición y abre el siguiente."}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            {cerrado ? "Seguir" : "Cerrar y seguir"}
           </Boton>
           <button
             onClick={() => setPanel(!panel)}
