@@ -8,10 +8,10 @@ import {
   reanudarAnotacion, tiempoArticulo,
 } from "../lib/ipc";
 import {
-  aplicarLexico, arbolDeParrafo, cabeAnidada, gruposDeAlias, nuevoId,
-  propagarEnDocumento, sePropaga, soltarAlias, unirAlias,
+  absorberSueltas, aplicarLexico, arbolDeParrafo, cabeAnidada, filasDelPanel,
+  grupoDeLaForma, nuevoId, propagarEnDocumento, soltarAlias, unirAlias,
 } from "../lib/propagacion";
-import type { Nodo } from "../lib/propagacion";
+import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
 import { pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
@@ -123,7 +123,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
            Nunca sobre uno ya trabajado: pisar el criterio de la persona con
            propuestas de la máquina sería peor que no proponer nada. */
         if (ms.length > 0) {
-          setMenciones(ms);
+          /* Se guardaron sueltas las que la persona marcó donde el extractor no
+             vio nada: antes nacían sin grupo y el panel las mostraba como
+             entidades aparte. Entran en el suyo al abrir. */
+          setMenciones(absorberSueltas(ms));
           /* El backend sirve lo que propuso el modelo cuando la persona todavía
              no ha tocado el artículo, y lo entrega entero como `auto`. Que no
              quede ni una marca propia es lo que distingue una propuesta sin
@@ -228,7 +231,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     };
     setMenciones((ms) => {
       if (!cabeAnidada(nueva, ms)) return ms;
-      const conNueva = [...ms, nueva];
+      /* Si esta forma ya es una entidad conocida del artículo, la marca entra en
+         su grupo. Marcar el «Uribe» que al extractor se le escapó tiene que
+         sumar a Álvaro Uribe, no abrir una entidad nueva con el mismo nombre. */
+      const conNueva = [...ms, { ...nueva, grupo: grupoDeLaForma(ms, nueva.texto, tipo) }];
       const gemelas = propagarEnDocumento(parrafos, pendiente.texto, tipo, conNueva);
       if (gemelas.length > 0) {
         setUltimaPropagacion({ texto: pendiente.texto, n: gemelas.length });
@@ -419,24 +425,13 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       TIPOS.map((t) => {
         const items = menciones.filter((m) => m.tipo === t.k);
         if (!items.length) return null;
-        const filas = sePropaga(t.k)
-          ? Array.from(new Set(items.map((m) => m.texto))).map((texto) => {
-              const iguales = items.filter((m) => m.texto === texto);
-              return {
-                texto,
-                mids: iguales.map((m) => m.mid),
-                // Basta con que una lo esté: son la misma cadena y el
-                // interruptor las mueve todas a la vez.
-                designa: iguales.some((m) => m.designa),
-              };
-            })
-          : items.map((m) => ({ texto: m.texto, mids: [m.mid], designa: !!m.designa }));
-        return { tipo: t, n: items.length, formas: filas.length, filas };
+        const filas = filasDelPanel(menciones, t.k);
+        return { tipo: t, n: items.length, entidades: filas.length, filas };
       }).filter(Boolean) as {
         tipo: (typeof TIPOS)[number];
         n: number;
-        formas: number;
-        filas: { texto: string; mids: string[]; designa: boolean }[];
+        entidades: number;
+        filas: FilaPanel[];
       }[],
     [menciones]
   );
@@ -864,9 +859,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: colorTipo(g.tipo.k), display: "block" }} />
                     <span style={{ fontSize: 12.5, color: "var(--t2)" }}>{g.tipo.etiqueta}</span>
                     <span className="t-mono" style={{ color: "var(--t3)", marginLeft: "auto" }}>
-                      {/* Menciones y formas distintas: el número a secas hacía
-                          creer que faltaban filas de la lista. */}
-                      {g.n !== g.formas ? `${g.formas} · ${g.n} menc.` : g.n}
+                      {/* Entidades y menciones: el número a secas hacía creer
+                          que faltaban filas de la lista. Cuenta entidades y no
+                          formas porque dos formas unidas son una sola línea. */}
+                      {g.n !== g.entidades ? `${g.entidades} · ${g.n} menc.` : g.n}
                     </span>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -879,8 +875,9 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                           : "Llevar a su marca en el texto"}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hundida)")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                        style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", padding: "3px 6px", borderRadius: 4, cursor: "pointer" }}
+                        style={{ padding: "3px 6px", borderRadius: 4, cursor: "pointer" }}
                       >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
                         <span style={{ fontSize: 12.5, display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.texto}</span>
                           {f.mids.length > 1 && (
@@ -926,6 +923,30 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                           }}
                           style={{ appearance: "none", background: "transparent", border: 0, color: "var(--t3)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}
                         >×</button>
+                        </div>
+                        {/* Las demás formas con que el texto nombra a esta misma
+                            entidad. Van debajo y no en su propia fila porque son
+                            una sola entidad: partirlas en dos líneas con dos
+                            contadores es lo que la unión venía a deshacer. */}
+                        {f.alias.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 2, paddingLeft: 1 }}>
+                            {f.alias.map((a) => (
+                              <span key={a.texto} className="t-menor" style={{ color: "var(--t3)" }}>
+                                = {a.texto}{a.mids.length > 1 && ` ×${a.mids.length}`}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // Sale la forma entera, no una de sus
+                                    // apariciones: entró entera al unirla.
+                                    setMenciones((ms) => a.mids.reduce((acc, mid) => soltarAlias(acc, mid), ms));
+                                  }}
+                                  title={`Dejar de considerar «${a.texto}» la misma entidad que «${f.texto}»`}
+                                  style={{ appearance: "none", background: "transparent", border: 0, color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 0 0 4px" }}
+                                >×</button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -937,40 +958,6 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                 </span>
               )}
             </div>
-
-            {(() => {
-              const grupos = gruposDeAlias(menciones);
-              if (grupos.length === 0) return null;
-              return (
-                <div style={{ marginTop: "var(--esp-8)", paddingTop: "var(--esp-4)", borderTop: "1px solid var(--borde)" }}>
-                  <Rotulo style={{ marginBottom: 10 }}>Mismas entidades</Rotulo>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-                    {grupos.map((g) => (
-                      <div key={g.grupo}>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-                          <span style={{ width: 7, height: 7, borderRadius: 2, background: colorTipo(g.tipo), display: "block", flex: "0 0 auto" }} />
-                          <span style={{ fontSize: 12.5, color: "var(--t1)" }}>{g.canonica}</span>
-                        </div>
-                        <div style={{ marginLeft: 14, marginTop: 3, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {g.formas.filter((f) => f !== g.canonica).map((f) => (
-                            <span key={f} className="t-menor" style={{ color: "var(--t3)" }}>
-                              = {f}
-                              <button
-                                onClick={() => setMenciones((ms) => {
-                                  const suelta = ms.find((m) => m.grupo === g.grupo && m.texto === f);
-                                  return suelta ? soltarAlias(ms, suelta.mid) : ms;
-                                })}
-                                style={{ appearance: "none", background: "transparent", border: 0, color: "var(--t3)", cursor: "pointer", fontSize: 12, padding: "0 0 0 4px" }}
-                              >×</button>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
 
             {relaciones.length > 0 && (
               <div style={{ marginTop: "var(--esp-8)", paddingTop: "var(--esp-4)", borderTop: "1px solid var(--borde)" }}>

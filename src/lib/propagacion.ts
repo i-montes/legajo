@@ -92,6 +92,52 @@ let contador = 0;
 export const nuevoId = () =>
   `m${Date.now().toString(36)}${(contador++).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
+/* Dos menciones nombran la misma forma si coinciden plegando tildes y caja. Es
+   el mismo criterio con que la propagación decide que una aparición merece
+   marca: usar aquí uno más estricto dejaría fuera del grupo justo a la que la
+   propagación acaba de crear, por venir en versales en un ladillo. */
+const mismaForma = (a: string, b: string) => plegar(a.trim()) === plegar(b.trim());
+
+/** El grupo al que ya pertenece esta forma en el artículo, si alguno.
+ *
+ *  El extractor agrupa por correferencia, pero solo lo que él vio: una
+ *  aparición que se le escapó y que después marca la persona nacía huérfana, y
+ *  el panel la mostraba como una entidad más al lado de la suya. Parecía que la
+ *  marca no se había hecho cuando sí estaba puesta, solo que suelta.
+ */
+export function grupoDeLaForma(
+  existentes: Mencion[], texto: string, tipo: string
+): string | undefined {
+  const encaja = existentes.find(
+    (m) => m.tipo === tipo && !!m.grupo && mismaForma(m.texto, texto)
+  );
+  return encaja?.grupo ?? undefined;
+}
+
+/** Mete en su grupo las menciones sueltas cuya forma ya pertenece a uno.
+ *
+ *  Para las anotaciones que ya se guardaron huérfanas, antes de que las nuevas
+ *  heredaran el grupo al nacer. Se aplica al abrir el artículo.
+ *
+ *  Tiene un precio conocido: soltar un alias con la × guarda un nulo, que en la
+ *  base es indistinguible de una mención que nunca tuvo grupo, así que una
+ *  separación hecha a propósito se deshace al reabrir. Distinguirlas pide
+ *  guardar aparte «esta la solté yo», y eso todavía no existe.
+ */
+export function absorberSueltas(menciones: Mencion[]): Mencion[] {
+  let cambio = false;
+  const out = menciones.map((m) => {
+    if (m.grupo) return m;
+    const grupo = grupoDeLaForma(menciones, m.texto, m.tipo);
+    if (!grupo) return m;
+    cambio = true;
+    return { ...m, grupo };
+  });
+  // El mismo arreglo si no hubo nada que absorber: abrir un artículo no debe
+  // contar como tocarlo ni disparar un guardado.
+  return cambio ? out : menciones;
+}
+
 /** Las demás apariciones de un texto recién marcado, sin pisar lo que ya hay. */
 export function propagarEnDocumento(
   parrafos: string[], texto: string, tipo: string, existentes: Mencion[]
@@ -101,9 +147,11 @@ export function propagarEnDocumento(
   const nuevas: Mencion[] = [];
   for (const t of ocurrencias(parrafos, texto)) {
     if (solapa(t, acumulado)) continue;
+    const suyo = trozo(parrafos, t);
     const m: Mencion = {
       mid: nuevoId(), pi: t.pi, ini: t.ini, fin: t.fin,
-      texto: trozo(parrafos, t), tipo, auto: true,
+      texto: suyo, tipo, auto: true,
+      grupo: grupoDeLaForma(acumulado, suyo, tipo),
     };
     acumulado.push(m);
     nuevas.push(m);
@@ -152,12 +200,25 @@ export function unirAlias(menciones: Mencion[], mid1: string, mid2: string): Men
   const b = menciones.find((m) => m.mid === mid2);
   if (!a || !b || a.mid === b.mid) return menciones;
 
+  /* Se eligen dos marcas, pero lo que se declara es sobre la entidad: «Uribe es
+     Álvaro Uribe». Entran con ellas las demás apariciones de sus mismas formas,
+     porque dejar un «Uribe» suelto en el panel partiría en dos lo que se acaba
+     de decir que es uno. La excepción son los tipos que no propagan: dos «50
+     mil millones» se repiten por coincidencia, no porque el texto vuelva a
+     referirse a lo mismo. */
+  const arrastradas = menciones.filter((m) =>
+    m.mid === a.mid || m.mid === b.mid ||
+    [a, b].some((c) => sePropaga(c.tipo) && m.tipo === c.tipo && m.texto === c.texto)
+  );
+
   const grupo = a.grupo ?? b.grupo ?? `g${a.mid}`;
-  const viejos = new Set([a.grupo, b.grupo].filter(Boolean) as string[]);
+  const mids = new Set(arrastradas.map((m) => m.mid));
+  /* Los grupos que ya tenían las arrastradas vienen enteros, no solo la marca
+     que entró: sacarla sola dejaría a sus compañeras apuntando a una identidad
+     de la que ya no forma parte. */
+  const viejos = new Set(arrastradas.map((m) => m.grupo).filter(Boolean) as string[]);
   return menciones.map((m) =>
-    m.mid === a.mid || m.mid === b.mid || (m.grupo && viejos.has(m.grupo))
-      ? { ...m, grupo }
-      : m
+    mids.has(m.mid) || (m.grupo && viejos.has(m.grupo)) ? { ...m, grupo } : m
   );
 }
 
@@ -197,6 +258,63 @@ export function gruposDeAlias(menciones: Mencion[]): GrupoAlias[] {
       return b.texto.length > a.texto.length ? b : a;
     });
     return { grupo, tipo: mejor.tipo, canonica: mejor.texto, formas, menciones: ms.length };
+  });
+}
+
+export interface FilaPanel {
+  /** La forma que encabeza la fila: la canónica del grupo. */
+  texto: string;
+  /** Todas las menciones de la fila, las de la canónica y las de sus subnombres. */
+  mids: string[];
+  designa: boolean;
+  /** Las demás formas de la misma entidad. Vacío si nadie la unió a nada. */
+  alias: { texto: string; mids: string[] }[];
+}
+
+/** Las filas de un tipo en el panel: una por entidad, no una por forma.
+ *
+ *  Unir «Uribe» con «Álvaro Uribe» declara que nombran a la misma persona. Si
+ *  el panel las sigue mostrando como dos líneas con sus contadores aparte, la
+ *  unión no se ve en el único sitio donde se está mirando, y la cifra de
+ *  entidades del artículo cuenta dos donde hay una.
+ *
+ *  Agrupa por `grupo` cuando lo hay y por texto cuando no. El grupo manda: es
+ *  una decisión de una persona sobre esta entidad concreta, y la coincidencia
+ *  de texto solo una pista.
+ *
+ *  Solo mira las menciones del tipo pedido, y por eso un grupo que cruza tipos
+ *  —«Ministro de Hacienda» unido a «Alberto Carrasquilla»— deja una fila en
+ *  cada uno en vez de mudarse entero al del nombre propio. Las menciones están
+ *  pintadas en el texto con el color de su tipo: si la cifra de la cabecera
+ *  contara menciones de otro, dejaría de cuadrar con lo que se ve.
+ */
+export function filasDelPanel(menciones: Mencion[], tipo: string): FilaPanel[] {
+  const items = menciones.filter((m) => m.tipo === tipo);
+  const cubos = new Map<string, Mencion[]>();
+  items.forEach((m, k) => {
+    /* Sin grupo y de un tipo que no propaga, cada mención va suelta: dos
+       «50 mil millones» en el mismo artículo suelen ser dos partidas distintas,
+       y juntarlas aquí insinuaría una fusión que nadie declaró. */
+    const clave = m.grupo ? `g:${m.grupo}` : sePropaga(tipo) ? `t:${m.texto}` : `m:${k}`;
+    cubos.set(clave, [...(cubos.get(clave) ?? []), m]);
+  });
+
+  return [...cubos.values()].map((ms) => {
+    const formas = [...new Set(ms.map((m) => m.texto))].map((texto) => ({
+      texto,
+      mids: ms.filter((m) => m.texto === texto).map((m) => m.mid),
+    }));
+    // Dentro de un tipo la más larga es la que mejor identifica: «Álvaro Uribe»
+    // dice quién es y «Uribe» solo lo distingue de los demás de la frase.
+    const canonica = formas.reduce((a, b) => (b.texto.length > a.texto.length ? b : a));
+    return {
+      texto: canonica.texto,
+      mids: ms.map((m) => m.mid),
+      // Basta con que una lo esté: son la misma entidad y el interruptor las
+      // mueve todas a la vez.
+      designa: ms.some((m) => !!m.designa),
+      alias: formas.filter((f) => f.texto !== canonica.texto),
+    };
   });
 }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { pareceDescripcion, vigenciaSugerida } from "./revision";
 import {
-  aplicarLexico, arbolDeParrafo, cabeAnidada, gruposDeAlias, ocurrencias, plegar,
+  absorberSueltas, aplicarLexico, arbolDeParrafo, cabeAnidada, filasDelPanel, grupoDeLaForma,
+  gruposDeAlias,
+  ocurrencias, plegar,
   propagarEnDocumento, soltarAlias, textoDeArbol, unirAlias,
 } from "./propagacion";
 import type { NodoMarca } from "./propagacion";
@@ -194,6 +196,23 @@ describe("alias", () => {
     ms = soltarAlias(ms, "2");
     expect(ms[1].grupo).toBeNull();
     expect(ms[0].grupo).toBeTruthy();
+  });
+
+  it("unir una forma arrastra sus demás apariciones", () => {
+    /* La persona elige dos marcas del texto, pero lo que declara es sobre la
+       entidad: «Uribe es Álvaro Uribe». Dejar fuera el otro «Uribe» del
+       artículo partiría en dos lo que se acaba de decir que es uno solo, y el
+       panel mostraría un «Uribe» suelto al lado del grupo. */
+    let ms = [m("1", "Uribe"), m("2", "Uribe"), m("3", "Álvaro Uribe")];
+    ms = unirAlias(ms, "1", "3");
+    expect(ms.map((x) => x.grupo)).toEqual([ms[0].grupo, ms[0].grupo, ms[0].grupo]);
+  });
+
+  it("no arrastra las cifras iguales, que no son la misma por repetirse", () => {
+    let ms = [m("1", "50 mil millones", "monto"), m("2", "50 mil millones", "monto"),
+              m("3", "esa partida", "monto")];
+    ms = unirAlias(ms, "1", "3");
+    expect(ms[1].grupo).toBeUndefined();
   });
 
   it("el nombre propio gana al cargo aunque midan lo mismo", () => {
@@ -489,5 +508,188 @@ describe("descripciones que señalan sin nombrar", () => {
   it("no se mete con los tipos donde la pregunta no aplica", () => {
     expect(pareceDescripcion("Gustavo Petro", "persona")).toBe(false);
     expect(pareceDescripcion("50 mil millones", "monto")).toBe(false);
+  });
+});
+
+describe("filasDelPanel", () => {
+  const m = (mid: string, texto: string, tipo = "persona", extra: Partial<Mencion> = {}): Mencion =>
+    ({ mid, pi: 0, ini: 0, fin: 1, texto, tipo, auto: false, ...extra });
+
+  it("junta las repeticiones de una misma forma en una fila", () => {
+    const filas = filasDelPanel([m("1", "Santos"), m("2", "Santos"), m("3", "Petro")], "persona");
+    expect(filas.map((f) => f.texto)).toEqual(["Santos", "Petro"]);
+    expect(filas[0].mids).toEqual(["1", "2"]);
+  });
+
+  it("deja fuera las menciones de otro tipo", () => {
+    const filas = filasDelPanel([m("1", "Santos"), m("2", "Cambio Radical", "organizacion")], "persona");
+    expect(filas.map((f) => f.texto)).toEqual(["Santos"]);
+  });
+
+  it("dos formas unidas dan una sola fila, encabezada por la canónica", () => {
+    const ms = unirAlias([m("1", "Uribe"), m("2", "Álvaro Uribe")], "1", "2");
+    const filas = filasDelPanel(ms, "persona");
+    expect(filas).toHaveLength(1);
+    expect(filas[0].texto).toBe("Álvaro Uribe");
+  });
+
+  it("la fila unida cuenta las menciones de todas sus formas", () => {
+    /* «Uribe ×2» y «Álvaro Uribe» unidas son una entidad con tres menciones:
+       que el panel siga diciendo 1 y 2 por separado es justo lo que la unión
+       venía a arreglar. */
+    let ms = [m("1", "Uribe"), m("2", "Uribe"), m("3", "Álvaro Uribe")];
+    ms = unirAlias(ms, "1", "3");
+    const [fila] = filasDelPanel(ms, "persona");
+    expect([...fila.mids].sort()).toEqual(["1", "2", "3"]);
+  });
+
+  it("lista los subnombres aparte, sin repetir la canónica", () => {
+    const ms = unirAlias([m("1", "Uribe"), m("2", "Álvaro Uribe")], "1", "2");
+    const [fila] = filasDelPanel(ms, "persona");
+    expect(fila.alias.map((a) => a.texto)).toEqual(["Uribe"]);
+  });
+
+  it("cada subnombre carga sus menciones, para poder soltarlo solo a él", () => {
+    let ms = [m("1", "Uribe"), m("2", "Uribe"), m("3", "Álvaro Uribe")];
+    ms = unirAlias(ms, "1", "3");
+    const [fila] = filasDelPanel(ms, "persona");
+    expect(fila.alias[0]).toEqual({ texto: "Uribe", mids: ["1", "2"] });
+  });
+
+  it("una fila sin unir no tiene subnombres", () => {
+    expect(filasDelPanel([m("1", "Santos")], "persona")[0].alias).toEqual([]);
+  });
+
+  it("no arrastra a la fila la mención de otro tipo que comparte grupo", () => {
+    /* Un cargo unido a una persona es un vínculo legítimo, pero cada tipo
+       cuenta lo suyo: si el cargo entrara en la fila de persona, la cifra de la
+       cabecera dejaría de cuadrar con lo que está pintado en el texto. */
+    const ms = unirAlias(
+      [m("1", "Ministro de Hacienda", "cargo"), m("2", "Alberto Carrasquilla")],
+      "1", "2"
+    );
+    const [fila] = filasDelPanel(ms, "persona");
+    expect(fila.mids).toEqual(["2"]);
+    expect(fila.alias).toEqual([]);
+  });
+
+  it("dentro del cargo, el grupo mixto deja su propia fila", () => {
+    const ms = unirAlias(
+      [m("1", "Ministro de Hacienda", "cargo"), m("2", "Alberto Carrasquilla")],
+      "1", "2"
+    );
+    expect(filasDelPanel(ms, "cargo").map((f) => f.texto)).toEqual(["Ministro de Hacienda"]);
+  });
+
+  it("basta con que una forma señale sin nombrar para que la fila lo diga", () => {
+    const ms = unirAlias(
+      [m("1", "la cooperativa", "organizacion", { designa: true }), m("2", "Coogranada", "organizacion")],
+      "1", "2"
+    );
+    expect(filasDelPanel(ms, "organizacion")[0].designa).toBe(true);
+  });
+
+  it("los montos no se juntan por texto, porque dos cifras iguales no son la misma", () => {
+    const filas = filasDelPanel([m("1", "50 mil millones", "monto"), m("2", "50 mil millones", "monto")], "monto");
+    expect(filas).toHaveLength(2);
+  });
+
+  it("pero un monto unido a mano sí se junta: ahí lo dijo la persona", () => {
+    const ms = unirAlias([m("1", "50 mil millones", "monto"), m("2", "esa suma", "monto")], "1", "2");
+    expect(filasDelPanel(ms, "monto")).toHaveLength(1);
+  });
+});
+
+describe("grupoDeLaForma", () => {
+  const m = (mid: string, texto: string, extra: Partial<Mencion> = {}): Mencion =>
+    ({ mid, pi: 0, ini: 0, fin: 1, texto, tipo: "persona", auto: false, ...extra });
+
+  it("devuelve el grupo al que ya pertenece esa forma", () => {
+    const ms = [m("1", "Uribe", { grupo: "c:persona:alvaro uribe" })];
+    expect(grupoDeLaForma(ms, "Uribe", "persona")).toBe("c:persona:alvaro uribe");
+  });
+
+  it("no inventa grupo cuando la forma no aparece", () => {
+    const ms = [m("1", "Uribe", { grupo: "c:persona:alvaro uribe" })];
+    expect(grupoDeLaForma(ms, "Petro", "persona")).toBeUndefined();
+  });
+
+  it("no hereda de una forma suelta", () => {
+    expect(grupoDeLaForma([m("1", "Uribe")], "Uribe", "persona")).toBeUndefined();
+  });
+
+  it("no cruza tipos: el mismo texto en otro tipo es otra cosa", () => {
+    const ms = [m("1", "Presidencia", { tipo: "cargo", grupo: "c:cargo:presidencia" })];
+    expect(grupoDeLaForma(ms, "Presidencia", "organizacion")).toBeUndefined();
+  });
+
+  it("pliega tildes y caja, como la propagación", () => {
+    /* La propagación marca «URIBE» de un ladillo al propagar «Uribe»: si para
+       heredar el grupo hiciera falta que coincidiera carácter a carácter, esa
+       marca nacería suelta justo por venir en versales. */
+    const ms = [m("1", "Uribe", { grupo: "c:persona:alvaro uribe" })];
+    expect(grupoDeLaForma(ms, "URIBE", "persona")).toBe("c:persona:alvaro uribe");
+  });
+
+  it("ignora el nulo de una que se soltó a mano y toma el grupo que sí hay", () => {
+    const ms = [m("1", "Uribe", { grupo: null }), m("2", "Uribe", { grupo: "c:persona:alvaro uribe" })];
+    expect(grupoDeLaForma(ms, "Uribe", "persona")).toBe("c:persona:alvaro uribe");
+  });
+});
+
+describe("propagar dentro de un grupo ya existente", () => {
+  it("lo propagado entra en el grupo de su forma, no como entidad aparte", () => {
+    /* El extractor se dejó una aparición y la persona la marca a mano. Si nace
+       huérfana, el panel muestra un «Uribe» suelto al lado de «Álvaro Uribe» y
+       parece que la marca no se hizo. */
+    const parrafos = ["Uribe habló hoy.", "Después Uribe calló."];
+    const existentes: Mencion[] = [
+      { mid: "1", pi: 0, ini: 0, fin: 5, texto: "Uribe", tipo: "persona", auto: false,
+        grupo: "c:persona:alvaro uribe" },
+    ];
+    const nuevas = propagarEnDocumento(parrafos, "Uribe", "persona", existentes);
+    expect(nuevas).toHaveLength(1);
+    expect(nuevas[0].grupo).toBe("c:persona:alvaro uribe");
+  });
+
+  it("sin grupo previo, lo propagado sigue naciendo suelto", () => {
+    const nuevas = propagarEnDocumento(["Petro habló.", "Petro calló."], "Petro", "persona", []);
+    expect(nuevas.every((n) => !n.grupo)).toBe(true);
+  });
+});
+
+describe("absorberSueltas", () => {
+  const m = (mid: string, texto: string, extra: Partial<Mencion> = {}): Mencion =>
+    ({ mid, pi: 0, ini: 0, fin: 1, texto, tipo: "persona", auto: false, ...extra });
+
+  it("mete en el grupo la mención suelta cuya forma ya está dentro", () => {
+    /* El caso real: el extractor se dejó una aparición, la persona la marcó a
+       mano en una sesión anterior y quedó guardada fuera del grupo. Al abrir el
+       artículo se ve como una entidad más, y nada dice que sea la misma. */
+    const ms = [
+      m("1", "Álvaro Uribe", { grupo: "c:persona:alvaro uribe" }),
+      m("2", "Uribe", { grupo: "c:persona:alvaro uribe" }),
+      m("3", "Uribe"),
+    ];
+    expect(absorberSueltas(ms)[2].grupo).toBe("c:persona:alvaro uribe");
+  });
+
+  it("deja en paz a las que no tienen adónde entrar", () => {
+    const ms = [m("1", "Uribe", { grupo: "c:persona:alvaro uribe" }), m("2", "Petro")];
+    expect(absorberSueltas(ms)[1].grupo).toBeFalsy();
+  });
+
+  it("no cruza tipos", () => {
+    const ms = [
+      m("1", "Presidencia", { tipo: "cargo", grupo: "c:cargo:presidencia" }),
+      m("2", "Presidencia", { tipo: "organizacion" }),
+    ];
+    expect(absorberSueltas(ms)[1].grupo).toBeFalsy();
+  });
+
+  it("devuelve el mismo arreglo cuando no hay nada que absorber", () => {
+    // Abrir un artículo no debe marcarlo como cambiado y disparar un guardado.
+    const ms = [m("1", "Uribe", { grupo: "g1" }), m("2", "Petro")];
+    expect(absorberSueltas(ms)).toBe(ms);
   });
 });
