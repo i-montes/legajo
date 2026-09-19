@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import { FAMILIAS, TIPOS, colorTipo, predicadosPara, sugerirInversa } from "../contenido/tipos";
 import type { Predicado } from "../contenido/tipos";
@@ -13,9 +14,20 @@ import {
 } from "../lib/propagacion";
 import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
-import { pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
+import { destinoArticulo, pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
+
+/* Los chevrones de navegación entre artículos. Discretos a propósito: mueven
+   el sitio donde se está y nada más, mientras que «Cerrar y seguir» —el botón
+   con peso visual— es el único que da un artículo por terminado. Que no se
+   parezcan es la mitad de la garantía de que no se confundan. */
+const navBoton = (inactivo: boolean): CSSProperties => ({
+  appearance: "none", background: "transparent", border: 0,
+  color: inactivo ? "var(--borde)" : "var(--t3)",
+  cursor: inactivo ? "default" : "pointer",
+  fontSize: 18, lineHeight: 1, padding: "1px 6px", flex: "0 0 auto",
+});
 
 interface Punto { x: number; y: number }
 interface Pendiente { pi: number; ini: number; fin: number; texto: string }
@@ -61,6 +73,13 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      panel las dos filas se leen igual. */
   const [relResaltada, setRelResaltada] = useState<string[]>([]);
   const [hechos, setHechos] = useState(0);
+  /* Índice del primer artículo sin cerrar: hasta dónde llega «siguiente».
+     Todo lo que queda detrás está anotado y terminado, y volver sobre ello es
+     lo que estos botones existen para permitir —al hacer anotable el título
+     con `pi = -1`, los artículos cerrados antes se quedaron sin esa marca—.
+     Hacia adelante para en seco: abrir material nunca visto es cosa de
+     «Cerrar y seguir», que es el único gesto que da un artículo por terminado. */
+  const [frontera, setFrontera] = useState(0);
   const lienzo = useRef<HTMLDivElement>(null);
   /* Clic en una fila del panel: lleva a esa entidad en el texto y la realza un
      momento. Navegar no es seleccionar —no toca `relSel`, ni `auto`, ni las
@@ -74,6 +93,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const [realzada, setRealzada] = useState<{ mid: string; clic: number } | null>(null);
 
   const fila = filas?.[i];
+  /* Por detrás de la frontera todo está cerrado. Se puede volver y añadir
+     marcas —eso mejora la calibración, que lee los artículos cerrados—, pero
+     la medición de tiempo ya está tomada y no se vuelve a escribir. */
+  const cerrado = i < frontera;
   const parrafos = useMemo(
     () => (fila?.texto ?? "").split("\n\n").filter((p) => p.trim().length > 0),
     [fila?.texto]
@@ -106,10 +129,15 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       cargarLexico(design).then(setLexico).catch(() => {});
       if (siguiente != null) {
         const idx = lista.findIndex((f) => f.wp_id === siguiente);
-        if (idx >= 0) setI(idx);
+        const punto = idx >= 0 ? idx : 0;
+        setI(punto);
+        setFrontera(punto);
       } else if (lista.length > 0) {
         // Todo cerrado: se muestra la pantalla final, no el primer artículo.
+        // La frontera es esa misma pantalla, así que sigue siendo alcanzable
+        // después de bajar al primero a repasar.
         setI(lista.length);
+        setFrontera(lista.length);
       }
     })();
   }, [loteId]);
@@ -124,8 +152,11 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     Promise.all([cargarAnotacion(loteId, wp), tiempoArticulo(loteId, wp).catch(() => 0)])
       .then(([[ms, rs], segundos]) => {
         setRelaciones(rs);
-        // El cronómetro continúa desde lo ya invertido, no desde cero.
-        reloj.reiniciar(segundos);
+        /* El cronómetro continúa desde lo ya invertido, no desde cero. Y sobre
+           un artículo ya cerrado se queda quieto en la cifra medida: volver a
+           marcarle el título es trabajo de repaso, no el coste de anotarlo, y
+           sumarlo desplazaría la mediana de toda la muestra. */
+        reloj.reiniciar(segundos, !cerrado);
 
         /* Un artículo virgen se pre-marca con lo aprendido en los anteriores.
            Nunca sobre uno ya trabajado: pisar el criterio de la persona con
@@ -167,23 +198,23 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      artículo como terminado. Cerrar la ventana a mitad no debe borrar los
      minutos ya puestos: son parte del coste real que la fase mide. */
   useEffect(() => {
-    if (loteId == null || !fila || reloj.estado !== "corriendo") return;
+    if (loteId == null || !fila || cerrado || reloj.estado !== "corriendo") return;
     const t = setInterval(() => {
       apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
     }, 10_000);
     return () => clearInterval(t);
-  }, [loteId, fila?.wp_id, reloj.estado, crono, menciones.length]);
+  }, [loteId, fila?.wp_id, cerrado, reloj.estado, crono, menciones.length]);
 
   // Y una última vez al cerrar la ventana, para no perder los segundos sueltos.
   useEffect(() => {
     const alSalir = () => {
       if (loteId == null || !fila) return;
-      apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
+      if (!cerrado) apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
       guardarAnotacion(loteId, fila.wp_id, menciones, relaciones).catch(() => {});
     };
     window.addEventListener("beforeunload", alSalir);
     return () => window.removeEventListener("beforeunload", alSalir);
-  }, [loteId, fila?.wp_id, crono, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, cerrado, crono, menciones, relaciones]);
 
   /* Moverse entre artículos guarda lo anotado pero NO registra un cierre.
      Antes, pasar de largo con J/K dejaba una medición de un segundo que entraba
@@ -200,10 +231,14 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     const actual = filas[i];
     if (actual) {
       await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
-      await apuntarTiempo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
+      /* Sobre un artículo cerrado se guarda lo anotado y nada más: su medición
+         está cerrada y reescribirla con los minutos del repaso la falsearía. */
+      if (!cerrado) {
+        await apuntarTiempo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
+      }
     }
-    setI((v) => Math.max(0, Math.min(filas.length, v + d)));
-  }, [loteId, filas, i, menciones, relaciones, crono]);
+    setI(destinoArticulo(i, d, Math.min(frontera, filas.length)));
+  }, [loteId, filas, i, frontera, cerrado, menciones, relaciones, crono]);
 
   const cerrarYSeguir = useCallback(async () => {
     if (loteId == null || !filas) return;
@@ -213,15 +248,21 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       await cerrarArticulo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
       avanceAnotacion(loteId).then(([h]) => setHechos(h));
     }
-    setI((v) => Math.min(filas.length, v + 1));
+    const destino = Math.min(filas.length, i + 1);
+    setI(destino);
+    // La frontera solo avanza aquí, y nunca retrocede: volver atrás a repasar
+    // no debe recortar hasta dónde se puede regresar después.
+    setFrontera((f) => Math.max(f, destino));
   }, [loteId, filas, i, menciones, relaciones, crono]);
 
   const descartarMedicion = useCallback(async () => {
     if (loteId == null || !fila) return;
     await descartarTiempo(loteId, fila.wp_id).catch(() => {});
-    reloj.reiniciar(0);
+    // Descartar la medición de un artículo cerrado no reabre su reloj: la
+    // invalida y ya. Volver a contar sobre él es justo lo que se está evitando.
+    reloj.reiniciar(0, !cerrado);
     avanceAnotacion(loteId).then(([h]) => setHechos(h));
-  }, [loteId, fila?.wp_id]);
+  }, [loteId, fila?.wp_id, cerrado]);
 
   /* Nada de efectos dentro de un actualizador de estado: React los invoca dos
      veces en modo estricto para detectar actualizadores impuros, y eso añadía
@@ -572,9 +613,31 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
           competían por el mismo espacio. */}
       <div style={{ flex: "0 0 auto", borderBottom: "1px solid var(--borde)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "11px 24px" }}>
-          <span className="t-menor" style={{ color: "var(--t2)", whiteSpace: "nowrap" }}>
-            Artículo {i + 1} de {total}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 1, flex: "0 0 auto" }}>
+            <button
+              onClick={() => void irArticulo(-1)}
+              disabled={i === 0}
+              title="Artículo anterior · K. Vuelve sobre uno ya anotado para añadirle marcas. No lo cierra, no lo da por terminado y no le suma tiempo."
+              aria-label="Ir al artículo anterior"
+              style={navBoton(i === 0)}
+            >
+              ‹
+            </button>
+            <span className="t-menor" style={{ color: "var(--t2)", whiteSpace: "nowrap", minWidth: "13ch", textAlign: "center" }}>
+              Artículo {i + 1} de {total}
+            </span>
+            <button
+              onClick={() => void irArticulo(1)}
+              disabled={i >= frontera}
+              title={i >= frontera
+                ? "Más adelante no hay nada que ya hayas visto. El siguiente artículo lo abre «Cerrar y seguir»."
+                : "Artículo siguiente · J. Solo hasta donde ya habías llegado; no cierra nada."}
+              aria-label="Ir al artículo siguiente"
+              style={navBoton(i >= frontera)}
+            >
+              ›
+            </button>
+          </div>
           <div style={{ width: 120, flex: "0 0 auto" }}><Barra pct={(hechos / total) * 100} /></div>
           <span className="t-menor" style={{ color: "var(--t3)", whiteSpace: "nowrap" }}>
             {hechos} cerrados
@@ -583,6 +646,24 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
           <div style={{ flex: 1, minWidth: 12 }} />
 
           <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+            {/* Sobre un artículo ya cerrado el reloj no es un control sino un dato:
+                la medición está tomada. Dejarlo como botón invitaría a
+                reanudarlo, y los minutos de un repaso —volver a marcar el
+                título de algo anotado la semana pasada— no son el coste de
+                anotar el artículo. */}
+            {cerrado ? (
+              <span
+                title="Este artículo ya está cerrado y su medición tomada. Repasarlo y añadirle marcas no le suma minutos."
+                style={{
+                  border: "1px solid var(--borde)", borderRadius: 6, padding: "5px 10px",
+                  display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap",
+                  color: "var(--t3)", fontSize: 12.5,
+                }}
+              >
+                <span aria-hidden style={{ fontSize: 10 }}>✓</span>
+                <span className="t-mono" style={{ fontVariantNumeric: "tabular-nums" }}>{mmss(crono)}</span>
+              </span>
+            ) : (
             <button
               onClick={reloj.alternar}
               title={`Medimos minutos por artículo para estimar cuánto cuesta curar el archivo completo. Se detiene solo al cambiar de ventana o tras un minuto sin actividad. Estado: ${ETIQUETA_RELOJ[reloj.estado]}.`}
@@ -598,6 +679,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span aria-hidden style={{ fontSize: 9 }}>{reloj.estado === "corriendo" ? "❙❙" : "▶"}</span>
               <span className="t-mono" style={{ fontVariantNumeric: "tabular-nums" }}>{mmss(crono)}</span>
             </button>
+            )}
             {crono > 20 && (
               <button
                 onClick={() => void descartarMedicion()}

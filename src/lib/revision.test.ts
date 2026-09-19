@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { siguienteMencion } from "./revision";
+import { destinoArticulo, siguienteMencion } from "./revision";
 import type { Mencion } from "../types";
 
 /* Una mención en el párrafo `pi`, empezando en `ini`. Lo demás da igual para
@@ -42,5 +42,36 @@ describe("siguienteMencion", () => {
     /* Entre clic y clic se puede borrar la marca con ⌫. Buscar «la siguiente a
        una que ya no está» no tiene respuesta: se vuelve al principio. */
     expect(siguienteMencion([m("b", 0, 40)], "a")).toBe("b");
+  });
+});
+
+describe("destinoArticulo", () => {
+  it("retrocede sobre lo ya recorrido", () => {
+    expect(destinoArticulo(4, -1, 5)).toBe(3);
+  });
+
+  it("avanza dentro de lo ya recorrido", () => {
+    expect(destinoArticulo(2, 1, 5)).toBe(3);
+  });
+
+  it("se queda en el primero al retroceder desde el principio", () => {
+    expect(destinoArticulo(0, -1, 5)).toBe(0);
+  });
+
+  it("no abre material nunca visto", () => {
+    /* La frontera es el primer artículo sin cerrar: el sitio donde de verdad
+       está el trabajo. «Siguiente» llega hasta ahí y para. Entrar en un
+       artículo nuevo es lo que hace «Cerrar y seguir», y solo eso. */
+    expect(destinoArticulo(5, 1, 5)).toBe(5);
+  });
+
+  it("deja alcanzar la pantalla final cuando ya está todo cerrado", () => {
+    // Con los 12 cerrados la frontera vale 12, que es el índice de la pantalla
+    // de «Revisión terminada»: volver al primero y avanzar tiene que devolver.
+    expect(destinoArticulo(11, 1, 12)).toBe(12);
+  });
+
+  it("no se sale del lote aunque la frontera lo desborde", () => {
+    expect(destinoArticulo(12, 1, 12)).toBe(12);
   });
 });

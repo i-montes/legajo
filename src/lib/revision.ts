@@ -151,3 +151,20 @@ export function siguienteMencion(candidatas: Mencion[], enfocada: string | null)
   const actual = orden.findIndex((m) => m.mid === enfocada);
   return orden[actual < 0 ? 0 : (actual + 1) % orden.length].mid;
 }
+
+/** A qué artículo lleva un paso de navegación, sin pasar de la frontera.
+ *
+ *  `frontera` es el índice del primer artículo sin cerrar: el sitio donde está
+ *  el trabajo. Todo lo que queda detrás ya se anotó y se dio por terminado, y
+ *  volver sobre ello es legítimo —al hacer anotable el título con `pi = -1`,
+ *  los artículos cerrados antes se quedaron sin esa marca—. Lo que no es
+ *  legítimo es que «siguiente» empuje hacia adelante y abra un artículo que
+ *  nunca se ha visto: entrar en material nuevo lo decide «Cerrar y seguir»,
+ *  que es el único gesto que da un artículo por terminado.
+ *
+ *  Cuando está todo cerrado la frontera vale `total`, que es justamente el
+ *  índice de la pantalla de «Revisión terminada»: así sigue siendo alcanzable.
+ */
+export function destinoArticulo(i: number, d: number, frontera: number): number {
+  return Math.max(0, Math.min(frontera, i + d));
+}

@@ -73,7 +73,11 @@ export function useCronometro(activoInicial = true) {
     contando,
     poner: (s: number) => setSegundos(s),
     alternar: () => { setCorrer((v) => !v); ultimoToque.current = Date.now(); setInactivo(false); },
-    reiniciar: (s = 0) => { setSegundos(s); setCorrer(true); ultimoToque.current = Date.now(); setInactivo(false); },
+    /* `activo` en falso deja el reloj puesto en la cifra ya medida pero sin
+       contar. Es lo que hace falta al volver sobre un artículo ya cerrado:
+       su medición está tomada y sumarle los minutos de un repaso posterior
+       falsearía la mediana, que es la única cifra que la fase produce. */
+    reiniciar: (s = 0, activo = true) => { setSegundos(s); setCorrer(activo); ultimoToque.current = Date.now(); setInactivo(false); },
   };
 }
 
