@@ -38,6 +38,30 @@
 //! brazo. La prueba `ningun_comando_fuera_de_la_lista_es_alcanzable`, más
 //! abajo, lee el código fuente real de `commands.rs` y comprueba que ningún
 //! nombre fuera de `EXPUESTOS` llega a ejecutarse.
+//!
+//! ## La trampa de `grafo_evidencia`
+//!
+//! De los 16 comandos expuestos, `grafo_evidencia` es el único cuyos
+//! argumentos no son identificadores de fila: `a` y `b` son el **texto
+//! canonicalizado de la entidad**, es decir, lo que la columna
+//! `anotaciones.texto` guarda después de pasar por el mapa de canónicos —no
+//! `a_mid`/`b_mid`, que son las columnas que de verdad identifican una
+//! mención en la tabla `relaciones`. Quien escriba un cliente nuevo y no haya
+//! leído `Db::grafo_evidencia` (en `core/src/db.rs`, la fuente de verdad de
+//! esta semántica) tiene toda la razón del mundo para asumir lo contrario: en
+//! cualquier otro comando de esta lista, lo que se pasa son identificadores.
+//!
+//! El problema no es solo que sea fácil equivocarse, sino que equivocarse no
+//! avisa. La consulta hace `JOIN anotaciones ma ON … AND ma.mid = r.a_mid` y
+//! compara `ma.texto` contra el parámetro `a` con `quiere()`; si `a` lleva un
+//! `mid` en vez de un texto canónico, esa comparación de cadenas
+//! simplemente no encuentra ninguna fila. No hay tipo, ni validación, ni
+//! error que lo detecte: la respuesta es `200 {"ok": []}`, exactamente la
+//! misma que daría una relación que de verdad no tiene evidencia. El
+//! frontend actual (`src/lib/ipc.ts`, función `grafoEvidencia`) lo llama
+//! bien, porque le pasa `r.a`/`r.b` de una `AristaGrafo` que ya salió
+//! canonicalizada de `grafo_relaciones`; esto no es un bug de hoy, es una
+//! trampa a la espera de un cliente que no exista todavía.
 use crate::commands::{self, AppState};
 use legajo_core::db::{Db, Mencion, RelacionFila};
 use legajo_core::{Error, Result};
@@ -423,6 +447,16 @@ struct ArgsGuardarSesion {
     lote_id: Option<i64>,
 }
 
+/// Cuerpo de `POST /api/grafo_evidencia`.
+///
+/// `a` y `b` deben llevar el **texto canonicalizado de la entidad** —el que
+/// guarda `anotaciones.texto`—, no `a_mid`/`b_mid` de la tabla `relaciones`.
+/// Si alguien pone un `mid` en cualquiera de los dos campos, la petición no
+/// falla: un `mid` deserializa como `String` sin ningún problema, así que no
+/// hay validación de tipo ni de forma que lo detecte. Lo que se recibe es un
+/// `200 {"ok": []}`, indistinguible de una relación que de verdad no tiene
+/// evidencia. Ver la sección «La trampa de `grafo_evidencia`» al principio
+/// de este archivo y `Db::grafo_evidencia` en `core/src/db.rs`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ArgsGrafoEvidencia {
@@ -452,6 +486,10 @@ pub(crate) const EXPUESTOS: &[&str] = &[
     "categorias_del_lote",
     "guardar_sesion",
     "cargar_sesion",
+    // Trampa (ver «La trampa de `grafo_evidencia`» arriba, en el docstring
+    // del módulo, y `ArgsGrafoEvidencia` abajo): `a`/`b` van en texto
+    // canonicalizado, no como `a_mid`/`b_mid`. Pasar un mid no falla, da
+    // `{"ok": []}` igual que una relación sin evidencia de verdad.
     "grafo_evidencia",
 ];
 

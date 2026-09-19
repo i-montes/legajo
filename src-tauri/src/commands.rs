@@ -1356,6 +1356,12 @@ pub async fn decidir_par(
 }
 
 /// Los artículos y párrafos de los que sale una relación del grafo.
+///
+/// `a` y `b` son el texto canonicalizado de la entidad (el que guarda
+/// `anotaciones.texto`), no `a_mid`/`b_mid` de la tabla `relaciones`. Pasar
+/// un mid en su lugar no produce ningún error —también deserializa como
+/// `String`—, solo una lista vacía, igual que una relación sin evidencia de
+/// verdad. Ver `Db::grafo_evidencia` en `core/src/db.rs`.
 pub(crate) async fn grafo_evidencia_impl(
     db: Arc<Db>, lote_id: i64, a: String, b: String, predicado: String,
 ) -> Result<Vec<legajo_core::db::Evidencia>> {

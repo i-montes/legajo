@@ -62,6 +62,77 @@ Y tres niveles de autenticación, empezando por el que no pide nada:
    propio `/wp-json`. Funciona en cualquier instalación, sin registrar nada.
 2. **OAuth de WordPress.com.** Solo para sitios `.com` o con Jetpack.
 
+## Trabajar desde otra máquina
+
+### Para qué sirve
+
+Las anotaciones viven en el SQLite de una sola máquina. El modo servidor
+permite corregirlas desde otra de la misma red local sin mover ni copiar esa
+base: la que tiene el archivo se queda quieta y la otra se conecta por HTTP.
+
+### En la máquina que tiene la base
+
+El panel "Servir a otro computador" se abre desde un botón al final de la
+barra lateral. Al encender el servidor, muestra la dirección de red local, el
+puerto, el token —se genera la primera vez y se guarda en la propia base, así
+que apagar y volver a encender no lo cambia— y una cadena de conexión que
+junta los tres datos para pegar de una vez en la otra máquina.
+
+**Mientras sirve, esa ventana deja de anotar.** La razón es concreta:
+`guardar_anotacion` borra e inserta las anotaciones y relaciones del artículo
+entero en cada guardado, no solo lo que cambió. Si las dos ventanas
+escribieran a la vez sobre el mismo artículo, la que cerrara después se
+llevaría por delante, sin avisar, el trabajo que la otra acababa de guardar.
+
+### En el otro computador
+
+Desde el paso 1 (Conexión), el enlace "conectarme a otra máquina para
+corregir, en vez de esta" abre el formulario de conexión remota: se pega ahí
+la cadena de conexión completa —autocompleta los tres campos— o se teclean a
+mano, y se valida contra el servidor antes de dejar guardar nada.
+
+Conectada así, la app deja de ser el recorrido de ocho pasos y se reduce a
+dos pantallas: Revisión y Grafo. El resto —conexión y configuración del
+archivo, censo, catálogo de modelos, extracción— no está disponible, porque
+son operaciones que ya hizo la máquina que tiene el archivo y que tocan
+WordPress, disco o red de esa máquina directamente.
+
+### Qué se expone y qué no
+
+El servidor solo despacha los 16 comandos de anotación de la lista
+`EXPUESTOS` (en `src-tauri/src/servidor.rs`): `muestra`, `anotacion`,
+`guardar_anotacion`, `cerrar_articulo`, `apuntar_tiempo`, `tiempo_articulo`,
+`descartar_tiempo`, `tiempos_dudosos`, `avance_anotacion`,
+`reanudar_anotacion`, `lexico`, `lotes`, `categorias_del_lote`,
+`guardar_sesion`, `cargar_sesion` y `grafo_evidencia`. Credenciales, censo,
+catálogo de modelos y extracción quedan fuera a propósito: son las
+operaciones que tocan WordPress, disco o red de la máquina que tiene el
+archivo, y no tienen nada que hacer respondiendo a una petición remota. Una
+prueba, `ningun_comando_fuera_de_la_lista_es_alcanzable` (en el mismo
+archivo), falla si algún comando fuera de esa lista resulta alcanzable por
+HTTP.
+
+### Límites, con honestidad
+
+- El token viaja en claro por HTTP: razonable en una red doméstica, no en una
+  compartida con desconocidos.
+- El servidor se ata a una sola interfaz —la de la ruta por defecto del
+  sistema, detectada sola— y no hay forma de elegir otra desde la app.
+- No hay compresión: la respuesta más pesada, `muestra` con los artículos de
+  calibración de un lote (unos 466 KB), viaja tal cual.
+
+### Si algo no conecta
+
+1. Comprueba que el servidor siga encendido en la otra máquina: el panel lo
+   dice.
+2. Comprueba que la dirección tecleada sea la que muestra el panel **ahora
+   mismo**: se genera de nuevo en cada encendido.
+3. Comprueba que las dos máquinas estén en la misma red local.
+4. Comprueba que el token pegado sea el vigente, no uno de un encendido
+   anterior.
+5. Comprueba que ningún cortafuegos —de la máquina o del router— bloquee el
+   puerto que muestra el panel.
+
 ## Desarrollo
 
 ```bash
