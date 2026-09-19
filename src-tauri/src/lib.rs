@@ -1,7 +1,9 @@
 mod commands;
+pub mod servidor;
 
 use commands::AppState;
 use legajo_core::{Db, Http};
+use servidor::ServidorState;
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -30,6 +32,7 @@ pub fn run() {
                 extrayendo: Default::default(),
                 extraccion_cancelar: Default::default(),
             });
+            app.manage(ServidorState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +91,9 @@ pub fn run() {
             commands::extrayendo,
             commands::avance_extraccion,
             commands::categorias_del_lote,
+            servidor::servir_estado,
+            servidor::servir_iniciar,
+            servidor::servir_detener,
         ])
         .run(tauri::generate_context!())
         .expect("no se pudo iniciar Legajo");
