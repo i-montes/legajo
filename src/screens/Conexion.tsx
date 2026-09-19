@@ -9,6 +9,7 @@ import type { ConexionGuardada, Discovery, Identidad, PasoAutorizacion, SesionRe
 import type { EstadoApp } from "../App";
 import { nombreEnFrase, pasoDe, type Paso } from "../contenido/pasos";
 import { completar } from "../lib/correo";
+import ConexionRemota from "./ConexionRemota";
 
 type Fase = "reposo" | "verificando" | "conectado" | "error";
 
@@ -127,6 +128,13 @@ export default function Conexion({
   const [faseConexion, setFaseConexion] = useState("normalizando");
   const [errorCred, setErrorCred] = useState<string | null>(null);
   const [comoSacarla, setComoSacarla] = useState(false);
+  /* La otra puerta de entrada: en vez de conectar un archivo aquí, trabajar
+     contra la base que ya tiene otra máquina, por red local. Vive en esta
+     pantalla porque es «donde hoy se configura la conexión» — pero es un
+     formulario aparte, no una variación del de arriba: no comparten ni un
+     campo. Al validar, `ConexionRemota` activa el modo remoto por su cuenta
+     y la app entera cambia de pantalla sola. */
+  const [modoPantalla, setModoPantalla] = useState<"local" | "remoto">("local");
 
 
   const cargarGuardado = useCallback(() => {
@@ -237,12 +245,26 @@ export default function Conexion({
         <h1 style={{ fontFamily: "var(--font-serif-display)", fontWeight: 500, fontVariationSettings: "var(--fraunces-display)", fontSize: 34, lineHeight: 1.15, letterSpacing: "-.4px", margin: "0 0 10px" }}>
           {pasoDe("conexion")!.titulo}
         </h1>
-        <p style={{ margin: "0 0 40px", fontSize: 14.5, lineHeight: 1.6, color: "var(--t2)", maxWidth: "36ch" }}>
-          {guardado && fase !== "conectado"
-            ? "Hay un archivo conectado en este computador."
-            : "La dirección del sitio y el correo con el que entras a su WordPress. Legajo averigua el resto."}
+        <p style={{ margin: "0 0 24px", fontSize: 14.5, lineHeight: 1.6, color: "var(--t2)", maxWidth: "36ch" }}>
+          {modoPantalla === "remoto"
+            ? "Trabaja contra la base de otra máquina, por tu red local, como si fuera esta."
+            : guardado && fase !== "conectado"
+              ? "Hay un archivo conectado en este computador."
+              : "La dirección del sitio y el correo con el que entras a su WordPress. Legajo averigua el resto."}
         </p>
 
+        {modoPantalla === "local" && (
+          <div style={{ marginBottom: 24 }}>
+            <Boton variante="enlace" onClick={() => setModoPantalla("remoto")}>
+              conectarme a otra máquina para corregir, en vez de esta
+            </Boton>
+          </div>
+        )}
+
+        {modoPantalla === "remoto" && <ConexionRemota onVolver={() => setModoPantalla("local")} />}
+
+        {modoPantalla === "local" && (
+        <>
         {/* El medio conectado. Es lo primero y casi lo único que se ve cuando
             ya hay uno: la app trabaja con un archivo a la vez, así que la
             pantalla de conexión deja de ser un formulario y pasa a ser la
@@ -597,6 +619,8 @@ export default function Conexion({
             El archivo nunca sale de este computador.
           </span>
         </div>
+        </>
+        )}
 
       </div>
     </div>

@@ -15,7 +15,13 @@ import Revision from "./screens/Revision";
 import Extraccion from "./screens/Extraccion";
 import Grafo from "./screens/Grafo";
 import Fundamentos from "./screens/Fundamentos";
+import Servir from "./screens/Servir";
+import { Aviso, Boton } from "./ui";
 import { cargarSesion, guardarSesion, olvidarSesion } from "./lib/ipc";
+import {
+  olvidarConexionRemota, useConexionRemotaGuardada, useModoRemoto, volverAModoLocal,
+} from "./lib/conexionRemota";
+import type { ConexionRemota } from "./lib/conexionRemota";
 import type { Discovery, SesionRecuperada } from "./types";
 
 /* Durante los tres primeros pasos la app se presenta sin cromo: son pantallas
@@ -63,11 +69,27 @@ export default function App() {
      leer de la base ya está leído. */
   const [splash, setSplash] = useState(true);
   const [sesionPrevia, setSesionPrevia] = useState<SesionRecuperada | null>(null);
+  const [servirAbierto, setServirAbierto] = useState(false);
+  /* Trabajar contra la base de otra máquina, en vez de un archivo conectado
+     aquí. `useModoRemoto` es reactivo: cuando `ConexionRemota.tsx` activa el
+     modo, esta pantalla se entera sola y cambia de aspecto sin que nadie más
+     tenga que avisarle. */
+  const modoRemoto = useModoRemoto();
+  const conexionRemota = useConexionRemotaGuardada();
 
   /* Se recupera dónde quedó la sesión anterior. El trabajo ya estaba a salvo en
      la base; lo que faltaba era volver a él sin repetir la conexión, el censo y
-     la navegación cada vez que se cierra la ventana. */
+     la navegación cada vez que se cierra la ventana.
+
+     En modo remoto esto se salta entero: `llamar` mandaría esta consulta a la
+     máquina remota, y guardar aquí su respuesta —su `connectionId`, su
+     `loteId`— dejaría el estado de esta ventana apuntando a los identificadores
+     de OTRA base. Si más tarde se «vuelve a esta máquina», ese estado se
+     usaría con `invoke` local, contra una base donde esos números pueden no
+     significar nada o, peor, significar otra cosa. `PantallaRemota` hace su
+     propia lectura de la sesión, aparte, mientras dura el modo remoto. */
   useEffect(() => {
+    if (modoRemoto) { setRestaurando(false); return; }
     cargarSesion()
       .then((s) => {
         if (s && s.sitio && s.connection_id != null) {
@@ -82,6 +104,7 @@ export default function App() {
       })
       .catch(() => {})
       .finally(() => setRestaurando(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* Cada movimiento se anota. Es una fila; no hace falta esperar a nada.
@@ -92,13 +115,17 @@ export default function App() {
      nunca se hubiera usado. Se avisa una sola vez, no en cada tecla. */
   const falloSesion = useRef(false);
   useEffect(() => {
-    if (restaurando) return;
+    // `paso` y `progreso` son el recorrido de ocho pasos de ESTA ventana, no
+    // de la base: en modo remoto no tienen ningún significado que valga la
+    // pena guardar, y escribirlos pisaría el «por dónde iba» que la máquina
+    // que sí tiene el archivo guardó allí para sí misma.
+    if (restaurando || modoRemoto) return;
     guardarSesion(conexionId, paso, progreso, taxonomia, loteId).catch((e) => {
       if (falloSesion.current) return;
       falloSesion.current = true;
       setAviso(`No se pudo guardar por dónde vas, así que al reabrir empezarás de nuevo: ${e}`);
     });
-  }, [restaurando, conexionId, paso, progreso, taxonomia, loteId]);
+  }, [restaurando, conexionId, paso, progreso, taxonomia, loteId, modoRemoto]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-tema", tema);
@@ -142,6 +169,27 @@ export default function App() {
     [sitio, conexionId, taxonomia, loteId, progreso, avanzar, retroceder, abrirAyuda]
   );
 
+  /* Trabajando contra otra máquina, la app entera cambia de aspecto: nada del
+     cromo de ocho pasos —conexión, censo, modelos, alcance, calibración,
+     extracción— tiene sentido cuando el archivo, el censo y el extractor son
+     de otra máquina. Se reemplaza el árbol entero por `PantallaRemota` en vez
+     de intentar que las ocho pantallas se den cuenta cada una por su cuenta
+     de que no aplican. */
+  if (modoRemoto && conexionRemota) {
+    return (
+      <PantallaRemota
+        estado={estado}
+        conexion={conexionRemota}
+        tema={tema}
+        setTema={setTema}
+        setConexionId={setConexionId}
+        setTaxonomia={setTaxonomia}
+        setLoteId={setLoteId}
+        setSitio={setSitio}
+      />
+    );
+  }
+
   const conCromo = !SIN_CROMO.includes(paso) || progreso >= 3;
   const ayuda = paso === "fundamentos" ? null : AYUDA[paso];
 
@@ -155,6 +203,7 @@ export default function App() {
       {/* Fuera de la cabecera y de las pantallas: la cabecera no existe en los
           tres primeros pasos y el aviso tiene que poder verse en los ocho. */}
       {!splash && <Actualizacion />}
+      {servirAbierto && <Servir onCerrar={() => setServirAbierto(false)} />}
       {conCromo && (
         <header style={{ flex: "0 0 auto", height: 38, display: "flex", alignItems: "center", gap: 16, padding: "0 14px", background: "var(--superficie)", borderBottom: "1px solid var(--borde)", userSelect: "none" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -259,6 +308,15 @@ export default function App() {
               onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}
             >
               Fundamentos del sistema
+            </button>
+            <button
+              onClick={() => setServirAbierto(true)}
+              title="Enciende un servidor en esta máquina para que otra corrija por red contra esta misma base."
+              style={{ appearance: "none", border: 0, background: "transparent", textAlign: "left", padding: "8px 10px", fontSize: 12.5, color: "var(--t3)", cursor: "pointer" }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t1)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}
+            >
+              Servir a otro computador
             </button>
             <button
               onClick={() => {
@@ -477,5 +535,119 @@ function BotonTema({ tema, onClick, borde }: { tema: string; onClick: () => void
     >
       {tema === "claro" ? "Modo oscuro" : "Modo claro"}
     </button>
+  );
+}
+
+/* ── Modo remoto ───────────────────────────────────────────────────────────
+   Trabajando contra la base de otra máquina no hay archivo que conectar, ni
+   censo, ni modelos, ni extracción que configurar: todo eso ya lo hizo la
+   máquina que tiene el archivo. Lo único que tiene sentido aquí es corregir
+   —Revisión— y mirar el resultado —Grafo—, así que la app deja de ser un
+   recorrido de ocho pasos y pasa a ser estas dos pantallas nada más.
+
+   El indicador de arriba a la derecha no es decorativo: confundir esta
+   ventana con la máquina local sería anotar creyendo que se escribe en la
+   base remota cuando en realidad no hay ninguna escritura local posible —eso
+   ya lo impide `lib/servidor.ts`—, pero el reverso también es un desastre:
+   creer que se está en modo local y no encontrar los cambios porque en
+   realidad se estaba corrigiendo la base de otra persona. */
+function PantallaRemota({
+  estado, conexion, tema, setTema, setConexionId, setTaxonomia, setLoteId, setSitio,
+}: {
+  estado: EstadoApp;
+  conexion: ConexionRemota;
+  tema: "claro" | "oscuro";
+  setTema: (t: "claro" | "oscuro") => void;
+  setConexionId: (id: number | null) => void;
+  setTaxonomia: (t: string | null) => void;
+  setLoteId: (id: number | null) => void;
+  setSitio: (d: Discovery | null) => void;
+}) {
+  const [pestana, setPestana] = useState<"revision" | "grafo">("revision");
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [intento, setIntento] = useState(0);
+  const [confirmarOlvido, setConfirmarOlvido] = useState(false);
+
+  useEffect(() => {
+    let cancelado = false;
+    setCargando(true);
+    setError(null);
+    cargarSesion()
+      .then((s) => {
+        if (cancelado) return;
+        if (s) {
+          setConexionId(s.connection_id);
+          setTaxonomia(s.taxonomia);
+          setLoteId(s.lote_id);
+          if (s.sitio) setSitio(s.sitio);
+        }
+      })
+      .catch((e) => { if (!cancelado) setError(String(e).replace(/^Error:\s*/, "")); })
+      .finally(() => { if (!cancelado) setCargando(false); });
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conexion, intento]);
+
+  return (
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--bg)", color: "var(--t1)", overflow: "hidden" }}>
+      <header style={{ flex: "0 0 auto", height: 38, display: "flex", alignItems: "center", gap: 16, padding: "0 14px", background: "var(--superficie)", borderBottom: "1px solid var(--borde)", userSelect: "none" }}>
+        <span style={{ fontFamily: "var(--font-serif-display)", fontSize: 16, letterSpacing: ".2px" }}>Legajo</span>
+        <nav style={{ display: "flex", gap: 4 }}>
+          {(["revision", "grafo"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPestana(p)}
+              style={{
+                appearance: "none", border: 0, borderRadius: 6, cursor: "pointer",
+                padding: "5px 11px", fontSize: 12.5,
+                background: pestana === p ? "var(--hundida)" : "transparent",
+                color: pestana === p ? "var(--t1)" : "var(--t3)",
+              }}
+            >
+              {p === "revision" ? "Revisión" : "Grafo"}
+            </button>
+          ))}
+        </nav>
+        <div style={{ flex: 1 }} />
+        {/* El indicador permanente: dirección y puerto, siempre a la vista,
+            con un color que no se confunde con el verde de «todo corre en
+            este computador» que usa la ventana local. */}
+        <div
+          title={`Trabajando por red contra ${conexion.direccion}:${conexion.puerto}. Nada se anota en este computador.`}
+          style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--advertencia)", letterSpacing: ".2px" }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--advertencia)", display: "block" }} />
+          Remoto · {conexion.direccion}:{conexion.puerto}
+        </div>
+        <BotonTema tema={tema} onClick={() => setTema(tema === "claro" ? "oscuro" : "claro")} borde />
+        <Boton variante="texto" onClick={() => volverAModoLocal()}>trabajar en esta máquina</Boton>
+        {!confirmarOlvido ? (
+          <Boton variante="texto" onClick={() => setConfirmarOlvido(true)}>olvidar</Boton>
+        ) : (
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11.5, color: "var(--t3)" }}>¿Olvidar dirección y token?</span>
+            <Boton variante="secundario" onClick={() => olvidarConexionRemota()}>Olvidar</Boton>
+            <Boton variante="texto" onClick={() => setConfirmarOlvido(false)}>cancelar</Boton>
+          </span>
+        )}
+      </header>
+
+      <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {cargando && (
+          <div style={{ padding: 32 }}>
+            <p className="t-cuerpo" style={{ color: "var(--t3)" }}>Conectando con la base remota…</p>
+          </div>
+        )}
+        {!cargando && error && (
+          <div style={{ padding: 32, maxWidth: 520 }}>
+            <Aviso estado="error">{error}</Aviso>
+            <Boton variante="secundario" onClick={() => setIntento((i) => i + 1)}>Reintentar</Boton>
+          </div>
+        )}
+        {!cargando && !error && pestana === "revision" && <Revision estado={estado} />}
+        {!cargando && !error && pestana === "grafo" && <Grafo estado={estado} />}
+      </main>
+    </div>
   );
 }
