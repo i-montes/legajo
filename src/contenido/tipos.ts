@@ -24,7 +24,7 @@ export const colorTipo = (k: string) =>
 
 /* ── Predicados ───────────────────────────────────────────────────────────
    Cada uno declara entre qué tipos tiene sentido. El menú se filtra por los
-   tipos de las dos marcas elegidas, así que nunca se ven los veintiséis a
+   tipos de las dos marcas elegidas, así que nunca se ven los veintisiete a
    la vez ni se puede afirmar que un monto ocupa un cargo.
 
    `apoya a` y `se opone a` son, en un archivo de poder colombiano, las dos
@@ -36,7 +36,7 @@ export const colorTipo = (k: string) =>
    las mismas restricciones para no proponer lo imposible. Las dos —y la de
    `sidecar/vocabulario.py`, que es la que aprendió el modelo— las reescribe
    `sidecar/generar_vocabulario.py`; hay una prueba en Rust que falla si se
-   separan. Son 26 predicados en siete familias: cuando los que encajan entre dos
+   separan. Son 27 predicados en siete familias: cuando los que encajan entre dos
    tipos pasan de nueve, el menú pide primero la familia. */
 
 export interface Predicado {
@@ -57,7 +57,7 @@ const O = "organizacion";
 const C = "cargo";
 const L = "lugar";
 const N = "ley";
-// «monto» y «obra» no admiten ninguno de los 26 predicados finos; sin uso en
+// «monto» y «obra» no admiten ninguno de los 27 predicados finos; sin uso en
 // la tabla, sus siglas (M, B) se quitaron para que tsc no las marque como
 // muertas.
 
@@ -80,9 +80,10 @@ const NOTAS: Record<string, string> = {
   "aspira al cargo": "Se postula, suena o busca el cargo. Marcarlo como «ocupa» sería falso.",
   "nombró a": "Quien nombra puede ser una persona o una organización; el nombrado es una persona.",
   "sucedió a": "Reemplazó a otra persona en un cargo. De quien llega a quien se fue.",
-  "trabaja en": "Empleo o asesoría sin cargo nombrado. Si el texto da el cargo, usa «ocupa el cargo».",
+  "trabaja en": "Empleo o asesoría sin cargo nombrado. Si el texto da el cargo, usa «ocupa el cargo». Dictar clase, ser decano o rector de una universidad es esto, no «estudió en».",
   "dirige": "Preside, gerencia o encabeza la organización.",
-  "miembro de": "Militancia en un partido o pertenencia a junta, comisión o colectivo. Un adjetivo («el liberal X») no basta.",
+  "miembro de": "Militancia en un partido o pertenencia a junta, comisión o colectivo. Un adjetivo («el liberal X») no basta. Ser alumno o egresado no es esto: usa «estudió en».",
+  "estudió en": "Cursó estudios en la institución: pregrado, posgrado, maestría, doctorado, o el título que obtuvo allí. Compatible con «trabaja en» hacia la misma organización si el texto también lo afirma.",
   "fundó": "Creó la organización.",
   "propietario de": "Dueño, accionista o socio de una empresa. Entre dos personas, usa «socio de».",
   "socio de": "Dos personas socias en un negocio. Si el socio es de una empresa, «propietario de».",
@@ -119,6 +120,7 @@ const TABLA: Omit<Predicado, "nota">[] = [
   { etiqueta: "trabaja en",       familia: "laboral",   desde: [P],       hasta: [O], },
   { etiqueta: "dirige",           familia: "laboral",   desde: [P],       hasta: [O], },
   { etiqueta: "miembro de",       familia: "laboral",   desde: [P],       hasta: [O], },
+  { etiqueta: "estudió en",       familia: "laboral",   desde: [P],       hasta: [O], },
   // Empresa y dinero
   { etiqueta: "fundó",            familia: "empresa",   desde: [P, O],    hasta: [O], },
   { etiqueta: "propietario de",   familia: "empresa",   desde: [P, O],    hasta: [O], },
