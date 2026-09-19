@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
+import { Aviso, Barra, Boton, Encabezado, Glifo, Latido, Lienzo, Rotulo } from "../ui";
 import { FAMILIAS, TIPOS, colorTipo, predicadosPara, sugerirInversa } from "../contenido/tipos";
 import type { Predicado } from "../contenido/tipos";
 import {
@@ -15,6 +15,8 @@ import {
 import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
 import { destinoArticulo, pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
+import { registrarFlushPendiente, useEpocaServidor, useSirviendo } from "../lib/servidor";
+import { useModoRemoto } from "../lib/conexionRemota";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
 
@@ -22,6 +24,16 @@ import type { EstadoApp } from "../App";
    el sitio donde se está y nada más, mientras que «Cerrar y seguir» —el botón
    con peso visual— es el único que da un artículo por terminado. Que no se
    parezcan es la mitad de la garantía de que no se confundan. */
+/** Si esta ventana puede escribir en la base ahora mismo.
+ *
+ *  `false` mientras esta máquina sirve esa misma base por red: `guardar_
+ *  anotacion` no fusiona, borra e inserta el artículo entero, así que si
+ *  esta ventana siguiera guardando por su cuenta pisaría sin aviso lo que la
+ *  otra máquina esté anotando. Es la función que gobierna el autoguardado, el
+ *  guardado de los diez segundos y el de `beforeunload`; se exporta aparte
+ *  para poder probarla sin montar el componente entero. */
+export const puedeEscribirLocalmente = (sirviendo: boolean): boolean => !sirviendo;
+
 const navBoton = (inactivo: boolean): CSSProperties => ({
   appearance: "none", background: "transparent", border: 0,
   color: inactivo ? "var(--borde)" : "var(--t3)",
@@ -44,6 +56,14 @@ const VIGENCIAS: Record<Vigencia, { glifo: string; ayuda: string }> = {
 
 export default function Revision({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
+  /* Servir y anotar son excluyentes (ver `lib/servidor.ts`): mientras esta
+     máquina sirve la base por red, esta pantalla deja de escribir y muestra
+     una pausa en su lugar. `epocaServidor` cambia en cada encendido y cada
+     apagado del servidor; se usa más abajo para forzar una recarga desde la
+     base al apagarlo, en vez de confiar en lo que hubiera en memoria. */
+  const sirviendo = useSirviendo();
+  const epocaServidor = useEpocaServidor();
+  const remoto = useModoRemoto();
   const [filas, setFilas] = useState<FilaAnotable[] | null>(null);
   const [i, setI] = useState(0);
   const [menciones, setMenciones] = useState<Mencion[]>([]);
@@ -180,33 +200,64 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
         setPreMarcadas(previas.length);
         setOrigen(previas.length > 0 ? "lexico" : null);
       });
+    /* `epocaServidor` entra aquí solo para forzar esta misma recarga al
+       apagar el servidor: mientras se sirve, esta pantalla no está montada
+       de forma editable (ver el retorno anticipado más abajo), así que la
+       reejecución que ocurre al encenderlo no tiene efecto visible. Al
+       apagarlo, en cambio, descarta cualquier cosa que hubiera en memoria y
+       trae de la base lo que de verdad quedó guardado — que puede haber
+       cambiado mientras otra máquina anotaba. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loteId, fila?.wp_id, lexico]);
+  }, [loteId, fila?.wp_id, lexico, epocaServidor]);
 
 
   // El guardado es automático: perder media hora de anotación por olvidar
   // pulsar un botón es inaceptable en un trabajo que se mide en horas.
+  //
+  // Mientras esta máquina sirve la base por red, este efecto no programa
+  // nada: `guardar_anotacion` borra y reinserta el artículo entero (ver
+  // `lib/servidor.ts`), y si esta ventana siguiera escribiendo por su cuenta
+  // pisaría sin aviso lo que la otra máquina esté anotando.
   useEffect(() => {
-    if (loteId == null || !fila) return;
+    if (loteId == null || !fila || !puedeEscribirLocalmente(sirviendo)) return;
     const t = setTimeout(() => {
       guardarAnotacion(loteId, fila.wp_id, menciones, relaciones).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [loteId, fila?.wp_id, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, menciones, relaciones, sirviendo]);
+
+  /* Con el mismo guardado —y por lo tanto expuesta al mismo riesgo de
+     pisar lo ajeno— se registra aquí la función que vacía lo pendiente justo
+     antes de que el servidor se encienda. Se mantiene siempre al día con las
+     últimas marcas, y se retira al desmontar o al quedarse sin artículo. */
+  useEffect(() => {
+    if (loteId == null || !fila) {
+      registrarFlushPendiente(null);
+      return () => registrarFlushPendiente(null);
+    }
+    const id = loteId, wp = fila.wp_id;
+    registrarFlushPendiente(() => guardarAnotacion(id, wp, menciones, relaciones));
+    return () => registrarFlushPendiente(null);
+  }, [loteId, fila, menciones, relaciones]);
 
   /* El cronómetro también se persiste cada diez segundos, sin marcar el
      artículo como terminado. Cerrar la ventana a mitad no debe borrar los
-     minutos ya puestos: son parte del coste real que la fase mide. */
+     minutos ya puestos: son parte del coste real que la fase mide.
+     Tampoco corre mientras se sirve: no hay reloj que medir si esta ventana
+     no está anotando. */
   useEffect(() => {
-    if (loteId == null || !fila || cerrado || reloj.estado !== "corriendo") return;
+    if (loteId == null || !fila || cerrado || reloj.estado !== "corriendo" || !puedeEscribirLocalmente(sirviendo)) return;
     const t = setInterval(() => {
       apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
     }, 10_000);
     return () => clearInterval(t);
-  }, [loteId, fila?.wp_id, cerrado, reloj.estado, crono, menciones.length]);
+  }, [loteId, fila?.wp_id, cerrado, reloj.estado, crono, menciones.length, sirviendo]);
 
   // Y una última vez al cerrar la ventana, para no perder los segundos sueltos.
+  // Mientras se sirve, tampoco: cerrar la ventana local no debe escribir por
+  // encima de lo que la máquina remota tenga en ese momento.
   useEffect(() => {
+    if (!puedeEscribirLocalmente(sirviendo)) return;
     const alSalir = () => {
       if (loteId == null || !fila) return;
       if (!cerrado) apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
@@ -214,7 +265,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     };
     window.addEventListener("beforeunload", alSalir);
     return () => window.removeEventListener("beforeunload", alSalir);
-  }, [loteId, fila?.wp_id, cerrado, crono, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, cerrado, crono, menciones, relaciones, sirviendo]);
 
   /* Moverse entre artículos guarda lo anotado pero NO registra un cierre.
      Antes, pasar de largo con J/K dejaba una medición de un segundo que entraba
@@ -561,6 +612,29 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
 
 
   // ── estados vacíos ─────────────────────────────────────────────────────
+  /* Servir y anotar son excluyentes: mientras esta máquina sirve la base por
+     red, esta pantalla no dibuja el editor —evita cualquier gesto que
+     terminara escribiendo, y no solo los tres efectos ya bloqueados arriba—.
+     Va antes que «cargando la muestra» a propósito: no tiene sentido reanudar
+     el reloj o pre-marcar nada sobre un artículo que ahora mismo no se puede
+     tocar desde aquí. */
+  if (sirviendo) {
+    return (
+      <Lienzo>
+        <Encabezado
+          paso="revision"
+          titulo="Anotación en pausa en este computador"
+          frase="Otra máquina está corrigiendo esta misma base ahora mismo. Para no perder su trabajo, esta ventana dejó de guardar aquí mientras el servidor esté encendido."
+          compacto
+        />
+        <Aviso estado="advertencia">
+          Apaga el servidor desde «Servir a otro computador» para volver a anotar en esta ventana.
+          Al apagarlo, este artículo se vuelve a leer de la base: lo que se haya corregido en la
+          otra máquina se verá aquí, no lo que hubiera antes de encenderlo.
+        </Aviso>
+      </Lienzo>
+    );
+  }
   if (filas === null) {
     return <Lienzo><p className="t-cuerpo" style={{ color: "var(--t3)" }}>Cargando la muestra…</p></Lienzo>;
   }
@@ -570,10 +644,14 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
         <Encabezado
           paso="revision"
           titulo="No hay nada que revisar todavía"
-          frase="La revisión corre sobre los artículos de calibración de un lote. Vuelve al alcance, crea el lote y deja que el extractor pase por ellos."
+          frase={
+            remoto
+              ? "Esta base todavía no tiene ningún lote con artículos de calibración."
+              : "La revisión corre sobre los artículos de calibración de un lote. Vuelve al alcance, crea el lote y deja que el extractor pase por ellos."
+          }
           compacto
         />
-        <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al alcance</Boton>
+        {!remoto && <Boton onClick={() => estado.avanzar(3, "alcance")}>Ir al alcance</Boton>}
       </Lienzo>
     );
   }
@@ -594,7 +672,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             diagnóstico en una cifra de coste real.
           </p>
           <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap", alignItems: "center" }}>
-            <Boton onClick={() => estado.avanzar(4, "calibracion")}>Calcular la calibración</Boton>
+            {!remoto && <Boton onClick={() => estado.avanzar(4, "calibracion")}>Calcular la calibración</Boton>}
             <Boton variante="enlace" onClick={() => setI(0)}>volver al primero</Boton>
           </div>
         </div>

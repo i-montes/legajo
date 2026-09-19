@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Boton, Encabezado, Glifo, Lienzo, Rotulo } from "../ui";
+import { Aviso, Boton, Encabezado, Glifo, Lienzo, Rotulo } from "../ui";
 import { TIPOS, colorTipo } from "../contenido/tipos";
+import { useModoRemoto } from "../lib/conexionRemota";
 import { decidirPar, deshacerResolucion, grafoDuplicados, grafoEntidades, grafoEvidencia, grafoRelaciones, grafoResumen, grafoSinNombrar, resolucionesDelLote } from "../lib/ipc";
 import type { AristaGrafo, Caso, Evidencia, NodoGrafo, Resolucion, ResumenGrafo, SinNombrar } from "../types";
 import type { EstadoApp } from "../App";
@@ -10,6 +11,7 @@ const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
 
 export default function Grafo({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
+  const remoto = useModoRemoto();
   const [res, setRes] = useState<ResumenGrafo | null>(null);
   const [ents, setEnts] = useState<NodoGrafo[]>([]);
   const [rels, setRels] = useState<AristaGrafo[]>([]);
@@ -66,7 +68,17 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   if (loteId == null || !res) {
     return (
       <Lienzo>
-        <Encabezado paso="grafo" frase={loteId == null ? "Falta elegir el alcance y procesar un lote." : "Cargando…"} compacto />
+        <Encabezado
+          paso="grafo"
+          frase={
+            loteId == null
+              ? remoto
+                ? "Esta base todavía no tiene ningún lote."
+                : "Falta elegir el alcance y procesar un lote."
+              : "Cargando…"
+          }
+          compacto
+        />
       </Lienzo>
     );
   }
@@ -77,10 +89,14 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
         <Encabezado
           paso="grafo"
           titulo="Todavía no hay nada extraído"
-          frase="El grafo se construye con lo que el extractor encuentra y tú confirmas. Corre la extracción sobre el lote y vuelve."
+          frase="El grafo se construye con lo que el extractor encuentra y tú confirmas."
           compacto
         />
-        <Boton onClick={() => estado.avanzar(6, "extraccion")}>Ir a la extracción</Boton>
+        {remoto ? (
+          <Aviso estado="neutro">La extracción se hace desde la máquina que tiene el archivo, no por red.</Aviso>
+        ) : (
+          <Boton onClick={() => estado.avanzar(6, "extraccion")}>Ir a la extracción</Boton>
+        )}
       </Lienzo>
     );
   }

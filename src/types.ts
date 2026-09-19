@@ -501,3 +501,14 @@ export interface ResumenGrafo {
   entidades_una_vez: number;
   relaciones: number;
 }
+
+// ── Servir la base a otra máquina (core/src-tauri, comandos `servir_*`) ────
+/** Aún sin implementar del lado de Rust al escribir esto: el contrato de
+ *  `servir_estado` / `servir_iniciar` / `servir_detener`. */
+export interface EstadoServidor {
+  activo: boolean;
+  puerto: number;
+  token: string;
+  /** Direcciones IP de esta máquina en la red local, para copiar en la otra. */
+  direcciones: string[];
+}
