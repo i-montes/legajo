@@ -5,6 +5,10 @@ description = "Muestreo y analisis de archivos periodisticos en WordPress"
 authors = ["Ivan Montes"]
 edition = "2021"
 rust-version = "1.77"
+# Desde que existe `src/bin/servidor_debug.rs` el paquete tiene dos binarios;
+# sin esto `cargo run` (y por tanto `tauri dev`, que lo invoca sin `--bin`)
+# no sabe cuál lanzar y aborta con "could not determine which binary to run".
+default-run = "legajo"
 
 [lib]
 name = "legajo_lib"
