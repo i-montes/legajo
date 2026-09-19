@@ -9,6 +9,8 @@
  * Vacía`, `Los Urabeños`— y quien anota sabe más del texto que esta heurística.
  */
 
+import type { Mencion } from "../types";
+
 export interface Aviso {
   texto: string;
   /** Recorte propuesto, si lo hay. */
@@ -125,4 +127,27 @@ export function revisar(texto: string, tipo: string): Aviso[] {
   }
 
   return avisos;
+}
+
+/** La siguiente aparición de una entidad, para recorrer sus repeticiones desde
+ *  el panel.
+ *
+ *  En un artículo largo «Santos» sale cinco veces repartidas por toda la
+ *  página, y la fila del panel las agrupa en una sola línea: sin un recorrido,
+ *  el clic solo podría llevar a una de las cinco. Cada clic avanza una y al
+ *  final vuelve al principio.
+ *
+ *  El orden es el del documento —párrafo y posición dentro de él—, no el de
+ *  `menciones`, que es el orden en que se fueron marcando: saltar a la tercera
+ *  aparición en el primer clic desorientaría.
+ *
+ *  Si `enfocada` no está entre las candidatas, se empieza por la primera. Eso
+ *  cubre los dos casos en que preguntar «cuál va después» no tiene respuesta:
+ *  venir de otra entidad, y que la marca anterior se haya borrado con ⌫.
+ */
+export function siguienteMencion(candidatas: Mencion[], enfocada: string | null): string | null {
+  const orden = [...candidatas].sort((a, b) => a.pi - b.pi || a.ini - b.ini);
+  if (orden.length === 0) return null;
+  const actual = orden.findIndex((m) => m.mid === enfocada);
+  return orden[actual < 0 ? 0 : (actual + 1) % orden.length].mid;
 }

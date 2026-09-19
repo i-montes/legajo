@@ -13,7 +13,7 @@ import {
 } from "../lib/propagacion";
 import type { Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
-import { pareceDescripcion, revisar, vigenciaSugerida } from "../lib/revision";
+import { pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
 
@@ -62,6 +62,16 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const [relResaltada, setRelResaltada] = useState<string[]>([]);
   const [hechos, setHechos] = useState(0);
   const lienzo = useRef<HTMLDivElement>(null);
+  /* Clic en una fila del panel: lleva a esa entidad en el texto y la realza un
+     momento. Navegar no es seleccionar —no toca `relSel`, ni `auto`, ni las
+     menciones—, así que el panel se puede recorrer entero sin modificar nada.
+
+     El cursor del recorrido va en un ref y no en estado porque no cambia nada
+     de lo que se ve: lo que se ve es el realce, y ese se apaga solo mientras el
+     cursor sigue donde quedó. Si viviera en el mismo estado, apagar el realce
+     rebobinaría el recorrido a la primera aparición en cada clic. */
+  const recorrido = useRef<string | null>(null);
+  const [realzada, setRealzada] = useState<{ mid: string; clic: number } | null>(null);
 
   const fila = filas?.[i];
   const parrafos = useMemo(
@@ -102,6 +112,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     const wp = fila.wp_id;
     setRelSel([]); setPendiente(null); setPunto(null); setRelPicker(false); setCrudo(false);
     setUltimaPropagacion(null); setOrigen(null);
+    recorrido.current = null; setRealzada(null);
     Promise.all([cargarAnotacion(loteId, wp), tiempoArticulo(loteId, wp).catch(() => 0)])
       .then(([[ms, rs], segundos]) => {
         setRelaciones(rs);
@@ -430,6 +441,27 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     [menciones]
   );
 
+  /* Cada clic en la fila avanza a la siguiente aparición y, al llegar al
+     final, vuelve a la primera: en un artículo largo «Santos ×4» está repartido
+     por toda la página y una sola de las cuatro no serviría de mucho. */
+  const irAMencion = useCallback((mids: string[]) => {
+    const mid = siguienteMencion(menciones.filter((m) => mids.includes(m.mid)), recorrido.current);
+    recorrido.current = mid;
+    // El contador distingue dos clics seguidos sobre una entidad que solo sale
+    // una vez: sin él el estado no cambiaría y no se volvería a realzar.
+    if (mid) setRealzada((ant) => ({ mid, clic: (ant?.clic ?? 0) + 1 }));
+  }, [menciones]);
+
+  useEffect(() => {
+    if (!realzada) return;
+    lienzo.current
+      ?.querySelector(`[data-mid="${realzada.mid}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    // El realce dice «está aquí», no es un estado en el que quedarse.
+    const t = setTimeout(() => setRealzada(null), 1600);
+    return () => clearTimeout(t);
+  }, [realzada]);
+
   /* Pinta un párrafo con sus marcas, incluidas las anidadas.
      El subrayado de cada nivel se separa un poco del de dentro, para que
      «Antioquia» dentro de «Gobernador de Antioquia» se distingan a la vista. */
@@ -440,6 +472,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       const c = colorTipo(m.tipo);
       const activa = relSel.includes(m.mid);
       const enRelacion = relResaltada.includes(m.mid);
+      // Un baño de color en vez de un cerco: los dos cercos ya significan otra
+      // cosa —elegida para relacionar, y las dos puntas de una relación—, y
+      // «te traje hasta aquí» no es ninguna de las dos.
+      const recienTraida = realzada?.mid === m.mid;
       return (
         <span
           key={m.mid}
@@ -456,9 +492,17 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
             // por revisar sin tener que leer.
             borderBottom: `1.5px ${m.auto ? "dotted" : "solid"} ${c}`,
             paddingBottom: hondura * 3,
-            background: `color-mix(in srgb, ${c} var(--marca-alfa), transparent)`,
-            boxShadow: activa ? `0 0 0 2px ${c}` : enRelacion ? "0 0 0 2px var(--acento)" : "none",
-            borderRadius: activa || enRelacion ? 2 : 0,
+            background: `color-mix(in srgb, ${c} ${recienTraida ? "55%" : "var(--marca-alfa)"}, transparent)`,
+            boxShadow: activa
+              ? `0 0 0 2px ${c}`
+              : enRelacion
+                ? "0 0 0 2px var(--acento)"
+                : recienTraida
+                  ? `0 0 0 5px color-mix(in srgb, ${c} 30%, transparent)`
+                  : "none",
+            borderRadius: activa || enRelacion || recienTraida ? 2 : 0,
+            // Para que el realce se apague desvaneciéndose y no de un tirón.
+            transition: "background .35s ease, box-shadow .35s ease",
             cursor: "pointer",
           }}
         >
@@ -827,7 +871,16 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     {g.filas.map((f, k) => (
-                      <div key={f.mids[0] ?? k} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", padding: "3px 6px" }}>
+                      <div
+                        key={f.mids[0] ?? k}
+                        onClick={() => irAMencion(f.mids)}
+                        title={f.mids.length > 1
+                          ? `Llevar a la siguiente de sus ${f.mids.length} apariciones en el texto`
+                          : "Llevar a su marca en el texto"}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hundida)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                        style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", padding: "3px 6px", borderRadius: 4, cursor: "pointer" }}
+                      >
                         <span style={{ fontSize: 12.5, display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.texto}</span>
                           {f.mids.length > 1 && (
@@ -842,8 +895,11 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                               descripción como si fuera la entidad. */}
                           {(f.designa || pareceDescripcion(f.texto, g.tipo.k)) && (
                             <button
-                              onClick={() => setMenciones((ms) => ms.map((m) =>
-                                f.mids.includes(m.mid) ? { ...m, designa: !f.designa, auto: false } : m))}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenciones((ms) => ms.map((m) =>
+                                  f.mids.includes(m.mid) ? { ...m, designa: !f.designa, auto: false } : m));
+                              }}
                               title={f.designa
                                 ? "Señala a alguien concreto sin nombrarlo. Clic para quitarlo."
                                 : "¿Señala a alguien concreto al que el texto no nombra? Clic para marcarlo."}
@@ -858,7 +914,8 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
                           )}
                         </span>
                         <button
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             // Una relación que apunta a una marca borrada es
                             // basura que se guardaría igual: se va con ella.
                             setRelaciones((rs) =>
