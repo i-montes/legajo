@@ -119,7 +119,7 @@ describe("servidor local activo", () => {
     expect(m.leerBloqueoArticulo(10, 20)).toEqual({ tipo: "propio" });
 
     m.soltarArticulo();
-    expect(ultimoEnviado(ws)).toEqual({ tipo: "soltar" });
+    expect(ultimoEnviado(ws)).toEqual({ tipo: "soltar", loteId: 10, wpId: 20 });
     expect(m.leerBloqueoArticulo(10, 20)).toEqual({ tipo: "sin-servidor" });
   });
 });
@@ -305,5 +305,70 @@ describe("cambiado", () => {
 
     expect(() => ws.recibir({ tipo: "algo-que-no-existe" })).not.toThrow();
     expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe("arrebatar", () => {
+  it("manda forzar con el loteId/wpId del artículo abierto, no un mensaje vacío", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    m.pedirArticulo(10, 20);
+    ws.recibir({ tipo: "bienvenida", sesion: "s1", nombre: "Ana", emoji: "🦊" });
+    ws.recibir({ tipo: "ocupado", por: { nombre: "Beto", emoji: "🐻" } });
+
+    m.arrebatar();
+    expect(ultimoEnviado(ws)).toEqual({ tipo: "forzar", loteId: 10, wpId: 20 });
+  });
+
+  it("sin artículo deseado, no manda nada", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    ws.recibir({ tipo: "bienvenida", sesion: "s1", nombre: "Ana", emoji: "🦊" });
+    const antes = ws.enviados.length;
+    m.arrebatar();
+    expect(ws.enviados.length).toBe(antes);
+  });
+});
+
+describe("flujo completo de arrebatar", () => {
+  it("de ocupado a propio: el cartel de ocupado deja de aplicar tras el tomado que sigue al forzar", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    m.pedirArticulo(10, 20);
+    ws.recibir({ tipo: "bienvenida", sesion: "s1", nombre: "Ana", emoji: "🦊" });
+    ws.recibir({ tipo: "ocupado", por: { nombre: "Beto", emoji: "🐻" } });
+    expect(m.leerBloqueoArticulo(10, 20).tipo).toBe("ocupado");
+
+    m.arrebatar();
+    expect(ultimoEnviado(ws)).toEqual({ tipo: "forzar", loteId: 10, wpId: 20 });
+
+    // El servidor concede el arrebato con un "tomado", igual que un "tomar" normal.
+    ws.recibir({ tipo: "tomado" });
+    const estado = m.leerBloqueoArticulo(10, 20);
+    expect(estado).toEqual({ tipo: "propio" });
+    expect(m.puedeEditar(estado)).toBe(true);
+  });
+});
+
+describe("error de protocolo", () => {
+  it("un `error` del servidor queda expuesto por useUltimoError/leerUltimoError, no se traga", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    ws.recibir({ tipo: "bienvenida", sesion: "s1", nombre: "Ana", emoji: "🦊" });
+    expect(m.leerUltimoError()).toBeNull();
+
+    ws.recibir({ tipo: "error", mensaje: "mensaje no reconocido: falta loteId" });
+    expect(m.leerUltimoError()).toBe("mensaje no reconocido: falta loteId");
+
+    m.descartarError();
+    expect(m.leerUltimoError()).toBeNull();
   });
 });

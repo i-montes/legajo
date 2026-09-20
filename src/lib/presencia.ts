@@ -24,6 +24,9 @@ import { useEffect, useSyncExternalStore } from "react";
 import {
   baseUrlRemota, leerConexionRemota, leerModo, suscribirConexionRemota,
 } from "./conexionRemota";
+import {
+  mensajeForzar, mensajeHola, mensajeLatido, mensajeSoltar, mensajeTomar,
+} from "./protocoloPresencia";
 import type { EstadoServidor } from "../types";
 
 // ── Estado de bloqueo de un artículo ────────────────────────────────────────
@@ -74,6 +77,10 @@ let intentosReconexion = 0;
 let conectado = false;
 let identidadActual: { sesion: string; nombre: string; emoji: string } | null = null;
 let sesionesActuales: SesionPresencia[] = [];
+/** El último `{"tipo":"error", ...}` que mandó el servidor —un mensaje suyo
+ *  que no se pudo interpretar—, o `null` si no hay ninguno pendiente de
+ *  mostrar. Ver el caso `"error"` en `manejarMensaje` y `useUltimoError`. */
+let ultimoError: string | null = null;
 
 /** Solo hay un artículo «deseado» a la vez: el que tiene abierto la pantalla
  *  de revisión ahora mismo. Se conserva aunque el socket se caiga o el
@@ -226,11 +233,11 @@ function abrirSocket(): void {
   }
   socket = ws;
   ws.onopen = () => {
-    enviar({ tipo: "hola", cliente: idCliente() });
+    enviar(mensajeHola(idCliente()));
     // Mientras el socket esté abierto, un latido cada 20 s exactos — ni antes
     // de la bienvenida ni condicionado a nada más: es lo que evita que el
     // servidor caduque un socket sano por simple silencio.
-    latidoId = setInterval(() => enviar({ tipo: "latido" }), 20_000);
+    latidoId = setInterval(() => enviar(mensajeLatido()), 20_000);
   };
   ws.onmessage = (ev) => manejarMensaje(ev.data);
   ws.onclose = () => alCerrarOFallar(ws);
@@ -295,7 +302,7 @@ function manejarMensaje(data: unknown): void {
         // abierto: sin esto, una caída de red silenciosa dejaría el artículo
         // en modo lectura para siempre aunque el servidor ya esté disponible.
         resultadoTomar = PENDIENTE;
-        enviar({ tipo: "tomar", loteId: articuloDeseado.loteId, wpId: articuloDeseado.wpId });
+        enviar(mensajeTomar(articuloDeseado.loteId, articuloDeseado.wpId));
       }
       notificar();
       break;
@@ -344,6 +351,18 @@ function manejarMensaje(data: unknown): void {
       }
       break;
     }
+    case "error": {
+      // El servidor no pudo interpretar el último mensaje que le mandamos
+      // (JSON roto, `tipo` desconocido, o campos que faltan — ver el
+      // docstring de `procesar_mensaje_cliente` en `servidor.rs`). Antes esto
+      // no existía y un mensaje mal formado se perdía en silencio: el
+      // usuario pulsaba un botón y no pasaba nada, indistinguible de que la
+      // acción no tuviera efecto. Ahora se hace visible (ver `useUltimoError`
+      // en `Revision.tsx`) en vez de tragárselo.
+      ultimoError = typeof m.mensaje === "string" ? m.mensaje : "el servidor no entendió el último mensaje";
+      notificar();
+      break;
+    }
     default:
       break; // Tipo desconocido: se ignora sin lanzar.
   }
@@ -363,23 +382,30 @@ export function fijarFlushPendiente(fn: (() => Promise<void>) | null): void {
 export function pedirArticulo(loteId: number, wpId: number): void {
   articuloDeseado = { loteId, wpId };
   resultadoTomar = PENDIENTE;
-  if (conectado) enviar({ tipo: "tomar", loteId, wpId });
+  if (conectado) enviar(mensajeTomar(loteId, wpId));
   notificar();
 }
 
-/** Suelta el artículo deseado: si había conexión, avisa al servidor; en
- *  cualquier caso deja de haber un artículo que volver a pedir al reconectar. */
+/** Suelta el artículo deseado: si había conexión, avisa al servidor —con su
+ *  `loteId`/`wpId`, igual que `tomar` y `forzar`: el servidor no adivina de
+ *  qué artículo se habla por la sesión sola— ; en cualquier caso deja de
+ *  haber un artículo que volver a pedir al reconectar. */
 export function soltarArticulo(): void {
-  if (articuloDeseado && conectado) enviar({ tipo: "soltar" });
+  if (articuloDeseado && conectado) {
+    enviar(mensajeSoltar(articuloDeseado.loteId, articuloDeseado.wpId));
+  }
   articuloDeseado = null;
   notificar();
 }
 
-/** Sin confirmar nada aquí —eso es cosa de la pantalla, antes de llamar
- *  esto—: manda `forzar` sin más campos. El servidor sabe, por la sesión, qué
- *  se intentó tomar por última vez. */
+/** Arrebata el artículo que esta pantalla tiene abierto (`articuloDeseado`):
+ *  manda `forzar` con su `loteId`/`wpId`, igual que `tomar` y `soltar`. Sin
+ *  confirmar nada aquí —eso es cosa de la pantalla, antes de llamar esto—.
+ *  Si no hay ningún artículo deseado (no debería pasar: solo se ofrece este
+ *  botón cuando `bloqueo.tipo === "ocupado"`, que implica que sí lo hay), no
+ *  manda nada: no hay qué arrebatar. */
 export function arrebatar(): void {
-  enviar({ tipo: "forzar" });
+  if (articuloDeseado) enviar(mensajeForzar(articuloDeseado.loteId, articuloDeseado.wpId));
 }
 
 /** El estado de bloqueo para un artículo concreto. `null`/`null` (todavía sin
@@ -422,6 +448,17 @@ export function leerIdentidad(): { sesion: string; nombre: string; emoji: string
   return identidadActual;
 }
 
+export function leerUltimoError(): string | null {
+  return ultimoError;
+}
+
+/** Descarta el último error de protocolo mostrado, para que la pantalla
+ *  pueda ofrecer cerrarlo. No hace falta que el error se resuelva solo. */
+export function descartarError(): void {
+  ultimoError = null;
+  notificar();
+}
+
 // ── Vistas React ─────────────────────────────────────────────────────────
 
 export function useSesiones(): SesionPresencia[] {
@@ -430,6 +467,10 @@ export function useSesiones(): SesionPresencia[] {
 
 export function useIdentidad(): { sesion: string; nombre: string; emoji: string } | null {
   return useSyncExternalStore(suscribir, leerIdentidad);
+}
+
+export function useUltimoError(): string | null {
+  return useSyncExternalStore(suscribir, leerUltimoError);
 }
 
 export function useBloqueoArticulo(

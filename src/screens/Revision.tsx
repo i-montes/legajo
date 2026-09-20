@@ -15,7 +15,7 @@ import {
 import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
 import { destinoArticulo, pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
-import { puedeEditar, suscribirCambio, useBloqueoArticulo } from "../lib/presencia";
+import { descartarError, puedeEditar, suscribirCambio, useBloqueoArticulo, useUltimoError } from "../lib/presencia";
 import { useModoRemoto } from "../lib/conexionRemota";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
@@ -113,6 +113,11 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   );
   const { estado: bloqueo, arrebatar } = useBloqueoArticulo(loteId, fila?.wp_id ?? null, flushPendiente);
   const puedeEscribir = puedeEditar(bloqueo);
+  /* Un `error` de protocolo (mensaje que el servidor no pudo interpretar, ver
+     `presencia.ts`) no depende de qué artículo esté abierto: se muestra
+     igual sin importar `bloqueo.tipo`, para que un mensaje mudo nunca vuelva
+     a ser indistinguible de que la acción no tuvo efecto. */
+  const errorProtocolo = useUltimoError();
   /* El segundo clic de «arrebatar»: mismo patrón de confirmación de dos pasos
      que «Conectar otro archivo…» y «olvidar» en `App.tsx`. Se resetea al
      cambiar de artículo para no arrastrar una confirmación a medias de uno
@@ -825,6 +830,16 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span>·</span>
               <span className="t-mono">#{fila.wp_id}</span>
             </div>
+
+            {/* Un error de protocolo del servidor (mensaje que no entendió):
+                antes se perdía en silencio y el botón que lo provocó parecía
+                no hacer nada. Ahora se ve, con un botón para descartarlo. */}
+            {errorProtocolo && (
+              <Aviso estado="error">
+                {errorProtocolo}{" "}
+                <Boton variante="texto" onClick={descartarError}>descartar</Boton>
+              </Aviso>
+            )}
 
             {/* El aviso de bloqueo: solo aparece cuando no se puede escribir.
                 Con el bloqueo propio o sin ningún servidor de por medio, la
