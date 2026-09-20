@@ -15,7 +15,7 @@ import {
 import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
 import { destinoArticulo, pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
-import { registrarFlushPendiente, useEpocaServidor, useSirviendo } from "../lib/servidor";
+import { puedeEditar, useBloqueoArticulo } from "../lib/presencia";
 import { useModoRemoto } from "../lib/conexionRemota";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
@@ -24,15 +24,6 @@ import type { EstadoApp } from "../App";
    el sitio donde se está y nada más, mientras que «Cerrar y seguir» —el botón
    con peso visual— es el único que da un artículo por terminado. Que no se
    parezcan es la mitad de la garantía de que no se confundan. */
-/** Si esta ventana puede escribir en la base ahora mismo.
- *
- *  `false` mientras esta máquina sirve esa misma base por red: `guardar_
- *  anotacion` no fusiona, borra e inserta el artículo entero, así que si
- *  esta ventana siguiera guardando por su cuenta pisaría sin aviso lo que la
- *  otra máquina esté anotando. Es la función que gobierna el autoguardado, el
- *  guardado de los diez segundos y el de `beforeunload`; se exporta aparte
- *  para poder probarla sin montar el componente entero. */
-export const puedeEscribirLocalmente = (sirviendo: boolean): boolean => !sirviendo;
 
 const navBoton = (inactivo: boolean): CSSProperties => ({
   appearance: "none", background: "transparent", border: 0,
@@ -56,13 +47,6 @@ const VIGENCIAS: Record<Vigencia, { glifo: string; ayuda: string }> = {
 
 export default function Revision({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
-  /* Servir y anotar son excluyentes (ver `lib/servidor.ts`): mientras esta
-     máquina sirve la base por red, esta pantalla deja de escribir y muestra
-     una pausa en su lugar. `epocaServidor` cambia en cada encendido y cada
-     apagado del servidor; se usa más abajo para forzar una recarga desde la
-     base al apagarlo, en vez de confiar en lo que hubiera en memoria. */
-  const sirviendo = useSirviendo();
-  const epocaServidor = useEpocaServidor();
   const remoto = useModoRemoto();
   const [filas, setFilas] = useState<FilaAnotable[] | null>(null);
   const [i, setI] = useState(0);
@@ -113,6 +97,23 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const [realzada, setRealzada] = useState<{ mid: string; clic: number } | null>(null);
 
   const fila = filas?.[i];
+  /* El bloqueo por artículo, vía WebSocket (ver `lib/presencia.ts`): quien
+     abre este artículo —en esta máquina o en la remota— lo ocupa para las
+     dos. `flushPendiente` es lo que el módulo llama, en orden, antes de
+     pasar a solo lectura si llega un «perdido» mientras se tenía el bloqueo:
+     así la última marca no se pierde por que otra máquina lo arrebate. */
+  const flushPendiente = useCallback(
+    () => (loteId != null && fila ? guardarAnotacion(loteId, fila.wp_id, menciones, relaciones) : Promise.resolve()),
+    [loteId, fila?.wp_id, menciones, relaciones]
+  );
+  const { estado: bloqueo, arrebatar } = useBloqueoArticulo(loteId, fila?.wp_id ?? null, flushPendiente);
+  const puedeEscribir = puedeEditar(bloqueo);
+  /* El segundo clic de «arrebatar»: mismo patrón de confirmación de dos pasos
+     que «Conectar otro archivo…» y «olvidar» en `App.tsx`. Se resetea al
+     cambiar de artículo para no arrastrar una confirmación a medias de uno
+     distinto. */
+  const [confirmarArrebatar, setConfirmarArrebatar] = useState(false);
+  useEffect(() => { setConfirmarArrebatar(false); }, [loteId, fila?.wp_id]);
   /* Por detrás de la frontera todo está cerrado. Se puede volver y añadir
      marcas —eso mejora la calibración, que lee los artículos cerrados—, pero
      la medición de tiempo ya está tomada y no se vuelve a escribir. */
@@ -200,64 +201,47 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
         setPreMarcadas(previas.length);
         setOrigen(previas.length > 0 ? "lexico" : null);
       });
-    /* `epocaServidor` entra aquí solo para forzar esta misma recarga al
-       apagar el servidor: mientras se sirve, esta pantalla no está montada
-       de forma editable (ver el retorno anticipado más abajo), así que la
-       reejecución que ocurre al encenderlo no tiene efecto visible. Al
-       apagarlo, en cambio, descarta cualquier cosa que hubiera en memoria y
-       trae de la base lo que de verdad quedó guardado — que puede haber
-       cambiado mientras otra máquina anotaba. */
+    /* `bloqueo.tipo` entra aquí solo para forzar esta misma recarga al pasar
+       a «propio»: es la señal de que se obtuvo o se recuperó el bloqueo de
+       este artículo, así que toca traer de la base lo que de verdad hay
+       ahí, por si la otra máquina lo tocó mientras estuvo bloqueado por
+       ella —en vez de confiar en lo que hubiera en memoria de antes—. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loteId, fila?.wp_id, lexico, epocaServidor]);
-
+  }, [loteId, fila?.wp_id, lexico, bloqueo.tipo]);
 
   // El guardado es automático: perder media hora de anotación por olvidar
   // pulsar un botón es inaceptable en un trabajo que se mide en horas.
   //
-  // Mientras esta máquina sirve la base por red, este efecto no programa
-  // nada: `guardar_anotacion` borra y reinserta el artículo entero (ver
-  // `lib/servidor.ts`), y si esta ventana siguiera escribiendo por su cuenta
-  // pisaría sin aviso lo que la otra máquina esté anotando.
+  // Mientras no se tenga el bloqueo de este artículo, este efecto no
+  // programa nada: `guardar_anotacion` borra y reinserta el artículo entero
+  // (ver `core/src/db.rs`), y si esta ventana siguiera escribiendo por su
+  // cuenta pisaría sin aviso lo que quien lo tiene esté anotando.
   useEffect(() => {
-    if (loteId == null || !fila || !puedeEscribirLocalmente(sirviendo)) return;
+    if (loteId == null || !fila || !puedeEscribir) return;
     const t = setTimeout(() => {
       guardarAnotacion(loteId, fila.wp_id, menciones, relaciones).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [loteId, fila?.wp_id, menciones, relaciones, sirviendo]);
-
-  /* Con el mismo guardado —y por lo tanto expuesta al mismo riesgo de
-     pisar lo ajeno— se registra aquí la función que vacía lo pendiente justo
-     antes de que el servidor se encienda. Se mantiene siempre al día con las
-     últimas marcas, y se retira al desmontar o al quedarse sin artículo. */
-  useEffect(() => {
-    if (loteId == null || !fila) {
-      registrarFlushPendiente(null);
-      return () => registrarFlushPendiente(null);
-    }
-    const id = loteId, wp = fila.wp_id;
-    registrarFlushPendiente(() => guardarAnotacion(id, wp, menciones, relaciones));
-    return () => registrarFlushPendiente(null);
-  }, [loteId, fila, menciones, relaciones]);
+  }, [loteId, fila?.wp_id, menciones, relaciones, puedeEscribir]);
 
   /* El cronómetro también se persiste cada diez segundos, sin marcar el
      artículo como terminado. Cerrar la ventana a mitad no debe borrar los
      minutos ya puestos: son parte del coste real que la fase mide.
-     Tampoco corre mientras se sirve: no hay reloj que medir si esta ventana
-     no está anotando. */
+     Tampoco corre sin el bloqueo: no hay reloj que medir si esta ventana no
+     puede anotar. */
   useEffect(() => {
-    if (loteId == null || !fila || cerrado || reloj.estado !== "corriendo" || !puedeEscribirLocalmente(sirviendo)) return;
+    if (loteId == null || !fila || cerrado || reloj.estado !== "corriendo" || !puedeEscribir) return;
     const t = setInterval(() => {
       apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
     }, 10_000);
     return () => clearInterval(t);
-  }, [loteId, fila?.wp_id, cerrado, reloj.estado, crono, menciones.length, sirviendo]);
+  }, [loteId, fila?.wp_id, cerrado, reloj.estado, crono, menciones.length, puedeEscribir]);
 
   // Y una última vez al cerrar la ventana, para no perder los segundos sueltos.
-  // Mientras se sirve, tampoco: cerrar la ventana local no debe escribir por
-  // encima de lo que la máquina remota tenga en ese momento.
+  // Sin el bloqueo, tampoco: cerrar la ventana no debe escribir por encima de
+  // lo que quien lo tiene tenga en ese momento.
   useEffect(() => {
-    if (!puedeEscribirLocalmente(sirviendo)) return;
+    if (!puedeEscribir) return;
     const alSalir = () => {
       if (loteId == null || !fila) return;
       if (!cerrado) apuntarTiempo(loteId, fila.wp_id, crono, menciones.length).catch(() => {});
@@ -265,7 +249,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     };
     window.addEventListener("beforeunload", alSalir);
     return () => window.removeEventListener("beforeunload", alSalir);
-  }, [loteId, fila?.wp_id, cerrado, crono, menciones, relaciones, sirviendo]);
+  }, [loteId, fila?.wp_id, cerrado, crono, menciones, relaciones, puedeEscribir]);
 
   /* Moverse entre artículos guarda lo anotado pero NO registra un cierre.
      Antes, pasar de largo con J/K dejaba una medición de un segundo que entraba
@@ -280,7 +264,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const irArticulo = useCallback(async (d: number) => {
     if (loteId == null || !filas) return;
     const actual = filas[i];
-    if (actual) {
+    // Sin el bloqueo de este artículo no se escribe nada al salir de él —pero
+    // sí se puede seguir navegando: mirar otros artículos en modo lectura no
+    // necesita ningún bloqueo.
+    if (actual && puedeEscribir) {
       await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
       /* Sobre un artículo cerrado se guarda lo anotado y nada más: su medición
          está cerrada y reescribirla con los minutos del repaso la falsearía. */
@@ -289,10 +276,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       }
     }
     setI(destinoArticulo(i, d, Math.min(frontera, filas.length)));
-  }, [loteId, filas, i, frontera, cerrado, menciones, relaciones, crono]);
+  }, [loteId, filas, i, frontera, cerrado, menciones, relaciones, crono, puedeEscribir]);
 
   const cerrarYSeguir = useCallback(async () => {
-    if (loteId == null || !filas) return;
+    if (loteId == null || !filas || !puedeEscribir) return;
     const actual = filas[i];
     if (actual) {
       await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
@@ -304,16 +291,16 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     // La frontera solo avanza aquí, y nunca retrocede: volver atrás a repasar
     // no debe recortar hasta dónde se puede regresar después.
     setFrontera((f) => Math.max(f, destino));
-  }, [loteId, filas, i, menciones, relaciones, crono]);
+  }, [loteId, filas, i, menciones, relaciones, crono, puedeEscribir]);
 
   const descartarMedicion = useCallback(async () => {
-    if (loteId == null || !fila) return;
+    if (loteId == null || !fila || !puedeEscribir) return;
     await descartarTiempo(loteId, fila.wp_id).catch(() => {});
     // Descartar la medición de un artículo cerrado no reabre su reloj: la
     // invalida y ya. Volver a contar sobre él es justo lo que se está evitando.
     reloj.reiniciar(0, !cerrado);
     avanceAnotacion(loteId).then(([h]) => setHechos(h));
-  }, [loteId, fila?.wp_id, cerrado]);
+  }, [loteId, fila?.wp_id, cerrado, puedeEscribir]);
 
   /* Nada de efectos dentro de un actualizador de estado: React los invoca dos
      veces en modo estricto para detectar actualizadores impuros, y eso añadía
@@ -324,7 +311,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      larga, un nombre propio aparece cinco o seis veces y marcarlas a mano una
      por una es trabajo mecánico que no aporta juicio. */
   const marcar = useCallback((tipo: string) => {
-    if (!pendiente) return;
+    if (!puedeEscribir || !pendiente) return;
     const nueva: Mencion = {
       mid: nuevoId(), pi: pendiente.pi, ini: pendiente.ini,
       fin: pendiente.fin, texto: pendiente.texto, tipo, auto: false,
@@ -347,10 +334,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     setPendiente(null);
     setPunto(null);
     window.getSelection()?.removeAllRanges();
-  }, [pendiente, parrafos, fila?.titulo]);
+  }, [pendiente, parrafos, fila?.titulo, puedeEscribir]);
 
   const crearRelacion = useCallback((pred: string) => {
-    if (relSel.length !== 2) return;
+    if (!puedeEscribir || relSel.length !== 2) return;
     const [a, b] = relSel;
     const ma = menciones.find((m) => m.mid === a);
     setRelaciones((rs) =>
@@ -371,7 +358,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     );
     setRelSel([]);
     setRelPicker(false);
-  }, [relSel, menciones, textoDelParrafo]);
+  }, [relSel, menciones, textoDelParrafo, puedeEscribir]);
 
   /* Declarar que una marca señala a alguien concreto al que el texto no
      nombra: «el Gobernador de Antioquia», «la cooperativa». No le cambia el
@@ -380,14 +367,16 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      el grafo sepa que ahí hay una identidad ausente en vez de contar la
      descripción como si fuera la entidad. */
   const marcarDesigna = useCallback(() => {
+    if (!puedeEscribir) return;
     const objetivo = relSel.length === 1 ? relSel[0] : null;
     if (!objetivo) return;
     setMenciones((ms) =>
       ms.map((m) => (m.mid === objetivo ? { ...m, designa: !m.designa, auto: false } : m))
     );
-  }, [relSel]);
+  }, [relSel, puedeEscribir]);
 
   const cambiarVigencia = useCallback((rid: string) => {
+    if (!puedeEscribir) return;
     const orden: Vigencia[] = ["vigente", "pasada", "futura"];
     setRelaciones((rs) =>
       rs.map((r) =>
@@ -396,7 +385,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
           : r
       )
     );
-  }, []);
+  }, [puedeEscribir]);
 
   /* Declarar que dos menciones nombran la misma entidad.
      No es una relación: «Ómar Yepes» y «Yepes» son la misma persona, mientras
@@ -404,12 +393,12 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      por «parte de». Confundirlas dejaría una entidad con dos cifras
      contradictorias atribuidas a la vez. */
   const enlazarAlias = useCallback(() => {
-    if (relSel.length !== 2) return;
+    if (!puedeEscribir || relSel.length !== 2) return;
     setMenciones((ms) => unirAlias(ms, relSel[0], relSel[1]));
     setRelSel([]);
     setRelPicker(false);
     setPunto(null);
-  }, [relSel]);
+  }, [relSel, puedeEscribir]);
 
   /* Los predicados que tienen sentido entre las dos marcas elegidas. Filtrar
      por tipo evita tanto la lista de trece opciones como afirmar que un monto
@@ -472,6 +461,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
       if (e.key === "d" || e.key === "D") { e.preventDefault(); return marcarDesigna(); }
       if ((e.key === "Backspace" || e.key === "Delete") && relSel.length) {
         e.preventDefault();
+        if (!puedeEscribir) return; // los atajos de borrado escriben; los de navegación, no.
         setMenciones((ms) => ms.filter((m) => !relSel.includes(m.mid)));
         setRelaciones((rs) => rs.filter((r) => !relSel.includes(r.a_mid) && !relSel.includes(r.b_mid)));
         return setRelSel([]);
@@ -483,9 +473,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [pendiente, relPicker, relSel, familiaSel, marcar, crearRelacion, abrirRelacion, enlazarAlias,
-      marcarDesigna, irArticulo, predicadosDisponibles]);
+      marcarDesigna, irArticulo, predicadosDisponibles, puedeEscribir]);
 
   function alSoltar() {
+    if (!puedeEscribir) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -612,29 +603,6 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
 
 
   // ── estados vacíos ─────────────────────────────────────────────────────
-  /* Servir y anotar son excluyentes: mientras esta máquina sirve la base por
-     red, esta pantalla no dibuja el editor —evita cualquier gesto que
-     terminara escribiendo, y no solo los tres efectos ya bloqueados arriba—.
-     Va antes que «cargando la muestra» a propósito: no tiene sentido reanudar
-     el reloj o pre-marcar nada sobre un artículo que ahora mismo no se puede
-     tocar desde aquí. */
-  if (sirviendo) {
-    return (
-      <Lienzo>
-        <Encabezado
-          paso="revision"
-          titulo="Anotación en pausa en este computador"
-          frase="Otra máquina está corrigiendo esta misma base ahora mismo. Para no perder su trabajo, esta ventana dejó de guardar aquí mientras el servidor esté encendido."
-          compacto
-        />
-        <Aviso estado="advertencia">
-          Apaga el servidor desde «Servir a otro computador» para volver a anotar en esta ventana.
-          Al apagarlo, este artículo se vuelve a leer de la base: lo que se haya corregido en la
-          otra máquina se verá aquí, no lo que hubiera antes de encenderlo.
-        </Aviso>
-      </Lienzo>
-    );
-  }
   if (filas === null) {
     return <Lienzo><p className="t-cuerpo" style={{ color: "var(--t3)" }}>Cargando la muestra…</p></Lienzo>;
   }
@@ -758,7 +726,7 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span className="t-mono" style={{ fontVariantNumeric: "tabular-nums" }}>{mmss(crono)}</span>
             </button>
             )}
-            {crono > 20 && (
+            {crono > 20 && puedeEscribir && (
               <button
                 onClick={() => void descartarMedicion()}
                 title="Borra el tiempo de este artículo. Úsalo si la ventana quedó abierta haciendo otra cosa: una medición contaminada desplaza la mediana de toda la muestra."
@@ -774,13 +742,18 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               seguir»: no queda nada que cerrar, y anunciar un cierre sobre algo
               cerrado hace dudar de si volver atrás rompe la medición —que es
               justo el miedo que estos botones vienen a quitar—. El gesto es el
-              mismo; lo que cambia es que ahora no promete lo que no hace. */}
+              mismo; lo que cambia es que ahora no promete lo que no hace.
+              Sin el bloqueo de este artículo se deshabilita entero: pulsarlo no
+              haría nada, y dejarlo activo invitaría a creer que sí. */}
           <Boton
             variante="secundario"
             onClick={() => void cerrarYSeguir()}
-            title={cerrado
-              ? "Este artículo ya está cerrado: esto solo pasa al siguiente, sin volver a cerrarlo ni tocar su medición."
-              : "Da este artículo por terminado, guarda su medición y abre el siguiente."}
+            disabled={!puedeEscribir}
+            title={!puedeEscribir
+              ? "Otra persona tiene este artículo ahora mismo."
+              : cerrado
+                ? "Este artículo ya está cerrado: esto solo pasa al siguiente, sin volver a cerrarlo ni tocar su medición."
+                : "Da este artículo por terminado, guarda su medición y abre el siguiente."}
             style={{ whiteSpace: "nowrap" }}
           >
             {cerrado ? "Seguir" : "Cerrar y seguir"}
@@ -832,6 +805,48 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span>·</span>
               <span className="t-mono">#{fila.wp_id}</span>
             </div>
+
+            {/* El aviso de bloqueo: solo aparece cuando no se puede escribir.
+                Con el bloqueo propio o sin ningún servidor de por medio, la
+                edición es normal y aquí no se dibuja nada. */}
+            {bloqueo.tipo === "pendiente" && (
+              <Aviso estado="neutro">Pidiendo el bloqueo de este artículo…</Aviso>
+            )}
+            {bloqueo.tipo === "desconectado" && (
+              <Aviso estado="advertencia">
+                No se pudo confirmar quién tiene este artículo (sin conexión al servidor de
+                presencia). En modo lectura hasta reconectar.
+              </Aviso>
+            )}
+            {bloqueo.tipo === "ocupado" && (
+              <Aviso estado="advertencia">
+                {bloqueo.por.emoji} {bloqueo.por.nombre} tiene este artículo ahora mismo. Puedes
+                seguir viéndolo, pero no anotar en él.{" "}
+                {!confirmarArrebatar ? (
+                  <Boton variante="secundario" onClick={() => setConfirmarArrebatar(true)}>
+                    Arrebatar
+                  </Boton>
+                ) : (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span>¿Seguro? {bloqueo.por.nombre} perderá el artículo al instante.</span>
+                    <Boton
+                      variante="secundario"
+                      onClick={() => { setConfirmarArrebatar(false); arrebatar(); }}
+                    >
+                      Arrebatar
+                    </Boton>
+                    <Boton variante="texto" onClick={() => setConfirmarArrebatar(false)}>cancelar</Boton>
+                  </span>
+                )}
+              </Aviso>
+            )}
+            {bloqueo.tipo === "perdido" && (
+              <Aviso estado="error">
+                {bloqueo.por.emoji} {bloqueo.por.nombre} te quitó este artículo. Tus últimas marcas
+                se guardaron antes de pasar a lectura.
+              </Aviso>
+            )}
+
             {/* El título es un párrafo anotable más, con `pi = -1`: no viene del
                 cuerpo (`parrafos`), así que no desplaza sus índices 0..n, pero se
                 marca exactamente igual. Se distingue con un filo de color y su

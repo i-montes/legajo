@@ -120,6 +120,13 @@ export function olvidarConexionRemota(): void {
   notificar();
 }
 
+/** Envoltura mínima de la suscripción interna, para quien necesite
+ *  reaccionar a cambios de modo/conexión sin ser un componente React (por
+ *  ejemplo, el cliente de presencia por WebSocket). */
+export function suscribirConexionRemota(cb: () => void): () => void {
+  return suscribir(cb);
+}
+
 export function useModoRemoto(): boolean {
   return useSyncExternalStore(suscribir, () => modo === "remoto");
 }
