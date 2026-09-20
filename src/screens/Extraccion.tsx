@@ -71,12 +71,15 @@ export default function Extraccion({ estado }: { estado: EstadoApp }) {
 
   const refrescarAvance = useCallback(() => {
     if (loteId == null) return;
-    avanceExtraccion(loteId, false, categoria).then(([h, t]) => { setHechos(h); setTotal(t); });
+    // Solo una lectura inicial del avance: mientras corre una extracción, el
+    // progreso real llega por `alProgresoExtraccion` más abajo. Un fallo aquí
+    // no debe reventar en consola como una promesa sin atender.
+    avanceExtraccion(loteId, false, categoria).then(([h, t]) => { setHechos(h); setTotal(t); }).catch(() => {});
   }, [loteId, categoria]);
 
   useEffect(() => { refrescarCola(); }, [refrescarCola]);
   useEffect(() => { refrescarAvance(); }, [refrescarAvance]);
-  useEffect(() => { consultarExtrayendo().then(setCorriendo); }, [loteId]);
+  useEffect(() => { consultarExtrayendo().then(setCorriendo).catch(() => {}); }, [loteId]);
 
   useEffect(() => {
     const un1 = alProgresoExtraccion((p) => {

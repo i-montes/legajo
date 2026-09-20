@@ -13,6 +13,12 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
   const remoto = useModoRemoto();
   const [res, setRes] = useState<ResumenGrafo | null>(null);
+  /* `res` es lo único cuya falta deja la pantalla entera en «Cargando…» (ver
+     más abajo): las otras cinco llamadas de `recargar` degradan a listas
+     vacías, que son secciones legítimamente vacías. Un fallo de
+     `grafoResumen` sin esto dejaba ese «Cargando…» puesto para siempre, sin
+     ninguna pista ni forma de reintentar. */
+  const [errorRes, setErrorRes] = useState<string | null>(null);
   const [ents, setEnts] = useState<NodoGrafo[]>([]);
   const [rels, setRels] = useState<AristaGrafo[]>([]);
   const [filtro, setFiltro] = useState<string | null>(null);
@@ -24,7 +30,10 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
   const [verDecididas, setVerDecididas] = useState(false);
 
   const recargar = (lote: number) => {
-    grafoResumen(lote).then(setRes).catch(() => {});
+    setErrorRes(null);
+    grafoResumen(lote)
+      .then(setRes)
+      .catch((e) => setErrorRes(e instanceof Error ? e.message : String(e)));
     grafoEntidades(lote, 300).then(setEnts).catch(() => {});
     grafoRelaciones(lote, 200).then(setRels).catch(() => {});
     grafoDuplicados(lote).then(setDobles).catch(() => {});
@@ -75,10 +84,18 @@ export default function Grafo({ estado }: { estado: EstadoApp }) {
               ? remoto
                 ? "Esta base todavía no tiene ningún lote."
                 : "Falta elegir el alcance y procesar un lote."
-              : "Cargando…"
+              : errorRes
+                ? undefined
+                : "Cargando…"
           }
           compacto
         />
+        {loteId != null && errorRes && (
+          <>
+            <Aviso estado="error">No se pudo traer el resumen del grafo: {errorRes}</Aviso>
+            <Boton variante="secundario" onClick={() => recargar(loteId)}>Reintentar</Boton>
+          </>
+        )}
       </Lienzo>
     );
   }

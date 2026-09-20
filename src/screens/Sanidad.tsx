@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Acciones, Barra, Boton, Cargando, Encabezado, Glifo, Lienzo, Razon, Rotulo } from "../ui";
+import { Acciones, Aviso, Barra, Boton, Cargando, Encabezado, Glifo, Lienzo, Razon, Rotulo } from "../ui";
 import { hallazgosArchivo } from "../lib/ipc";
 import { pasoDe } from "../contenido/pasos";
 import type { Hallazgo } from "../types";
@@ -36,28 +36,49 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
      decisión de seguir no depende de repetir el trámite. */
   const yaSuperado = estado.progreso > INDICE_SANIDAD;
   const [hallazgos, setHallazgos] = useState<Hallazgo[] | null>(null);
+  /* Antes un fallo aquí ponía `hallazgos` en `[]`: indistinguible de «se
+     revisó el censo y no encontró nada raro», y con la lista vacía
+     `puedeSeguirSanidad` deja seguir de largo como si el archivo estuviera
+     limpio cuando en realidad la revisión nunca corrió. Un falso «todo bien»
+     es peor que una pantalla de carga colgada, así que el fallo se guarda
+     aparte y `hallazgos` se queda en `null` —«todavía no hay nada que
+     decidir»— hasta que la revisión de verdad corra y traiga algo. */
+  const [errorHallazgos, setErrorHallazgos] = useState<string | null>(null);
+  const [intentoHallazgos, setIntentoHallazgos] = useState(0);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [decisiones, setDecisiones] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (conexionId == null) return;
-    hallazgosArchivo(conexionId).then(setHallazgos).catch(() => setHallazgos([]));
-  }, [conexionId]);
+    setErrorHallazgos(null);
+    hallazgosArchivo(conexionId)
+      .then(setHallazgos)
+      .catch((e) => setErrorHallazgos(e instanceof Error ? e.message : String(e)));
+  }, [conexionId, intentoHallazgos]);
 
   if (hallazgos === null) {
     return (
       <Lienzo>
-        <Encabezado paso="sanidad" frase={null} compacto />
-        <Cargando
-          titulo="Revisando lo que se leyó"
-          pasos={[
-            { texto: "Buscar fechas imposibles" },
-            { texto: "Buscar titulares repetidos" },
-            { texto: "Buscar artículos sin sección" },
-          ]}
-          actual={0}
-          nota="Se calcula sobre el censo que ya está en este computador: no vuelve a preguntarle a tu sitio."
-        />
+        <Encabezado paso="sanidad" frase={errorHallazgos ? undefined : null} compacto />
+        {errorHallazgos ? (
+          <>
+            <Aviso estado="error">No se pudo revisar el censo: {errorHallazgos}</Aviso>
+            <Boton variante="secundario" onClick={() => setIntentoHallazgos((n) => n + 1)}>
+              Reintentar
+            </Boton>
+          </>
+        ) : (
+          <Cargando
+            titulo="Revisando lo que se leyó"
+            pasos={[
+              { texto: "Buscar fechas imposibles" },
+              { texto: "Buscar titulares repetidos" },
+              { texto: "Buscar artículos sin sección" },
+            ]}
+            actual={0}
+            nota="Se calcula sobre el censo que ya está en este computador: no vuelve a preguntarle a tu sitio."
+          />
+        )}
       </Lienzo>
     );
   }
