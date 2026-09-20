@@ -553,7 +553,18 @@ fn con_cors(mut resp: Response) -> Response {
     h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
     h.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("authorization, content-type"),
+        // `x-legajo-sesion` es la cabecera que manda `llamarRemoto`
+        // (`src/lib/ipc.ts`) para que el servidor sepa qué sesión de
+        // presencia provocó el cambio y no le mande `cambiado` a ella misma
+        // (ver el doc-comment de esa función). Faltar aquí no rompe esa
+        // cabecera con un error explícito: el navegador bloquea la petición
+        // ENTERA en el preflight, antes de mandarla, y el fetch falla con el
+        // mismo error de red que un servidor apagado — de ahí la prueba
+        // `preflight_anuncia_toda_cabecera_que_puede_mandar_el_cliente` más
+        // abajo, que compara esta lista contra las cabeceras reales de
+        // `ipc.ts`/`conexionRemota.ts` para que una cabecera nueva no vuelva
+        // a colarse sin actualizar esto.
+        HeaderValue::from_static("authorization, content-type, x-legajo-sesion"),
     );
     resp
 }
@@ -1733,6 +1744,42 @@ mod tests {
         (codigo, cuerpo_resp)
     }
 
+    /// Un preflight `OPTIONS` de verdad, en crudo por TCP —a diferencia de
+    /// `curl`, que ignora CORS por completo y no puede ver este fallo (ver
+    /// el commit que añade esta prueba)—. Manda `Access-Control-Request-*`
+    /// como lo haría un navegador antes del `fetch` real, y devuelve el
+    /// código de estado junto con el valor, en minúsculas, de la cabecera
+    /// de respuesta `access-control-allow-headers` (vacío si no vino).
+    async fn pedir_options(
+        addr: std::net::SocketAddr, ruta: &str, cabeceras_pedidas: &str,
+    ) -> (u16, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let peticion = format!(
+            "OPTIONS {ruta} HTTP/1.1\r\nHost: localhost\r\n\
+             Access-Control-Request-Method: POST\r\n\
+             Access-Control-Request-Headers: {cabeceras_pedidas}\r\n\
+             Connection: close\r\n\r\n"
+        );
+        stream.write_all(peticion.as_bytes()).await.unwrap();
+        let mut crudo = Vec::new();
+        stream.read_to_end(&mut crudo).await.unwrap();
+        let texto = String::from_utf8_lossy(&crudo).to_string();
+        let codigo = texto
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let permitidas = texto
+            .lines()
+            .find(|l| l.to_lowercase().starts_with("access-control-allow-headers:"))
+            .and_then(|l| l.split_once(':'))
+            .map(|(_, v)| v.trim().to_lowercase())
+            .unwrap_or_default();
+        (codigo, permitidas)
+    }
+
     #[tokio::test]
     async fn sin_token_da_401_y_con_token_incorrecto_tambien() {
         let (path, db) = db_de_prueba("401");
@@ -2393,6 +2440,84 @@ mod tests {
             MensajeCliente::Latido => {}
             _ => panic!("el quinto mensaje debía ser «latido»"),
         }
+    }
+
+    #[test]
+    fn contrato_cors_permite_toda_cabecera_que_manda_el_cliente() {
+        // Las cabeceras reales que el cliente puede mandar en una petición
+        // HTTP contra este servidor, extraídas del AST de
+        // `ipc.ts`/`conexionRemota.ts` (ver `tests/cabeceras_cliente_http.ts`)
+        // — no una lista escrita a mano aquí. Esto es lo que habría cazado
+        // el bug de `X-Legajo-Sesion`: una lista a mano en Rust nunca se
+        // habría enterado de que el cliente de verdad manda una cabecera
+        // más, y `curl` —que ignora CORS— tampoco lo habría visto.
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/cabeceras_cliente_http.ts");
+        let salida = std::process::Command::new("node")
+            .arg("--experimental-strip-types")
+            .arg(script)
+            .output()
+            .expect("ejecutar node para extraer las cabeceras del cliente");
+        assert!(
+            salida.status.success(),
+            "el script de cabeceras del cliente falló: {}",
+            String::from_utf8_lossy(&salida.stderr)
+        );
+        let texto = String::from_utf8(salida.stdout).expect("salida de node no es UTF-8");
+        let cabeceras_cliente: Vec<String> = serde_json::from_str(texto.trim())
+            .expect("la salida de node debía ser un array JSON de cabeceras");
+        assert!(
+            !cabeceras_cliente.is_empty(),
+            "no se encontró ninguna cabecera en las llamadas a fetch() de ipc.ts/conexionRemota.ts: \
+             ¿cambió su forma y el AST ya no las reconoce?"
+        );
+
+        // La respuesta real que el servidor manda a un preflight
+        // (`cors_y_token`), no una copia de su valor: si `con_cors` cambia,
+        // esta prueba lo nota sola.
+        let resp = con_cors(StatusCode::NO_CONTENT.into_response());
+        let permitidas_crudo = resp
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+        let permitidas: Vec<&str> = permitidas_crudo.split(',').map(str::trim).collect();
+
+        for cabecera in &cabeceras_cliente {
+            let normalizada = cabecera.to_lowercase();
+            assert!(
+                permitidas.contains(&normalizada.as_str()),
+                "el cliente puede mandar «{cabecera}» pero access-control-allow-headers no la anuncia \
+                 (\"{permitidas_crudo}\"): un navegador bloquearía esa petición en el preflight."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_con_las_tres_cabeceras_las_anuncia_todas() {
+        // La prueba directa que pide el reporte: un `OPTIONS` de verdad
+        // (no `curl`, que ignora CORS) pidiendo las tres cabeceras que el
+        // cliente manda hoy tiene que anunciarlas todas, o el navegador
+        // bloquea el `fetch` real que le sigue.
+        let (path, db) = db_de_prueba("preflight-tres-cabeceras");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let (codigo, permitidas_crudo) =
+            pedir_options(addr, "/api/muestra", "authorization,content-type,x-legajo-sesion").await;
+        assert_eq!(codigo, 204, "el preflight debe responder sin cuerpo: {permitidas_crudo}");
+        let permitidas: Vec<&str> = permitidas_crudo.split(',').map(str::trim).collect();
+        for cabecera in ["authorization", "content-type", "x-legajo-sesion"] {
+            assert!(
+                permitidas.contains(&cabecera),
+                "«{cabecera}» se pidió en Access-Control-Request-Headers pero no viene en \
+                 access-control-allow-headers (\"{permitidas_crudo}\")"
+            );
+        }
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
