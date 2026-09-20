@@ -200,7 +200,27 @@ pub const PUERTO_PREDETERMINADO: u16 = 36507;
 /// es seguro escribir desde el Mac cuando en realidad nadie atiende todavía
 /// ese puerto.
 pub async fn iniciar(db: Arc<Db>, srv: &ServidorState, puerto: u16) -> Result<EstadoServidor> {
-    let puerto = if puerto == 0 { PUERTO_PREDETERMINADO } else { puerto };
+    iniciar_con_predeterminado(db, srv, puerto, PUERTO_PREDETERMINADO).await
+}
+
+/// La traducción de `puerto == 0` al valor por defecto, con ese valor por
+/// defecto como parámetro en vez de la constante fija [`PUERTO_PREDETERMINADO`].
+///
+/// Aparte por la misma razón que `iniciar_interno` recibe el `timeout` y el
+/// `intervalo` como parámetro: las pruebas de este módulo sobre el puerto
+/// fijo quieren comprobar la traducción de `0` —estable entre reinicios, y
+/// sin reserva automática si el puerto ya está en uso— sin escuchar de
+/// verdad en el puerto 36507 real, que puede estar ocupado por la propia
+/// aplicación del usuario mientras corre `cargo test`. `iniciar` sigue
+/// siendo la única función pública, y sigue usando siempre el 36507 de
+/// verdad.
+async fn iniciar_con_predeterminado(
+    db: Arc<Db>,
+    srv: &ServidorState,
+    puerto: u16,
+    predeterminado: u16,
+) -> Result<EstadoServidor> {
+    let puerto = if puerto == 0 { predeterminado } else { puerto };
     iniciar_interno(db, srv, puerto, LATIDO_TIMEOUT, VIGILANCIA_INTERVALO).await
 }
 
@@ -1632,27 +1652,37 @@ mod tests {
 
     // ── El puerto fijo: 36507 siempre, y nunca una reserva automática ────────
     //
-    // Estas pruebas son las únicas del módulo que usan el `iniciar` público
-    // de verdad (no `iniciar_prueba`), porque lo que comprueban es
-    // precisamente su traducción de `0` a `PUERTO_PREDETERMINADO`. Solo una
-    // de ellas llega a escuchar de verdad en el puerto 36507 real —el resto
-    // usa puertos que ella misma libera o que obtiene de forma efímera para
-    // simular "ocupado"—, así que no compite por ese puerto con las demás
-    // pruebas del módulo, que corren en paralelo con `cargo test`.
+    // El valor de PUERTO_PREDETERMINADO se comprueba aparte, como constante
+    // (abajo), sin escuchar en ningún socket. El comportamiento de verdad
+    // —la traducción de `0` es estable entre reinicios, y un puerto ocupado
+    // falla sin elegir otro— se comprueba contra `iniciar_con_predeterminado`
+    // con un "puerto por defecto" de prueba (libre en ese momento, elegido
+    // por el sistema operativo), no contra el 36507 real: si la app del
+    // usuario está corriendo y sirviendo de verdad en su puerto de
+    // producción, esta prueba no debe fallar por esa colisión, que no tiene
+    // nada que ver con lo que aquí se comprueba. Ya pasó una vez.
     #[tokio::test]
     async fn el_puerto_es_siempre_36507_estable_y_sin_reserva_automatica_si_esta_ocupado() {
+        assert_eq!(PUERTO_PREDETERMINADO, 36507);
+
         let (path, db) = db_de_prueba("puerto-fijo");
         let srv = ServidorState::default();
 
-        // 0 significa PUERTO_PREDETERMINADO, no «elige uno libre».
-        let primero = iniciar(db.clone(), &srv, 0).await.unwrap();
-        assert_eq!(primero.puerto, PUERTO_PREDETERMINADO);
+        // Un puerto libre en este instante, para hacer de "puerto por
+        // defecto" de esta prueba en vez del 36507 real.
+        let libre = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let predeterminado_de_prueba = libre.local_addr().unwrap().port();
+        drop(libre); // se libera para que iniciar_con_predeterminado pueda tomarlo de verdad.
+
+        // 0 significa el puerto por defecto, no «elige uno libre».
+        let primero = iniciar_con_predeterminado(db.clone(), &srv, 0, predeterminado_de_prueba).await.unwrap();
+        assert_eq!(primero.puerto, predeterminado_de_prueba);
 
         // Apagar y volver a encender da el mismo puerto: la estabilidad que
         // ya tenía el token ahora también la tiene el puerto.
         detener(&db, &srv).await.unwrap();
-        let segundo = iniciar(db.clone(), &srv, 0).await.unwrap();
-        assert_eq!(segundo.puerto, PUERTO_PREDETERMINADO);
+        let segundo = iniciar_con_predeterminado(db.clone(), &srv, 0, predeterminado_de_prueba).await.unwrap();
+        assert_eq!(segundo.puerto, predeterminado_de_prueba);
         assert_eq!(segundo.token, primero.token);
         detener(&db, &srv).await.unwrap();
 
@@ -1660,7 +1690,9 @@ mod tests {
         // el puerto y dice que está en uso; nunca cae en silencio a otro.
         let ocupante = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
         let puerto_ocupado = ocupante.local_addr().unwrap().port();
-        let err = iniciar(db.clone(), &srv, puerto_ocupado).await.unwrap_err();
+        let err = iniciar_con_predeterminado(db.clone(), &srv, puerto_ocupado, predeterminado_de_prueba)
+            .await
+            .unwrap_err();
         let mensaje = err.to_string();
         assert!(
             mensaje.contains(&puerto_ocupado.to_string()),
