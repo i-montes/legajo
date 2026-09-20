@@ -6,22 +6,22 @@
  * en `types.ts`. Esta pantalla programa contra ese contrato tal cual está
  * escrito. `invoke` es genérico sobre el nombre del comando, así que
  * `tsc --noEmit` queda limpio de todos modos: lo que falta hasta que la otra
- * rama llegue es que el comando exista en tiempo de ejecución, y eso se
- * prueba con los dobles de `Servir.test.ts`, no con el compilador.
+ * rama llegue es que el comando exista en tiempo de ejecución.
  *
- * Encender el servidor no es un interruptor inocente: mientras está
- * encendido, la ventana local deja de escribir anotaciones (ver
- * `lib/servidor.ts`). `activarExclusividad` se llama justo después de que
- * `servir_iniciar` confirme el encendido, y antes de que esta pantalla
- * enseñe nada más — así el aviso de pausa en Revisión aparece a la vez que
- * el interruptor.
+ * Encender el servidor ya no pone esta ventana en pausa: sigue anotando con
+ * normalidad. Lo que cambia es que, a partir de ahora, quien abre un
+ * artículo —en esta máquina o en la remota— lo ocupa para las dos; el
+ * bloqueo va por artículo y lo gobierna `lib/presencia.ts` por WebSocket, no
+ * por encender o apagar este interruptor. Esta pantalla solo le avisa a ese
+ * módulo del `EstadoServidor` fresco (`notificarEstadoServidor`) cada vez que
+ * lo obtiene, para que sepa a qué puerto y con qué token hablarle mientras
+ * el modo sea local.
  */
 import { useEffect, useState } from "react";
 import { Aviso, Boton, Rotulo } from "../ui";
 import { servirDetener, servirEstado, servirIniciar } from "../lib/ipc";
 import { generarCadenaConexion } from "../lib/conexionRemota";
-import { activarExclusividad, desactivarExclusividad, useSirviendo } from "../lib/servidor";
-import { apagarServidor, encenderServidor } from "./servirPanel";
+import { notificarEstadoServidor } from "../lib/presencia";
 import type { EstadoServidor } from "../types";
 
 type Copiado = "direccion" | "puerto" | "token" | "cadena" | null;
@@ -37,11 +37,14 @@ export default function Servir({ onCerrar }: { onCerrar: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [copiado, setCopiado] = useState<Copiado>(null);
   const [direccionElegida, setDireccionElegida] = useState<string | null>(null);
-  const sirviendo = useSirviendo();
 
   useEffect(() => {
     servirEstado()
-      .then((e) => { setEstado(e); setDireccionElegida(e.direcciones[0] ?? null); })
+      .then((e) => {
+        setEstado(e);
+        setDireccionElegida(e.direcciones[0] ?? null);
+        notificarEstadoServidor(e);
+      })
       .catch((e) => setError(String(e).replace(/^Error:\s*/, "")))
       .finally(() => setCargando(false));
   }, []);
@@ -56,9 +59,8 @@ export default function Servir({ onCerrar }: { onCerrar: () => void }) {
     setCambiando(true);
     setError(null);
     try {
-      // Vaciar lo pendiente y solo entonces soltar la escritura local: en
-      // ese orden, y no al revés, porque al revés se pierde la última marca.
-      const e = await encenderServidor({ servirIniciar, servirDetener, activarExclusividad, desactivarExclusividad });
+      const e = await servirIniciar(0);
+      notificarEstadoServidor(e);
       setEstado(e);
       setDireccionElegida((d) => d ?? e.direcciones[0] ?? null);
     } catch (e) {
@@ -72,10 +74,8 @@ export default function Servir({ onCerrar }: { onCerrar: () => void }) {
     setCambiando(true);
     setError(null);
     try {
-      // La ventana local vuelve a ser escritora; Revisión, si está abierta,
-      // recarga el artículo desde la base en vez de confiar en lo que tenía
-      // en memoria.
-      const e = await apagarServidor({ servirIniciar, servirDetener, activarExclusividad, desactivarExclusividad });
+      const e = await servirDetener();
+      notificarEstadoServidor(e);
       setEstado(e);
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -104,8 +104,10 @@ export default function Servir({ onCerrar }: { onCerrar: () => void }) {
 
         <h2 className="t-display" style={{ fontSize: 22, margin: "0 0 10px" }}>Corregir desde otra máquina</h2>
         <p className="t-cuerpo" style={{ margin: "0 0 20px", color: "var(--t2)", maxWidth: "48ch" }}>
-          Enciende el servidor y pasa la cadena de conexión a la otra máquina. Mientras esté
-          encendido, esta ventana deja de anotar: la otra tiene el control.
+          Enciende el servidor y pasa la cadena de conexión a la otra máquina. Esta ventana sigue
+          anotando con normalidad: el bloqueo ahora es por artículo, no por máquina — quien abre un
+          artículo en cualquiera de las dos lo ocupa para las dos, y las dos pueden seguir corrigiendo
+          artículos distintos a la vez.
         </p>
 
         {cargando && <p className="t-cuerpo" style={{ color: "var(--t3)" }}>Consultando el estado…</p>}
@@ -123,18 +125,14 @@ export default function Servir({ onCerrar }: { onCerrar: () => void }) {
               <span style={{ fontSize: 14, fontWeight: 500, color: "var(--t1)" }}>
                 {estado.activo ? "Sirviendo" : "Apagado"}
               </span>
-              {sirviendo !== estado.activo && (
-                <span className="t-menor" style={{ color: "var(--t3)" }}>
-                  (actualizando el aviso en Revisión…)
-                </span>
-              )}
             </div>
 
             {estado.activo && (
               <>
                 <Aviso estado="advertencia">
-                  La anotación en esta ventana está en pausa mientras sirvas. Apaga el servidor para
-                  volver a corregir aquí.
+                  Esta ventana sigue anotando con normalidad. El bloqueo ahora es por artículo:
+                  el que abras aquí o desde la otra máquina queda ocupado para las dos hasta que
+                  se cierre o se suelte.
                 </Aviso>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 14, margin: "20px 0" }}>

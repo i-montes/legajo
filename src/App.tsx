@@ -23,6 +23,7 @@ import {
   olvidarConexionRemota, useConexionRemotaGuardada, useModoRemoto, volverAModoLocal,
 } from "./lib/conexionRemota";
 import type { ConexionRemota } from "./lib/conexionRemota";
+import { useIdentidad, useSesiones } from "./lib/presencia";
 import type { Discovery, SesionRecuperada } from "./types";
 
 /* Durante los tres primeros pasos la app se presenta sin cromo: son pantallas
@@ -247,6 +248,7 @@ export default function App() {
             <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--exito)", display: "block" }} />
             Procesamiento local
           </div>
+          <IndicadorPresencia />
           <BotonTema tema={tema} onClick={() => setTema(tema === "claro" ? "oscuro" : "claro")} borde />
           {/* La ayuda existía en los ocho pasos pero solo se veía en los tres
               primeros; en el resto había que saber que «?» la abría. */}
@@ -624,6 +626,44 @@ function BotonTema({ tema, onClick, borde }: { tema: string; onClick: () => void
   );
 }
 
+/** Quién más está anotando ahora mismo, cuando hay más de una sesión
+ *  conectada al servidor de presencia (`lib/presencia.ts`). Con una sola
+ *  sesión —el caso normal, un solo usuario local— no hay nada que mostrar:
+ *  el indicador desaparece en vez de anunciar una compañía que no existe.
+ *  Cada chip lleva su `title` con el artículo que esa sesión tiene abierto,
+ *  para no tener que adivinarlo del emoji y el nombre solos. */
+function IndicadorPresencia() {
+  const sesiones = useSesiones();
+  const yo = useIdentidad();
+  if (sesiones.length <= 1) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, flexWrap: "wrap" }}>
+      {sesiones.map((s) => {
+        const esYo = s.sesion === yo?.sesion;
+        const donde = s.loteId != null && s.wpId != null
+          ? `en el artículo #${s.wpId} del lote ${s.loteId}`
+          : "sin ningún artículo abierto";
+        return (
+          <span
+            key={s.sesion}
+            title={`${s.nombre}${esYo ? " (tú)" : ""} · ${donde}`}
+            style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "2px 8px",
+              borderRadius: 999, border: `1px solid ${esYo ? "var(--acento)" : "var(--borde)"}`,
+              color: esYo ? "var(--t1)" : "var(--t2)", fontWeight: esYo ? 600 : 400,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span aria-hidden style={{ width: 5, height: 5, borderRadius: 999, background: esYo ? "var(--acento)" : "var(--t3)", display: "block" }} />
+            <span aria-hidden>{s.emoji}</span>
+            <span>{s.nombre}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── Modo remoto ───────────────────────────────────────────────────────────
    Trabajando contra la base de otra máquina no hay archivo que conectar, ni
    censo, ni modelos, ni extracción que configurar: todo eso ya lo hizo la
@@ -706,6 +746,7 @@ function PantallaRemota({
           <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--advertencia)", display: "block" }} />
           Remoto · {conexion.direccion}:{conexion.puerto}
         </div>
+        <IndicadorPresencia />
         <BotonTema tema={tema} onClick={() => setTema(tema === "claro" ? "oscuro" : "claro")} borde />
         <Boton variante="texto" onClick={() => volverAModoLocal()}>trabajar en esta máquina</Boton>
         {!confirmarOlvido ? (
