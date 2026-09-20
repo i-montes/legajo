@@ -137,4 +137,25 @@ describe("llamar en modo remoto", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("no soy json", { status: 400 })));
     await expect(llamar("preparar_modelos", {})).rejects.toThrow(/máquina que tiene la base/);
   });
+
+  describe("registro de fallos remotos", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("una llamada remota fallida se registra una sola vez, con el comando y la URL", async () => {
+      const consoleErrorFalso = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+      try {
+        await expect(llamar("lotes", {})).rejects.toBeInstanceOf(Error);
+        expect(consoleErrorFalso).toHaveBeenCalledTimes(1);
+        const [mensaje, error] = consoleErrorFalso.mock.calls[0];
+        expect(mensaje).toContain("lotes");
+        expect(mensaje).toContain("http://192.168.1.9:4177/api/lotes");
+        expect(error).toBeInstanceOf(Error);
+      } finally {
+        consoleErrorFalso.mockRestore();
+      }
+    });
+  });
 });

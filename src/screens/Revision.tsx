@@ -45,10 +45,69 @@ const VIGENCIAS: Record<Vigencia, { glifo: string; ayuda: string }> = {
   futura: { glifo: "◵", ayuda: "Anunciada para después: «asumirá», «será». Clic para cambiar." },
 };
 
+/** Lo que necesita `cargarMuestraDelLote` para traer la muestra y colocar el
+ *  cursor donde toca, sin depender de React: las llamadas al backend y los
+ *  setters que va a tocar. Separado del efecto para poder probar la lógica
+ *  —qué pasa si algo falla, dónde cae el cursor al reanudar— sin montar el
+ *  componente. */
+export interface DepsCargaMuestra {
+  cargarMuestra: (loteId: number) => Promise<FilaAnotable[]>;
+  avanceAnotacion: (loteId: number) => Promise<[number, number]>;
+  reanudarAnotacion: (loteId: number) => Promise<number | null>;
+  cargarLexico: (loteId: number) => Promise<EntradaLexico[]>;
+  setFilas: (filas: FilaAnotable[]) => void;
+  setHechos: (h: number) => void;
+  setLexico: (l: EntradaLexico[]) => void;
+  setI: (i: number) => void;
+  setFrontera: (f: number) => void;
+}
+
+/** Trae la muestra del lote y reanuda en el primer artículo sin cerrar.
+ *
+ *  `cargarMuestra` y `avanceAnotacion` van envueltos por separado para que,
+ *  si el `Promise.all` rechaza, el mensaje diga cuál de las dos llamadas
+ *  falló y no deje la pantalla de carga puesta para siempre sin ninguna
+ *  pista. `reanudarAnotacion` es distinto: no tener un «siguiente sin
+ *  cerrar» es un resultado legítimo (todo está cerrado), no un fallo, así
+ *  que su rechazo se convierte en `null` y nunca impide que la muestra
+ *  cargue. */
+export async function cargarMuestraDelLote(loteId: number, deps: DepsCargaMuestra): Promise<void> {
+  const [lista, avance, siguiente] = await Promise.all([
+    deps.cargarMuestra(loteId).catch((e) => {
+      throw new Error(`muestra: ${e instanceof Error ? e.message : String(e)}`);
+    }),
+    deps.avanceAnotacion(loteId).catch((e) => {
+      throw new Error(`avance_anotacion: ${e instanceof Error ? e.message : String(e)}`);
+    }),
+    deps.reanudarAnotacion(loteId).catch(() => null),
+  ]);
+  deps.setFilas(lista);
+  deps.setHechos(avance[0]);
+  deps.cargarLexico(loteId).then(deps.setLexico).catch(() => {});
+  if (siguiente != null) {
+    const idx = lista.findIndex((f) => f.wp_id === siguiente);
+    const punto = idx >= 0 ? idx : 0;
+    deps.setI(punto);
+    deps.setFrontera(punto);
+  } else if (lista.length > 0) {
+    // Todo cerrado: se muestra la pantalla final, no el primer artículo.
+    // La frontera es esa misma pantalla, así que sigue siendo alcanzable
+    // después de bajar al primero a repasar.
+    deps.setI(lista.length);
+    deps.setFrontera(lista.length);
+  }
+}
+
 export default function Revision({ estado }: { estado: EstadoApp }) {
   const { loteId } = estado;
   const remoto = useModoRemoto();
   const [filas, setFilas] = useState<FilaAnotable[] | null>(null);
+  /* Un fallo al cargar la muestra (timeout, servidor caído, red cortada) no
+     debe parecer una carga lenta para siempre: `filas` se queda en `null` y
+     sin esto la pantalla de «Cargando…» no tendría manera de distinguirse de
+     un error que nadie puede diagnosticar ni reintentar. */
+  const [errorMuestra, setErrorMuestra] = useState<string | null>(null);
+  const [intentoMuestra, setIntentoMuestra] = useState(0);
   const [i, setI] = useState(0);
   const [menciones, setMenciones] = useState<Mencion[]>([]);
   const [relaciones, setRelaciones] = useState<RelacionFila[]>([]);
@@ -77,6 +136,15 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      corrigen igual pero no merecen la misma confianza, y decirlo evita que se
      revise el trabajo del modelo con el mismo ojo que una propagación literal. */
   const [origen, setOrigen] = useState<"modelo" | "lexico" | null>(null);
+  /* Un fallo al traer la anotación o el tiempo de ESTE artículo (timeout,
+     servidor caído) no debía tener ninguna señal: sin `.catch` en el
+     `Promise.all` de más abajo, `menciones` y `relaciones` se quedaban con lo
+     del artículo ANTERIOR, mostrado bajo el texto del nuevo —peor que una
+     pantalla de carga colgada, es un dato activamente falso—. Se limpia al
+     empezar cada intento y se puede reintentar sin recargar la pantalla
+     entera. */
+  const [errorArticulo, setErrorArticulo] = useState<string | null>(null);
+  const [intentoArticulo, setIntentoArticulo] = useState(0);
   /* Al pasar el ratón por una relación se iluminan sus dos marcas en el texto.
      Es la única forma de saber cuál de los dos «50 mil millones» es: en el
      panel las dos filas se leen igual. */
@@ -147,36 +215,28 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
      el cronómetro contaría de nuevo tiempo sobre artículos ya medidos: la cifra
      de minutos por artículo es justo lo que la fase existe para producir. */
   useEffect(() => {
-    if (loteId == null) { setFilas([]); return; }
-    void (async () => {
-      const design = loteId;
-      const [lista, avance, siguiente] = await Promise.all([
-        cargarMuestra(design),
-        avanceAnotacion(design),
-        reanudarAnotacion(design).catch(() => null),
-      ]);
-      setFilas(lista);
-      setHechos(avance[0]);
-      cargarLexico(design).then(setLexico).catch(() => {});
-      if (siguiente != null) {
-        const idx = lista.findIndex((f) => f.wp_id === siguiente);
-        const punto = idx >= 0 ? idx : 0;
-        setI(punto);
-        setFrontera(punto);
-      } else if (lista.length > 0) {
-        // Todo cerrado: se muestra la pantalla final, no el primer artículo.
-        // La frontera es esa misma pantalla, así que sigue siendo alcanzable
-        // después de bajar al primero a repasar.
-        setI(lista.length);
-        setFrontera(lista.length);
-      }
-    })();
-  }, [loteId]);
+    if (loteId == null) { setFilas([]); setErrorMuestra(null); return; }
+    let cancelado = false;
+    setErrorMuestra(null);
+    const design = loteId;
+    cargarMuestraDelLote(design, {
+      cargarMuestra, avanceAnotacion, reanudarAnotacion, cargarLexico,
+      setFilas: (f) => { if (!cancelado) setFilas(f); },
+      setHechos: (h) => { if (!cancelado) setHechos(h); },
+      setLexico: (l) => { if (!cancelado) setLexico(l); },
+      setI: (v) => { if (!cancelado) setI(v); },
+      setFrontera: (v) => { if (!cancelado) setFrontera(v); },
+    }).catch((e) => {
+      if (!cancelado) setErrorMuestra(e instanceof Error ? e.message : String(e));
+    });
+    return () => { cancelado = true; };
+  }, [loteId, intentoMuestra]);
 
   // Al cambiar de artículo se recuperan sus anotaciones y arranca el reloj.
   useEffect(() => {
     if (loteId == null || !fila) return;
     const wp = fila.wp_id;
+    setErrorArticulo(null);
     setRelSel([]); setPendiente(null); setPunto(null); setRelPicker(false); setCrudo(false);
     setUltimaPropagacion(null); setOrigen(null);
     recorrido.current = null; setRealzada(null);
@@ -210,6 +270,9 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
         setMenciones(previas);
         setPreMarcadas(previas.length);
         setOrigen(previas.length > 0 ? "lexico" : null);
+      })
+      .catch((e) => {
+        setErrorArticulo(e instanceof Error ? e.message : String(e));
       });
     /* `bloqueo.tipo` entra aquí solo para forzar esta misma recarga al pasar
        a «propio»: es la señal de que se obtuvo o se recuperó el bloqueo de
@@ -219,9 +282,10 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
        `recargaCambio` cubre el caso simétrico: no obtener el bloqueo, sino
        enterarse (vía `suscribirCambio`, más abajo) de que la otra máquina
        guardó algo por HTTP mientras esta ventana seguía mirando en solo
-       lectura. */
+       lectura. `intentoArticulo` es el botón «Reintentar» de más abajo: no
+       cambia nada de lo que se pide, solo repite el mismo intento. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loteId, fila?.wp_id, lexico, bloqueo.tipo, recargaCambio]);
+  }, [loteId, fila?.wp_id, lexico, bloqueo.tipo, recargaCambio, intentoArticulo]);
 
   /* Complemento de `useBloqueoArticulo`: mientras esta ventana no tiene el
      bloqueo de este artículo, es la única forma de enterarse de que la otra
@@ -309,7 +373,9 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     if (actual) {
       await guardarAnotacion(loteId, actual.wp_id, menciones, relaciones).catch(() => {});
       await cerrarArticulo(loteId, actual.wp_id, crono, menciones.length).catch(() => {});
-      avanceAnotacion(loteId).then(([h]) => setHechos(h));
+      // Solo refresca el contador de progreso; un fallo aquí no debe reventar
+      // en consola como una promesa sin atender.
+      avanceAnotacion(loteId).then(([h]) => setHechos(h)).catch(() => {});
     }
     const destino = Math.min(filas.length, i + 1);
     setI(destino);
@@ -324,7 +390,8 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
     // Descartar la medición de un artículo cerrado no reabre su reloj: la
     // invalida y ya. Volver a contar sobre él es justo lo que se está evitando.
     reloj.reiniciar(0, !cerrado);
-    avanceAnotacion(loteId).then(([h]) => setHechos(h));
+    // Idem: solo el contador de progreso, no una promesa sin atender.
+    avanceAnotacion(loteId).then(([h]) => setHechos(h)).catch(() => {});
   }, [loteId, fila?.wp_id, cerrado, puedeEscribir]);
 
   /* Nada de efectos dentro de un actualizador de estado: React los invoca dos
@@ -628,6 +695,14 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
 
 
   // ── estados vacíos ─────────────────────────────────────────────────────
+  if (errorMuestra) {
+    return (
+      <Lienzo>
+        <Aviso estado="error">No se pudo cargar la muestra: {errorMuestra}</Aviso>
+        <Boton variante="secundario" onClick={() => setIntentoMuestra((n) => n + 1)}>Reintentar</Boton>
+      </Lienzo>
+    );
+  }
   if (filas === null) {
     return <Lienzo><p className="t-cuerpo" style={{ color: "var(--t3)" }}>Cargando la muestra…</p></Lienzo>;
   }
@@ -830,6 +905,20 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
               <span>·</span>
               <span className="t-mono">#{fila.wp_id}</span>
             </div>
+
+            {/* Un fallo al traer la anotación o el tiempo de este artículo:
+                antes se perdía en silencio y dejaba en pantalla las marcas del
+                artículo anterior, como si fueran las de este. Ahora se ve, con
+                un botón que repite el mismo intento sin recargar la pantalla
+                entera. */}
+            {errorArticulo && (
+              <Aviso estado="error">
+                No se pudo cargar este artículo: {errorArticulo}{" "}
+                <Boton variante="secundario" onClick={() => setIntentoArticulo((n) => n + 1)}>
+                  Reintentar
+                </Boton>
+              </Aviso>
+            )}
 
             {/* Un error de protocolo del servidor (mensaje que no entendió):
                 antes se perdía en silencio y el botón que lo provocó parecía

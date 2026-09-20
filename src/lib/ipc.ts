@@ -118,7 +118,16 @@ export function llamar<T>(comando: string, args?: unknown): Promise<T> {
       // `fetch` a ninguna parte.
       return Promise.reject(new Error("No hay ninguna máquina remota configurada."));
     }
-    return llamarRemoto<T>(conexion, comando, args);
+    const url = `${baseUrlRemota(conexion)}/api/${comando}`;
+    return llamarRemoto<T>(conexion, comando, args).catch((e) => {
+      // Se registra una sola vez, con el comando y la URL exacta a la que se
+      // mandó, para que un usuario remoto pueda copiar y pegar esto cuando
+      // algo falla. Las llamadas locales (`invoke`) no pasan por aquí: no
+      // tiene sentido llenar la consola con nada que no sea un fallo real
+      // contra otra máquina.
+      console.error(`[legajo] «${comando}» → ${url} falló:`, e);
+      throw e;
+    });
   }
   return invoke<T>(comando, args as Record<string, unknown> | undefined);
 }
