@@ -1,13 +1,40 @@
 import { useEffect, useState } from "react";
 import { Acciones, Barra, Boton, Cargando, Encabezado, Glifo, Lienzo, Razon, Rotulo } from "../ui";
 import { hallazgosArchivo } from "../lib/ipc";
+import { pasoDe } from "../contenido/pasos";
 import type { Hallazgo } from "../types";
 import type { EstadoApp } from "../App";
 
 const num = (n: number) => n.toLocaleString("es-CO");
+const INDICE_SANIDAD = pasoDe("sanidad")!.indice;
+
+/** Si «Elegir el alcance» debe estar disponible.
+ *
+ * Aparte del componente para poder probarlo sin renderizar nada: es la
+ * regla que decide si este paso vuelve a exigir redecidir hallazgos ya
+ * superados. `yaSuperado` es la señal de que el progreso guardado —ahora
+ * deducido de la base, no de un contador que se puede corromper— ya pasó de
+ * aquí: si lo hizo, hubo una decisión en su momento, y repetirla no es un
+ * requisito, es un trámite. */
+export function puedeSeguirSanidad(
+  hallazgos: Pick<Hallazgo, "clave" | "bloquea">[],
+  decisiones: Record<string, string>,
+  yaSuperado: boolean,
+): boolean {
+  if (yaSuperado) return true;
+  return hallazgos.filter((h) => h.bloquea).every((h) => decisiones[h.clave]);
+}
 
 export default function Sanidad({ estado }: { estado: EstadoApp }) {
   const { conexionId } = estado;
+  /* Las decisiones son de esta visita: no se guardan en la base, así que
+     volver aquí después de haber seguido de largo —a elegir el alcance, a
+     calibrar, a revisar— las encuentra vacías otra vez. Antes eso volvía a
+     bloquear «Elegir el alcance» hasta redecidir hallazgos ya superados, y
+     con ellos no había nada más que hacer: el alcance ya estaba elegido, el
+     lote ya existía. Si el progreso guardado ya pasó de este paso, la
+     decisión de seguir no depende de repetir el trámite. */
+  const yaSuperado = estado.progreso > INDICE_SANIDAD;
   const [hallazgos, setHallazgos] = useState<Hallazgo[] | null>(null);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [decisiones, setDecisiones] = useState<Record<string, string>>({});
@@ -36,8 +63,7 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
   }
 
   const resueltos = hallazgos.filter((h) => decisiones[h.clave]).length;
-  const bloqueantes = hallazgos.filter((h) => h.bloquea);
-  const bloqueantesResueltos = bloqueantes.every((h) => decisiones[h.clave]);
+  const bloqueantesResueltos = puedeSeguirSanidad(hallazgos, decisiones, yaSuperado);
   const completo = resueltos === hallazgos.length;
 
   if (hallazgos.length === 0) {
@@ -147,7 +173,9 @@ export default function Sanidad({ estado }: { estado: EstadoApp }) {
       </div>
 
       <Acciones nota={
-        !bloqueantesResueltos
+        yaSuperado && resueltos === 0
+          ? "Ya habías seguido de aquí en adelante: el alcance quedó elegido con lo que decidiste entonces."
+          : !bloqueantesResueltos
           ? "Los hallazgos marcados con ▲ impiden seguir mientras no se decidan."
           : completo
           ? "Listo: el alcance se elige con estas reglas."

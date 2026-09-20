@@ -18,6 +18,7 @@ import Fundamentos from "./screens/Fundamentos";
 import Servir from "./screens/Servir";
 import { Aviso, Boton } from "./ui";
 import { cargarSesion, guardarSesion, olvidarSesion } from "./lib/ipc";
+import { combinarProgreso, progresoDeducido } from "./lib/progreso";
 import {
   olvidarConexionRemota, useConexionRemotaGuardada, useModoRemoto, volverAModoLocal,
 } from "./lib/conexionRemota";
@@ -70,6 +71,10 @@ export default function App() {
   const [splash, setSplash] = useState(true);
   const [sesionPrevia, setSesionPrevia] = useState<SesionRecuperada | null>(null);
   const [servirAbierto, setServirAbierto] = useState(false);
+  /* «Conectar otro archivo» borra por dónde ibas sin avisar —así fue como se
+     bloqueó el usuario que motivó todo esto—. Ahora pide un segundo clic, con
+     el mismo patrón que ya usa «olvidar» en `PantallaRemota` más abajo. */
+  const [confirmarOtroArchivo, setConfirmarOtroArchivo] = useState(false);
   /* Trabajar contra la base de otra máquina, en vez de un archivo conectado
      aquí. `useModoRemoto` es reactivo: cuando `ConexionRemota.tsx` activa el
      modo, esta pantalla se entera sola y cambia de aspecto sin que nadie más
@@ -81,6 +86,17 @@ export default function App() {
      la base; lo que faltaba era volver a él sin repetir la conexión, el censo y
      la navegación cada vez que se cierra la ventana.
 
+     Pero la fila de sesión —`paso`, `progreso`, `lote_id`— es un recuerdo, no
+     la fuente de verdad: se escribe en cada cambio de pantalla y un clic de
+     más («Conectar otro archivo» sin querer, o cualquier fallo que la deje a
+     medias) la pone en cero sin tocar un solo dato real. `progresoDeducido`
+     mira la base —conexión, censo, lotes, anotaciones— y dice el progreso
+     mínimo que ESO puede demostrar; `combinarProgreso` se queda con el mayor
+     entre lo guardado y lo deducido, así que un contador roto nunca puede
+     esconder un lote que sí tiene trabajo. Corre incluso sin fila de sesión:
+     si `cargarSesion` no trae nada, se busca la conexión guardada de todos
+     modos.
+
      En modo remoto esto se salta entero: `llamar` mandaría esta consulta a la
      máquina remota, y guardar aquí su respuesta —su `connectionId`, su
      `loteId`— dejaría el estado de esta ventana apuntando a los identificadores
@@ -90,20 +106,32 @@ export default function App() {
      propia lectura de la sesión, aparte, mientras dura el modo remoto. */
   useEffect(() => {
     if (modoRemoto) { setRestaurando(false); return; }
-    cargarSesion()
-      .then((s) => {
-        if (s && s.sitio && s.connection_id != null) {
-          setSesionPrevia(s);
-          setSitio(s.sitio);
-          setConexionId(s.connection_id);
-          setTaxonomia(s.taxonomia);
-          setLoteId(s.lote_id);
-          setProgreso(s.progreso);
-          setPaso(s.paso as Paso);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setRestaurando(false));
+    let cancelado = false;
+    (async () => {
+      let s: SesionRecuperada | null = null;
+      try { s = await cargarSesion(); } catch { /* se sigue igual: se deduce de la base */ }
+      if (cancelado) return;
+      if (s && s.sitio && s.connection_id != null) setSesionPrevia(s);
+
+      const deducido = await progresoDeducido(
+        s?.connection_id ?? null, s?.lote_id ?? null, s?.taxonomia ?? null
+      ).catch(() => null);
+      if (cancelado) return;
+
+      const connectionId = deducido?.connectionId ?? s?.connection_id ?? null;
+      if (connectionId == null) return; // ni sesión ni conexión guardada: sigue en el paso 1.
+
+      setConexionId(connectionId);
+      setTaxonomia(s?.taxonomia ?? null);
+      setLoteId(deducido?.loteId ?? s?.lote_id ?? null);
+      // `deducido.sitio` viene definido solo cuando hubo que ir a buscarlo
+      // porque la sesión no traía el suyo; si la sesión sí lo traía, no se pisa.
+      if (deducido && deducido.sitio !== undefined) setSitio(deducido.sitio);
+      else if (s?.sitio) setSitio(s.sitio);
+      setPaso((s?.paso as Paso) ?? "conexion");
+      setProgreso(combinarProgreso(s?.progreso ?? 0, deducido?.progreso ?? 0));
+    })().finally(() => { if (!cancelado) setRestaurando(false); });
+    return () => { cancelado = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -318,20 +346,49 @@ export default function App() {
             >
               Servir a otro computador
             </button>
-            <button
-              onClick={() => {
-                // Solo se olvida por dónde ibas: el censo, la muestra, las
-                // anotaciones y los tiempos siguen donde estaban.
-                olvidarSesion().catch(() => {});
-                setSitio(null); setConexionId(null); setTaxonomia(null); setLoteId(null);
-                setProgreso(0); setPaso("conexion"); setAviso(null);
-              }}
-              style={{ appearance: "none", border: 0, background: "transparent", textAlign: "left", padding: "8px 10px", fontSize: 12.5, color: "var(--t3)", cursor: "pointer" }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t1)")}
-              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}
-            >
-              Conectar otro archivo
-            </button>
+
+            {/* Separada de las dos anteriores a propósito: aquellas cambian de
+                pantalla, esta borra por dónde ibas. Antes las tres eran la
+                misma línea de texto gris y esa semejanza fue justo lo que
+                llevó a pulsarla sin querer y quedar sin poder volver. Un
+                margen, un trazo y un color de aviso bastan para que no se
+                confunda con un botón cualquiera del pie. */}
+            {!confirmarOtroArchivo ? (
+              <button
+                onClick={() => setConfirmarOtroArchivo(true)}
+                title="Olvida por dónde ibas y a qué archivo estás conectado. No borra ninguna anotación."
+                style={{
+                  appearance: "none", border: 0, borderTop: "1px solid var(--borde)", background: "transparent",
+                  textAlign: "left", padding: "12px 10px 8px", marginTop: 6, fontSize: 12.5,
+                  color: "var(--error)", cursor: "pointer", opacity: 0.85,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.85")}
+              >
+                Conectar otro archivo…
+              </button>
+            ) : (
+              <div style={{ borderTop: "1px solid var(--borde)", marginTop: 6, padding: "12px 10px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: "var(--t2)" }}>
+                  Olvidas por dónde ibas y a qué archivo estabas conectado. <strong style={{ color: "var(--t1)" }}>
+                  Las anotaciones, el censo, la muestra y los tiempos se quedan donde están:</strong> nada de eso se borra.
+                </p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Boton
+                    variante="secundario"
+                    onClick={() => {
+                      setConfirmarOtroArchivo(false);
+                      ejecutarOlvidoDeArchivo({
+                        olvidarSesion, setSitio, setConexionId, setTaxonomia, setLoteId, setProgreso, setPaso, setAviso,
+                      });
+                    }}
+                  >
+                    Olvidar y conectar otro
+                  </Boton>
+                  <Boton variante="texto" onClick={() => setConfirmarOtroArchivo(false)}>cancelar</Boton>
+                </div>
+              </div>
+            )}
           </nav>
         )}
 
@@ -383,6 +440,35 @@ const nombrePaso = (k: string) => {
   const p = pasoDe(k);
   return p ? `Paso ${p.indice + 1} · ${p.etiqueta}` : k;
 };
+
+/** Lo que hace de verdad «Conectar otro archivo» al confirmarse: olvida por
+ *  dónde iba esta ventana y la deja lista para conectar desde cero. No toca
+ *  el censo, la muestra, las anotaciones ni los tiempos —viven en otras
+ *  tablas, atadas a la conexión y al lote, no a esta fila de sesión—.
+ *
+ *  Aparte de la pantalla y con sus dependencias inyectadas para poder
+ *  probar, sin ambigüedad, que esto solo corre cuando se llama de verdad: el
+ *  primer clic en el botón nunca debe ejecutar esto, solo mostrar la
+ *  confirmación. */
+export function ejecutarOlvidoDeArchivo(deps: {
+  olvidarSesion: () => Promise<void>;
+  setSitio: (d: Discovery | null) => void;
+  setConexionId: (id: number | null) => void;
+  setTaxonomia: (t: string | null) => void;
+  setLoteId: (id: number | null) => void;
+  setProgreso: (p: number) => void;
+  setPaso: (p: Paso) => void;
+  setAviso: (a: string | null) => void;
+}): void {
+  deps.olvidarSesion().catch(() => {});
+  deps.setSitio(null);
+  deps.setConexionId(null);
+  deps.setTaxonomia(null);
+  deps.setLoteId(null);
+  deps.setProgreso(0);
+  deps.setPaso("conexion");
+  deps.setAviso(null);
+}
 
 /* ── Panel de ayuda ────────────────────────────────────────────────────────
    El mismo orden en los ocho pasos: qué es, qué consigues, qué haces, qué
