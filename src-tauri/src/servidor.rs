@@ -78,6 +78,38 @@
 //! abajo, lee el código fuente real de `commands.rs` y comprueba que ningún
 //! nombre fuera de `EXPUESTOS` llega a ejecutarse.
 //!
+//! ## El WebSocket: los mensajes, y por qué uno no puede morir en silencio
+//!
+//! Aparte de las rutas HTTP de arriba, `GET /ws?token=<token>` (ver más abajo,
+//! «El WebSocket: presencia y bloqueos por artículo») lleva su propio
+//! protocolo de mensajes JSON con `tipo` como discriminador, en los dos
+//! sentidos:
+//!
+//!   - Cliente → servidor: `hola` (identifica al cliente y arranca la
+//!     sesión), `tomar`/`soltar`/`forzar` (piden, sueltan o arrebatan el
+//!     bloqueo de un artículo, los tres con `loteId`/`wpId`) y `latido`
+//!     (mantiene la sesión viva). `MensajeCliente`, más abajo, es la fuente
+//!     de verdad de su forma exacta.
+//!   - Servidor → cliente: `bienvenida`, `presencia`, `tomado`, `ocupado`,
+//!     `perdido`, `cambiado` y, desde este cambio, `error`.
+//!
+//! `error` —`{"tipo":"error","mensaje":"<texto>"}`— es la respuesta a
+//! cualquier mensaje entrante que no deserialice contra `MensajeCliente`:
+//! JSON roto, un `tipo` que no existe, o uno que existe pero con campos que
+//! faltan o no casan. Es justo lo que pasaba con el bug que motivó esto: un
+//! cliente que mandaba `{"tipo":"forzar"}` sin `loteId`/`wpId`, que el
+//! servidor descartaba en silencio porque no deserializaba contra ningún
+//! brazo del enum. Antes de este cambio, ese descarte dejaba al cliente
+//! esperando para siempre una respuesta —`tomado`, `ocupado`, `perdido`—
+//! que nunca iba a llegar: indistinguible, para quien mira la pantalla, de
+//! que el clic no tuvo ningún efecto. `error` no cierra la conexión ni toca
+//! ningún bloqueo existente: es solo un aviso de que ESE mensaje en
+//! concreto no se entendió, y la sesión sigue viva para el siguiente. Un
+//! cliente viejo que no sepa qué es `"error"` lo trata igual que cualquier
+//! otro `tipo` desconocido —lo ignora sin romperse (ver el `default` de
+//! `manejarMensaje` en `presencia.ts`)—, así que añadir este mensaje no es
+//! una ruptura de compatibilidad.
+//!
 //! ## La trampa de `grafo_evidencia`
 //!
 //! De los 16 comandos expuestos, `grafo_evidencia` es el único cuyos
@@ -980,6 +1012,16 @@ fn msg_cambiado(lote_id: i64, wp_id: i64) -> String {
     serde_json::json!({ "tipo": "cambiado", "loteId": lote_id, "wpId": wp_id }).to_string()
 }
 
+/// Mensaje de error de protocolo: la respuesta a un mensaje entrante que no
+/// deserializó contra `MensajeCliente` (ver la sección «El WebSocket: los
+/// mensajes…» en el docstring del módulo). No es un `Result` que se
+/// propague ni cierra la conexión: es solo lo que evita que un mensaje mal
+/// formado desaparezca sin dejar rastro para quien mira la pantalla al otro
+/// lado.
+fn msg_error(mensaje: &str) -> String {
+    serde_json::json!({ "tipo": "error", "mensaje": mensaje }).to_string()
+}
+
 /// Manda `payload` solo a `sesion_id`. Si ya no está presente (se desconectó
 /// justo antes), no hace nada: no hay nadie a quien avisar.
 fn enviar_a(registro: &RegistroWs, sesion_id: &str, payload: String) {
@@ -1082,12 +1124,27 @@ async fn manejar_ws(
 async fn manejar_conexion(mut socket: WebSocket, estado: EstadoHttp) {
     // El primer mensaje tiene que ser «hola»: sin el `cliente` que lleva
     // dentro no hay a quién darle sesión ni animal. Cualquier otra cosa
-    // primero —incluida una desconexión— y no hay sesión que crear.
+    // primero —incluida una desconexión— y no hay sesión que crear. Antes de
+    // cerrar, se avisa con `error` por el socket directamente (todavía no hay
+    // sesión registrada en `RegistroWs`, así que no hay `enviar_a` posible):
+    // más vale que quien programó un cliente que manda otra cosa primero se
+    // entere de por qué no llegó ninguna `bienvenida`.
     let cliente = loop {
         match socket.recv().await {
             Some(Ok(Message::Text(t))) => match serde_json::from_str::<MensajeCliente>(&t) {
                 Ok(MensajeCliente::Hola { cliente }) => break cliente,
-                _ => return,
+                Ok(_) => {
+                    let _ = socket
+                        .send(Message::Text(msg_error("el primer mensaje debe ser «hola»").into()))
+                        .await;
+                    return;
+                }
+                Err(e) => {
+                    let _ = socket
+                        .send(Message::Text(msg_error(&format!("mensaje no reconocido: {e}")).into()))
+                        .await;
+                    return;
+                }
             },
             Some(Ok(_)) => continue,
             _ => return,
@@ -1138,13 +1195,21 @@ async fn manejar_conexion(mut socket: WebSocket, estado: EstadoHttp) {
 }
 
 /// Procesa un mensaje ya identificado como texto de esta sesión. Un mensaje
-/// que no encaja en `MensajeCliente` (JSON roto, `tipo` desconocido) se
-/// ignora sin cerrar la conexión: más vale eso que dejar que un cliente
-/// desactualizado tire la sesión de todos.
+/// que no encaja en `MensajeCliente` (JSON roto, `tipo` desconocido, o un
+/// `tipo` conocido con campos que faltan o no casan) no se ignora en
+/// silencio: se le contesta a quien lo mandó con `error` (ver `msg_error` y
+/// la sección «El WebSocket: los mensajes…» en el docstring del módulo), sin
+/// cerrar la conexión —más vale eso que dejar que un cliente desactualizado
+/// tire la sesión de todos—. Antes de este cambio esto se descartaba sin
+/// avisar: es justo lo que convertía un `forzar` sin `loteId`/`wpId` en un
+/// botón que en apariencia no hacía nada.
 fn procesar_mensaje_cliente(registro: &RegistroWs, sesion_id: &str, texto: &str) {
     let mensaje = match serde_json::from_str::<MensajeCliente>(texto) {
         Ok(m) => m,
-        Err(_) => return,
+        Err(e) => {
+            enviar_a(registro, sesion_id, msg_error(&format!("mensaje no reconocido: {e}")));
+            return;
+        }
     };
     match mensaje {
         // Ya se usó como primer mensaje; una segunda «hola» no hace nada.
@@ -2206,6 +2271,128 @@ mod tests {
 
         detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn mensaje_invalido_recibe_error_y_no_desconecta() {
+        // El bug original: "forzar" sin loteId/wpId, exactamente lo que
+        // mandaba `arrebatar()` en el cliente antes de este commit. Antes de
+        // este cambio, el servidor lo descartaba en silencio y la conexión
+        // se quedaba esperando un "tomado" que nunca llegaba.
+        let (path, db) = db_de_prueba("ws-mensaje-invalido");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut a, "maquina-a").await;
+
+        ws_enviar(&mut a, &serde_json::json!({ "tipo": "forzar" }).to_string()).await;
+        let error = ws_recibir_tipo(&mut a, "error").await;
+        assert!(!error["mensaje"].as_str().unwrap().is_empty());
+
+        // La sesión sigue viva: un mensaje válido después funciona con
+        // normalidad, prueba de que el error no tiró la conexión.
+        ws_tomar(&mut a, 1, 10).await;
+        let tomado = ws_recibir_tipo(&mut a, "tomado").await;
+        assert_eq!(tomado["loteId"], 1);
+        assert_eq!(tomado["wpId"], 10);
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn tipo_desconocido_tambien_recibe_error() {
+        let (path, db) = db_de_prueba("ws-tipo-desconocido");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut a, "maquina-a").await;
+
+        ws_enviar(&mut a, &serde_json::json!({ "tipo": "algo-que-no-existe" }).to_string()).await;
+        let error = ws_recibir_tipo(&mut a, "error").await;
+        assert!(!error["mensaje"].as_str().unwrap().is_empty());
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn primer_mensaje_que_no_es_hola_recibe_error_antes_de_cerrar() {
+        let (path, db) = db_de_prueba("ws-primer-mensaje-invalido");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        // Nunca manda "hola": manda "tomar" como primer mensaje.
+        ws_tomar(&mut a, 1, 2).await;
+        let error = ws_recibir_tipo(&mut a, "error").await;
+        assert!(!error["mensaje"].as_str().unwrap().is_empty());
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn contrato_mensajes_cliente_coincide_con_el_deserializador() {
+        // Pasa los cinco mensajes salientes REALES de `presencia.ts` —
+        // generados ejecutando su propio código (ver
+        // `tests/mensajes_cliente_presencia.ts` y
+        // `src/lib/protocoloPresencia.ts`), no una copia escrita a mano
+        // aquí— por el deserializador real del servidor. Esto es lo que
+        // habría cazado el bug de `forzar` sin `loteId`/`wpId`: una prueba
+        // con la carga escrita a mano en Rust nunca se habría enterado de
+        // que el cliente de verdad mandaba otra cosa.
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/mensajes_cliente_presencia.ts");
+        let salida = std::process::Command::new("node")
+            .arg("--experimental-strip-types")
+            .arg(script)
+            .output()
+            .expect("ejecutar node para generar los mensajes del cliente");
+        assert!(
+            salida.status.success(),
+            "el script de mensajes del cliente falló: {}",
+            String::from_utf8_lossy(&salida.stderr)
+        );
+        let texto = String::from_utf8(salida.stdout).expect("salida de node no es UTF-8");
+        let lineas: Vec<&str> = texto.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lineas.len(), 5, "se esperaban los cinco mensajes salientes, se obtuvo: {texto}");
+
+        match serde_json::from_str::<MensajeCliente>(lineas[0]).expect("«hola» debía deserializar") {
+            MensajeCliente::Hola { cliente } => assert_eq!(cliente, "cliente-de-prueba"),
+            _ => panic!("el primer mensaje debía ser «hola»"),
+        }
+        match serde_json::from_str::<MensajeCliente>(lineas[1]).expect("«tomar» debía deserializar") {
+            MensajeCliente::Tomar { lote_id, wp_id } => {
+                assert_eq!(lote_id, 7);
+                assert_eq!(wp_id, 42);
+            }
+            _ => panic!("el segundo mensaje debía ser «tomar»"),
+        }
+        match serde_json::from_str::<MensajeCliente>(lineas[2]).expect("«soltar» debía deserializar") {
+            MensajeCliente::Soltar { lote_id, wp_id } => {
+                assert_eq!(lote_id, 7);
+                assert_eq!(wp_id, 42);
+            }
+            _ => panic!("el tercer mensaje debía ser «soltar»"),
+        }
+        match serde_json::from_str::<MensajeCliente>(lineas[3])
+            .expect("«forzar» debía deserializar — esto es justo lo que fallaba antes de este commit")
+        {
+            MensajeCliente::Forzar { lote_id, wp_id } => {
+                assert_eq!(lote_id, 7);
+                assert_eq!(wp_id, 42);
+            }
+            _ => panic!("el cuarto mensaje debía ser «forzar»"),
+        }
+        match serde_json::from_str::<MensajeCliente>(lineas[4]).expect("«latido» debía deserializar") {
+            MensajeCliente::Latido => {}
+            _ => panic!("el quinto mensaje debía ser «latido»"),
+        }
     }
 
     #[tokio::test]
