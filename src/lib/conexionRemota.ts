@@ -23,6 +23,23 @@ export interface ConexionRemota {
 
 export type Modo = "local" | "remoto";
 
+/** Recorta espacios/saltos de línea y sube a mayúsculas.
+ *
+ *  El token lo genera el servidor en mayúsculas (alfabeto sin `0`/`O` ni
+ *  `1`/`l`), pero aquí se teclea o se pega a mano en otro computador, y
+ *  copiar/pegar arrastra minúsculas o espacios con la misma facilidad. El
+ *  servidor ya normaliza al comparar (ver `tokens_iguales`/`normalizar_token`
+ *  en `servidor.rs`), pero conviene que lo que se guarda aquí también quede
+ *  limpio: así lo que se ve en pantalla es lo que de verdad se manda, sin
+ *  espacios invisibles ni una mezcla de mayúsculas y minúsculas que no
+ *  coincide con lo que muestra el panel de «servir». Como el alfabeto del
+ *  token es solo mayúsculas y dígitos, esto no reduce la seguridad ni amplía
+ *  qué token vale: solo tolera cómo se haya tecleado. No «arreglar» esto de
+ *  vuelta a un valor sin normalizar. */
+export function normalizarToken(s: string): string {
+  return s.trim().toUpperCase();
+}
+
 const CLAVE_MODO = "legajo.modo";
 const CLAVE_CONEXION = "legajo.conexionRemota";
 

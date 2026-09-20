@@ -498,6 +498,21 @@ fn json_error(status: StatusCode, mensaje: impl Into<String>) -> Response {
     con_cors((status, Json(serde_json::json!({ "error": mensaje.into() }))).into_response())
 }
 
+/// Recorta espacios/saltos de línea y sube a mayúsculas antes de comparar.
+///
+/// El token se genera en mayúsculas (§`generar_token`) pero se teclea a mano
+/// en otro computador, y copiar/pegar arrastra minúsculas o espacios con la
+/// misma facilidad. Sin normalizar, escribirlo en minúsculas da el mismo 401
+/// que un token equivocado, y el mensaje de error no distingue una cosa de
+/// la otra. Como el alfabeto del token es solo mayúsculas y dígitos
+/// (`generar_token`), aceptar minúsculas no reduce el espacio de búsqueda ni
+/// resta seguridad: sigue habiendo un único token válido, solo que ahora se
+/// reconoce sin importar cómo se haya tecleado. No «arreglar» esto de vuelta
+/// a una comparación exacta.
+fn normalizar_token(s: &str) -> String {
+    s.trim().to_uppercase()
+}
+
 /// Compara en tiempo constante: el token no debería poder adivinarse a base
 /// de medir cuánto tarda en rechazarse cada intento.
 fn tokens_iguales(a: &[u8], b: &[u8]) -> bool {
@@ -528,7 +543,9 @@ async fn cors_y_token(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| tokens_iguales(t.as_bytes(), estado.token.as_bytes()))
+        .map(|t| {
+            tokens_iguales(normalizar_token(t).as_bytes(), normalizar_token(&estado.token).as_bytes())
+        })
         .unwrap_or(false);
 
     if !autorizado {
@@ -950,7 +967,10 @@ async fn manejar_ws(
     AxQuery(consulta): AxQuery<ConsultaWs>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !tokens_iguales(consulta.token.as_bytes(), estado.token.as_bytes()) {
+    if !tokens_iguales(
+        normalizar_token(&consulta.token).as_bytes(),
+        normalizar_token(&estado.token).as_bytes(),
+    ) {
         return json_error(StatusCode::UNAUTHORIZED, "token inválido");
     }
     ws.on_upgrade(move |socket| manejar_conexion(socket, estado))
@@ -1432,6 +1452,21 @@ mod tests {
         assert!(!tokens_iguales(b"abcd", b"abc"));
     }
 
+    #[test]
+    fn normalizar_token_recorta_espacios_y_sube_a_mayusculas() {
+        assert_eq!(normalizar_token("abcd-1234-efgh-5678"), "ABCD-1234-EFGH-5678");
+        assert_eq!(normalizar_token("  ABCD-1234-EFGH-5678  "), "ABCD-1234-EFGH-5678");
+        assert_eq!(normalizar_token("\tAbCd-1234-eFgH-5678\n"), "ABCD-1234-EFGH-5678");
+        assert_eq!(
+            tokens_iguales(
+                normalizar_token("abcd-1234-efgh-5678").as_bytes(),
+                normalizar_token(" ABCD-1234-EFGH-5678 ").as_bytes(),
+            ),
+            true,
+            "mismo token en minúsculas, mayúsculas y con espacios debe compararse igual"
+        );
+    }
+
     // ── Pruebas de HTTP de verdad, contra un servidor levantado en el sitio ──
 
     fn db_de_prueba(sufijo: &str) -> (std::path::PathBuf, Arc<Db>) {
@@ -1497,6 +1532,48 @@ mod tests {
 
         detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn token_por_http_se_reconoce_en_mayusculas_minusculas_y_con_espacios() {
+        let (path, db) = db_de_prueba("token-case-http");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        for variante in [
+            est.token.clone(),
+            est.token.to_lowercase(),
+            est.token.to_uppercase(),
+            mezclar_mayus_minus(&est.token),
+            format!("  {}  ", est.token),
+            format!(" {} ", est.token.to_lowercase()),
+        ] {
+            let (codigo, cuerpo) = pedir(addr, "GET", "/api/salud", Some(&variante), "").await;
+            assert_eq!(codigo, 200, "variante «{variante}» debía aceptarse: {cuerpo}");
+        }
+
+        // Un token realmente distinto sigue dando 401, con o sin las mismas
+        // libertades de mayúsculas/espacios: normalizar no debe ampliar el
+        // conjunto de tokens válidos, solo la forma de teclear el correcto.
+        let (codigo, cuerpo) = pedir(addr, "GET", "/api/salud", Some("zzzz-zzzz-zzzz-zzzz"), "").await;
+        assert_eq!(codigo, 401, "token distinto en minúsculas: {cuerpo}");
+        let (codigo, cuerpo) =
+            pedir(addr, "GET", "/api/salud", Some(&format!("  {} ", "ZZZZ-ZZZZ-ZZZZ-ZZZZ")), "").await;
+        assert_eq!(codigo, 401, "token distinto con espacios: {cuerpo}");
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Alterna mayúsculas y minúsculas carácter a carácter, para probar el
+    /// caso «mezcla» sin depender de que el token generado tenga alguna
+    /// letra en una posición concreta.
+    fn mezclar_mayus_minus(s: &str) -> String {
+        s.chars()
+            .enumerate()
+            .map(|(i, c)| if i % 2 == 0 { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() })
+            .collect()
     }
 
     #[tokio::test]
@@ -2138,6 +2215,49 @@ mod tests {
         assert!(
             ws_conectar_con_token(addr, &est.token).await.is_some(),
             "con el token correcto sí debía aceptar el upgrade"
+        );
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn token_por_ws_se_reconoce_en_mayusculas_minusculas_y_con_espacios() {
+        let (path, db) = db_de_prueba("ws-token-case");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        assert!(
+            ws_conectar_con_token(addr, &est.token.to_lowercase()).await.is_some(),
+            "el token en minúsculas debía aceptar el upgrade"
+        );
+        assert!(
+            ws_conectar_con_token(addr, &est.token.to_uppercase()).await.is_some(),
+            "el token en mayúsculas debía aceptar el upgrade"
+        );
+        assert!(
+            ws_conectar_con_token(addr, &mezclar_mayus_minus(&est.token)).await.is_some(),
+            "el token con mayúsculas y minúsculas mezcladas debía aceptar el upgrade"
+        );
+        // Los espacios van percent-encoded en la query: un espacio literal
+        // rompería la línea de la petición HTTP del propio handshake, no
+        // solo el token.
+        let con_espacios = format!("/ws?token=%20{}%20", est.token.to_lowercase());
+        assert!(
+            ws_conectar(addr, &con_espacios).await.is_some(),
+            "el token con espacios alrededor (y en minúsculas) debía aceptar el upgrade"
+        );
+
+        // Un token realmente distinto sigue rechazándose, aunque venga en
+        // minúsculas o con espacios: normalizar no amplía qué token vale.
+        assert!(
+            ws_conectar_con_token(addr, "zzzz-zzzz-zzzz-zzzz").await.is_none(),
+            "un token distinto en minúsculas debía seguir rechazando el upgrade"
+        );
+        assert!(
+            ws_conectar(addr, "/ws?token=%20ZZZZ-ZZZZ-ZZZZ-ZZZZ%20").await.is_none(),
+            "un token distinto con espacios debía seguir rechazando el upgrade"
         );
 
         detener(&db, &srv).await.unwrap();

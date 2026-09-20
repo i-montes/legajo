@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { Boton, Campo, Glifo } from "../ui";
 import {
-  activarModoRemoto, comprobarSalud, parsearCadenaConexion,
+  activarModoRemoto, comprobarSalud, normalizarToken, parsearCadenaConexion,
   type ConexionRemota as DatosConexion, type ResultadoSalud,
 } from "../lib/conexionRemota";
 
@@ -34,7 +34,10 @@ export default function ConexionRemota({ onVolver }: { onVolver: () => void }) {
     if (c) {
       setDireccion(c.direccion);
       setPuerto(String(c.puerto));
-      setToken(c.token);
+      // El token va normalizado ya al guardarse en el estado: pegar la
+      // cadena entera no debe dejar minúsculas o espacios colados solo
+      // porque venían así en lo que se copió del otro computador.
+      setToken(normalizarToken(c.token));
       setResultado(null);
     }
   };
@@ -48,7 +51,7 @@ export default function ConexionRemota({ onVolver }: { onVolver: () => void }) {
     if (!puedeValidar) return;
     setValidando(true);
     setResultado(null);
-    const datos: DatosConexion = { direccion: direccion.trim(), puerto: puertoNum, token: token.trim() };
+    const datos: DatosConexion = { direccion: direccion.trim(), puerto: puertoNum, token: normalizarToken(token) };
     const r = await comprobarSalud(datos);
     setResultado(r);
     setValidando(false);
@@ -57,7 +60,7 @@ export default function ConexionRemota({ onVolver }: { onVolver: () => void }) {
   function entrar() {
     if (!resultado?.ok) return;
     setConectando(true);
-    activarModoRemoto({ direccion: direccion.trim(), puerto: puertoNum, token: token.trim() });
+    activarModoRemoto({ direccion: direccion.trim(), puerto: puertoNum, token: normalizarToken(token) });
     // No hace falta apagar `conectando`: en cuanto se activa el modo remoto,
     // la app entera cambia a la pantalla de revisión y este formulario deja
     // de existir.
@@ -98,7 +101,7 @@ export default function ConexionRemota({ onVolver }: { onVolver: () => void }) {
           etiqueta="Token"
           ayuda="Lo muestra el panel de «servir» en la otra máquina."
           value={token}
-          onChange={(v) => { setToken(v); setResultado(null); }}
+          onChange={(v) => { setToken(normalizarToken(v)); setResultado(null); }}
           placeholder="token"
           mono
           onEnter={validar}

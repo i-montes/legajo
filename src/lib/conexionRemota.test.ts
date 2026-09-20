@@ -91,6 +91,29 @@ describe("el modo y la conexión remota persisten", () => {
   });
 });
 
+describe("normalizarToken", () => {
+  it("sube a mayúsculas", async () => {
+    const { normalizarToken } = await moduloFresco();
+    expect(normalizarToken("abcd-1234-efgh-5678")).toBe("ABCD-1234-EFGH-5678");
+  });
+
+  it("recorta espacios y saltos de línea alrededor", async () => {
+    const { normalizarToken } = await moduloFresco();
+    expect(normalizarToken("  ABCD-1234-EFGH-5678  ")).toBe("ABCD-1234-EFGH-5678");
+    expect(normalizarToken("\nABCD-1234-EFGH-5678\t")).toBe("ABCD-1234-EFGH-5678");
+  });
+
+  it("mayúsculas, minúsculas, mezcla y con espacios dan el mismo resultado", async () => {
+    const { normalizarToken } = await moduloFresco();
+    const esperado = "ABCD-1234-EFGH-5678";
+    for (const variante of [
+      "ABCD-1234-EFGH-5678", "abcd-1234-efgh-5678", "AbCd-1234-eFgH-5678", "  abcd-1234-efgh-5678  ",
+    ]) {
+      expect(normalizarToken(variante)).toBe(esperado);
+    }
+  });
+});
+
 describe("la dirección base de la máquina remota", () => {
   it("antepone http:// cuando la dirección no trae esquema", async () => {
     const { baseUrlRemota } = await moduloFresco();
