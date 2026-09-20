@@ -147,7 +147,7 @@ describe("comprobarSalud", () => {
     if (!r.ok) expect(r.motivo).toBe("token");
   });
 
-  it("distingue algo que no es Legajo respondiendo en esa dirección", async () => {
+  it("distingue algo que no es Legajo respondiendo en esa dirección (no es JSON)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>hola</html>", { status: 200 })));
     const { comprobarSalud } = await moduloFresco();
     const r = await comprobarSalud(CONEXION);
@@ -155,17 +155,49 @@ describe("comprobarSalud", () => {
     if (!r.ok) expect(r.motivo).toBe("no-es-legajo");
   });
 
-  it("da la versión y el número de lotes cuando todo va bien", async () => {
+  it("distingue algo que no es Legajo respondiendo en esa dirección (JSON cualquiera)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ version: "1.4.0", lotes: 3 }), { status: 200 })
+      new Response(JSON.stringify({ estado: "arriba", uptime: 12 }), { status: 200 })
     ));
     const { comprobarSalud } = await moduloFresco();
     const r = await comprobarSalud(CONEXION);
-    expect(r).toEqual({ ok: true, salud: { version: "1.4.0", lotes: 3 } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.motivo).toBe("no-es-legajo");
+  });
+
+  it("da la versión y el número de lotes con el cuerpo real que manda el servidor, envuelto en `ok`", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: { lotes: 1, protocolo: 1, version: "0.1.0" } }), { status: 200 })
+    ));
+    const { comprobarSalud } = await moduloFresco();
+    const r = await comprobarSalud(CONEXION);
+    expect(r).toEqual({ ok: true, salud: { version: "0.1.0", lotes: 1 } });
+  });
+
+  it("rechaza un cuerpo sin envolver en `ok` — ya no es lo que el servidor manda", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ version: "0.1.0", lotes: 1 }), { status: 200 })
+    ));
+    const { comprobarSalud } = await moduloFresco();
+    const r = await comprobarSalud(CONEXION);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.motivo).toBe("no-es-legajo");
+  });
+
+  it("rechaza un `protocolo` distinto de 1, aunque version y lotes tengan la forma correcta", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: { lotes: 1, protocolo: 2, version: "0.1.0" } }), { status: 200 })
+    ));
+    const { comprobarSalud } = await moduloFresco();
+    const r = await comprobarSalud(CONEXION);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.motivo).toBe("no-es-legajo");
   });
 
   it("manda el token en la cabecera Authorization", async () => {
-    const fetchFalso = vi.fn().mockResolvedValue(new Response(JSON.stringify({ version: "1", lotes: 0 })));
+    const fetchFalso = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: { lotes: 0, protocolo: 1, version: "1" } }))
+    );
     vi.stubGlobal("fetch", fetchFalso);
     const { comprobarSalud } = await moduloFresco();
     await comprobarSalud(CONEXION);

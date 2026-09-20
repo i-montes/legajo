@@ -13,6 +13,7 @@
  * ciclo de renderizados—.
  */
 import { useSyncExternalStore } from "react";
+import { desenvolverOk } from "./protocolo";
 
 export interface ConexionRemota {
   direccion: string;
@@ -185,6 +186,12 @@ export type ResultadoSalud =
 
 const TIEMPO_ESPERA_SALUD_MS = 6000;
 
+/** La versión del protocolo HTTP que este cliente sabe hablar. Es la firma
+ *  que de verdad distingue a un Legajo de cualquier otra cosa que conteste
+ *  JSON en ese puerto —a diferencia de `version` o `lotes`, que otro
+ *  servicio podría tener por casualidad—. */
+const PROTOCOLO_SALUD = 1;
+
 /** `GET {base}/api/salud`, con el token. Se llama antes de guardar nada: la
  *  pantalla de conexión remota no persiste una máquina que no contestó bien. */
 export async function comprobarSalud(c: ConexionRemota): Promise<ResultadoSalud> {
@@ -226,10 +233,20 @@ export async function comprobarSalud(c: ConexionRemota): Promise<ResultadoSalud>
       mensaje: "Algo respondió en esa dirección, pero no algo que reconozcamos como Legajo.",
     };
   }
+  // El servidor envuelve toda respuesta en `{"ok": ...}` —igual que
+  // `POST /api/<comando>`—, y aquí se desenvuelve con el mismo criterio que
+  // usa `llamarRemoto` en `ipc.ts`, para que las dos formas de hablarle al
+  // servidor no puedan volver a divergir en qué reconocen como Legajo.
+  const desenvuelto = desenvolverOk(cuerpo);
+  const salud = desenvuelto.ok ? desenvuelto.valor : undefined;
   if (
-    !cuerpo || typeof cuerpo !== "object" ||
-    typeof (cuerpo as Record<string, unknown>).version !== "string" ||
-    typeof (cuerpo as Record<string, unknown>).lotes !== "number"
+    !salud || typeof salud !== "object" ||
+    // `protocolo` es la firma de verdad: cualquier JSON con forma parecida
+    // puede tener por casualidad una `version` de tipo string y un `lotes`
+    // numérico, pero solo Legajo manda `protocolo: 1`.
+    (salud as Record<string, unknown>).protocolo !== PROTOCOLO_SALUD ||
+    typeof (salud as Record<string, unknown>).version !== "string" ||
+    typeof (salud as Record<string, unknown>).lotes !== "number"
   ) {
     return {
       ok: false,
@@ -237,5 +254,11 @@ export async function comprobarSalud(c: ConexionRemota): Promise<ResultadoSalud>
       mensaje: "Algo respondió en esa dirección, pero no algo que reconozcamos como Legajo.",
     };
   }
-  return { ok: true, salud: cuerpo as SaludRemota };
+  return {
+    ok: true,
+    salud: {
+      version: (salud as Record<string, unknown>).version as string,
+      lotes: (salud as Record<string, unknown>).lotes as number,
+    },
+  };
 }

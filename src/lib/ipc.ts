@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { baseUrlRemota, leerConexionRemota, leerModo, type ConexionRemota } from "./conexionRemota";
+import { desenvolverOk } from "./protocolo";
 import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
   ColaCategorias, ConexionGuardada,
@@ -85,15 +86,16 @@ export async function llamarRemoto<T>(
     );
   }
 
-  if (cuerpo && typeof cuerpo === "object" && "error" in cuerpo) {
-    throw new Error(String((cuerpo as { error: unknown }).error));
+  const desenvuelto = desenvolverOk(cuerpo);
+  if (!desenvuelto.ok) {
+    if (desenvuelto.error !== undefined) {
+      throw new Error(desenvuelto.error);
+    }
+    throw new Error(
+      `La máquina respondió (HTTP ${respuesta.status}) con un formato que Legajo no reconoce.`
+    );
   }
-  if (cuerpo && typeof cuerpo === "object" && "ok" in cuerpo) {
-    return (cuerpo as { ok: T }).ok;
-  }
-  throw new Error(
-    `La máquina respondió (HTTP ${respuesta.status}) con un formato que Legajo no reconoce.`
-  );
+  return desenvuelto.valor as T;
 }
 
 /** El único punto de la app que decide si algo se ejecuta en esta máquina o
