@@ -21,6 +21,33 @@
 //!     origen, porque el cliente es otra app Tauri y su origen no es algo
 //!     que valga la pena fijar.
 //!
+//! ## Por qué se ata a todas las interfaces, y por qué el puerto es fijo
+//!
+//! Dos decisiones de una versión anterior de este módulo estorbaban a quien
+//! de verdad intentaba conectarse desde otra máquina, y las dos se revirtieron
+//! a propósito:
+//!
+//! Antes el servidor solo escuchaba en la IPv4 de la ruta por defecto del
+//! sistema. Esta máquina puede tener a la vez `enp4s0` y `wlp5s0` en la misma
+//! red, más Tailscale en una tercera dirección: atarse a una sola de ellas
+//! hacía que probar contra cualquier otra fallara aunque la red estuviera
+//! perfectamente bien, sin ninguna pista de por qué. Con `ufw` activo y
+//! política de entrada `DROP`, la frontera de verdad ya es el cortafuegos:
+//! atarse a una sola interfaz no suma seguridad, solo rompe en cuanto la
+//! máquina tiene más de una dirección o cambia de red. Por eso ahora escucha
+//! en `0.0.0.0` —todas las interfaces— y es la regla de `ufw` la que decide
+//! quién puede hablarle.
+//!
+//! El puerto era efímero: el sistema operativo elegía uno nuevo en cada
+//! arranque, así que cualquier regla de cortafuegos abierta para un puerto
+//! anterior dejaba de servir en el siguiente encendido. Ahora el puerto por
+//! defecto es fijo, [`PUERTO_PREDETERMINADO`] (36507), y `iniciar` no elige
+//! ningún otro por su cuenta: si ese puerto está ocupado, falla con un
+//! mensaje claro en vez de caer en silencio a uno aleatorio. Un servidor
+//! que "seguiría funcionando" en un puerto distinto es peor que uno que no
+//! arranca: aparenta éxito mientras la regla de cortafuegos de quien lo
+//! enciende queda apuntando a un puerto vacío.
+//!
 //! ## Por qué lista blanca, y por qué en el despacho
 //!
 //! `commands.rs` tiene comandos que abren una contraseña de aplicación de
@@ -90,7 +117,6 @@ use axum::{
 /// Lo que hay que soltar para que el servidor deje de escuchar. Vive en el
 /// `Mutex` de `ServidorState` solo mientras el servidor está arriba.
 struct Corriendo {
-    ip: Ipv4Addr,
     puerto: u16,
     apagar: tokio::sync::oneshot::Sender<()>,
     /// Aparte de `apagar`: ese apaga el `axum::serve`, este para la tarea de
@@ -98,6 +124,16 @@ struct Corriendo {
     /// siempre —cada encendido del servidor deja una tarea más— porque nada
     /// más la referencia una vez que `Corriendo` se suelta.
     apagar_vigilancia: tokio::sync::oneshot::Sender<()>,
+    /// Se cierra cuando `axum::serve` ya terminó de verdad y soltó el
+    /// `TcpListener`. Mandar por `apagar` solo pide el cierre; el propio
+    /// `axum::serve` sigue corriendo en su tarea hasta que el runtime la
+    /// vuelve a planificar. `detener` espera esto antes de decir que el
+    /// servidor está apagado: sin ello, un `iniciar` inmediato después —el
+    /// mismo puerto fijo, por contrato— puede chocar con un socket que el
+    /// runtime todavía no tuvo ocasión de cerrar y fallar con «el puerto ya
+    /// está en uso», que es exactamente el error que este módulo existe para
+    /// evitar.
+    cerrado: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// Estado de Tauri con el servidor, si lo hay. Aparte de `AppState`: nada de
@@ -106,8 +142,15 @@ struct Corriendo {
 pub struct ServidorState(Mutex<Option<Corriendo>>);
 
 /// Lo que ven `servir_estado`, `servir_iniciar` y `servir_detener` en el
-/// frontend. `direcciones` lleva como mucho un elemento: la interfaz exacta a
-/// la que quedó atado el servidor, no una lista de candidatas para adivinar.
+/// frontend. `direcciones` lleva **todas** las IPv4 locales no-loopback de
+/// interfaces activas (ver [`direcciones_locales`]), no la interfaz exacta a
+/// la que quedó atado el servidor: desde que este escucha en `0.0.0.0`, esa
+/// pregunta ya no tiene una sola respuesta, y el panel necesita mostrarlas
+/// todas para que la persona pruebe la que le funcione. Cuando se puede
+/// determinar cuál es la de la ruta por defecto del sistema, esa va primero
+/// en la lista —es la más probable de servir—, pero el campo sigue siendo un
+/// `Vec<String>` llano: no se distingue la recomendada con otra forma para no
+/// romper el contrato ya fijado con el frontend.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct EstadoServidor {
     pub activo: bool,
@@ -116,11 +159,11 @@ pub struct EstadoServidor {
     pub direcciones: Vec<String>,
 }
 
-fn estado_con(db: &Db, corriendo: Option<(Ipv4Addr, u16)>) -> Result<EstadoServidor> {
+fn estado_con(db: &Db, puerto: Option<u16>) -> Result<EstadoServidor> {
     let token = token_o_crear(db)?;
-    Ok(match corriendo {
-        Some((ip, puerto)) => {
-            EstadoServidor { activo: true, puerto, token, direcciones: vec![ip.to_string()] }
+    Ok(match puerto {
+        Some(puerto) => {
+            EstadoServidor { activo: true, puerto, token, direcciones: direcciones_locales() }
         }
         None => EstadoServidor { activo: false, puerto: 0, token, direcciones: Vec::new() },
     })
@@ -129,11 +172,27 @@ fn estado_con(db: &Db, corriendo: Option<(Ipv4Addr, u16)>) -> Result<EstadoServi
 /// El estado actual, sin tocar nada.
 pub fn estado(db: &Db, srv: &ServidorState) -> Result<EstadoServidor> {
     let g = srv.0.lock().unwrap();
-    estado_con(db, g.as_ref().map(|c| (c.ip, c.puerto)))
+    estado_con(db, g.as_ref().map(|c| c.puerto))
 }
+
+/// El puerto por defecto del modo servidor: el mismo, siempre, para que la
+/// regla de cortafuegos que la persona añadió una vez le sirva para siempre.
+///
+/// `iniciar` traduce un `puerto` de `0` a este antes de intentar escuchar.
+/// Ese es el único significado que le queda a `0` en todo el sistema: ya no
+/// existe ningún camino, ni desde `servir_iniciar` ni desde ningún otro
+/// llamador público, en el que `0` termine en "el sistema operativo elige
+/// uno libre". Esa elección automática fue justo lo que dejó, una vez, la
+/// regla de `ufw` de la persona apuntando a un puerto vacío tras un reinicio
+/// del servidor: un fallo que aparenta éxito es peor que uno que no arranca.
+pub const PUERTO_PREDETERMINADO: u16 = 36507;
 
 /// Enciende el servidor si no lo estaba. Si ya lo estaba, devuelve su estado
 /// tal cual: encenderlo dos veces no reinicia nada ni cambia el puerto.
+///
+/// `puerto == 0` se traduce a [`PUERTO_PREDETERMINADO`] (ver su docstring).
+/// Cualquier otro valor se usa tal cual, y si ya está ocupado `iniciar`
+/// falla —nunca elige otro por su cuenta—.
 ///
 /// No vuelve hasta que el `TcpListener` está de verdad escuchando: el
 /// frontend usa `activo` para decidir si le corresponde dejar de autoguardar,
@@ -141,14 +200,21 @@ pub fn estado(db: &Db, srv: &ServidorState) -> Result<EstadoServidor> {
 /// es seguro escribir desde el Mac cuando en realidad nadie atiende todavía
 /// ese puerto.
 pub async fn iniciar(db: Arc<Db>, srv: &ServidorState, puerto: u16) -> Result<EstadoServidor> {
+    let puerto = if puerto == 0 { PUERTO_PREDETERMINADO } else { puerto };
     iniciar_interno(db, srv, puerto, LATIDO_TIMEOUT, VIGILANCIA_INTERVALO).await
 }
 
 /// La implementación real de `iniciar`, con el `timeout` y el `intervalo` de
-/// la vigilancia de latidos como parámetro en vez de las constantes fijas.
-/// Aparte solo para que las pruebas de caducidad no tengan que esperar los
-/// 60 s de verdad: usan un `timeout` de milisegundos y comprueban lo mismo
-/// que comprobaría el servidor real.
+/// la vigilancia de latidos como parámetro en vez de las constantes fijas, y
+/// sin la traducción de `0` a [`PUERTO_PREDETERMINADO`] que hace `iniciar`.
+///
+/// Aparte por dos razones: para que las pruebas de caducidad no tengan que
+/// esperar los 60 s de verdad (usan un `timeout` de milisegundos), y para que
+/// las pruebas de este módulo puedan pedir un puerto efímero de verdad
+/// (`0`, elegido por el sistema operativo) y así correr muchas a la vez sin
+/// pisarse el puerto entre ellas. Esta función es privada a propósito: nadie
+/// fuera de este módulo puede pedir «elígeme uno libre», ni siquiera por
+/// accidente.
 async fn iniciar_interno(
     db: Arc<Db>,
     srv: &ServidorState,
@@ -157,21 +223,27 @@ async fn iniciar_interno(
     vigilancia_intervalo: Duration,
 ) -> Result<EstadoServidor> {
     if let Some(c) = srv.0.lock().unwrap().as_ref() {
-        return estado_con(&db, Some((c.ip, c.puerto)));
+        return estado_con(&db, Some(c.puerto));
     }
 
     let token = token_o_crear(&db)?;
-    let ip = ip_local_predeterminada().ok_or_else(|| {
-        Error::Other(
-            "No se encontró una interfaz de red local con ruta por defecto. \
-             Conecta esta máquina a la red antes de encender el servidor."
-                .into(),
-        )
-    })?;
 
-    let listener = tokio::net::TcpListener::bind((ip, puerto))
+    // `0.0.0.0`: todas las interfaces. Ver «Por qué se ata a todas las
+    // interfaces» en el docstring del módulo, arriba. El cortafuegos, no la
+    // interfaz de bind, es la frontera real.
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, puerto))
         .await
-        .map_err(|e| Error::Other(format!("no se pudo escuchar en {ip}:{puerto}: {e}")))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AddrInUse {
+                Error::Other(format!(
+                    "el puerto {puerto} ya está en uso por otro proceso. \
+                     Cierra lo que lo esté usando o elige otro puerto distinto de {puerto} \
+                     y enciende el servidor de nuevo; no se elige otro puerto en su lugar."
+                ))
+            } else {
+                Error::Other(format!("no se pudo escuchar en el puerto {puerto}: {e}"))
+            }
+        })?;
     let puerto_real = listener
         .local_addr()
         .map_err(|e| Error::Other(e.to_string()))?
@@ -179,6 +251,7 @@ async fn iniciar_interno(
 
     let (apagar_tx, apagar_rx) = tokio::sync::oneshot::channel::<()>();
     let (apagar_vig_tx, apagar_vig_rx) = tokio::sync::oneshot::channel::<()>();
+    let (cerrado_tx, cerrado_rx) = tokio::sync::oneshot::channel::<()>();
     let registro = Arc::new(RegistroWs::default());
     let router = construir_router(EstadoHttp { db: db.clone(), token: token.clone().into(), registro: registro.clone() });
 
@@ -190,21 +263,44 @@ async fn iniciar_interno(
                 let _ = apagar_rx.await;
             })
             .await;
+        // Solo aquí, tras el `.await` de arriba, el `TcpListener` ya se
+        // soltó de verdad: es la señal que espera `detener`.
+        let _ = cerrado_tx.send(());
     });
 
     // Ya escucha: recién ahora se publica el estado «activo».
-    *srv.0.lock().unwrap() =
-        Some(Corriendo { ip, puerto: puerto_real, apagar: apagar_tx, apagar_vigilancia: apagar_vig_tx });
+    *srv.0.lock().unwrap() = Some(Corriendo {
+        puerto: puerto_real,
+        apagar: apagar_tx,
+        apagar_vigilancia: apagar_vig_tx,
+        cerrado: cerrado_rx,
+    });
 
-    estado_con(&db, Some((ip, puerto_real)))
+    estado_con(&db, Some(puerto_real))
 }
+
+/// Cuánto espera como mucho `detener` a que el `TcpListener` se suelte de
+/// verdad. Es una red de seguridad, no el camino normal: en el camino normal
+/// el aviso llega en cuanto el runtime planifica de nuevo la tarea de
+/// `axum::serve`, que es casi inmediato. Si nunca llega —la tarea se quedó
+/// colgada por algo imprevisto— más vale reportar «apagado» pasados unos
+/// segundos que dejar a quien llama esperando para siempre.
+const CIERRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Apaga el servidor si estaba encendido. Sin servidor que apagar, no falla:
 /// simplemente devuelve el estado «apagado» que ya era cierto.
-pub fn detener(db: &Db, srv: &ServidorState) -> Result<EstadoServidor> {
-    if let Some(c) = srv.0.lock().unwrap().take() {
+///
+/// No vuelve hasta que el `TcpListener` de verdad se soltó (con
+/// [`CIERRE_TIMEOUT`] de tope): el puerto por defecto es fijo, así que
+/// `iniciar` puede llegar justo después pidiendo exactamente el mismo
+/// puerto, y esa carrera no puede depender de que el runtime haya tenido
+/// ocasión de cerrar el socket viejo antes de que el nuevo intente abrirlo.
+pub async fn detener(db: &Db, srv: &ServidorState) -> Result<EstadoServidor> {
+    let previo = srv.0.lock().unwrap().take();
+    if let Some(c) = previo {
         let _ = c.apagar.send(());
         let _ = c.apagar_vigilancia.send(());
+        let _ = tokio::time::timeout(CIERRE_TIMEOUT, c.cerrado).await;
     }
     estado_con(db, None)
 }
@@ -219,6 +315,9 @@ pub fn servir_estado(
     estado(&app.db, &srv)
 }
 
+/// `puerto == 0` significa [`PUERTO_PREDETERMINADO`], no «elige uno libre»
+/// (ver el docstring de `iniciar`): el frontend puede seguir mandando `0`
+/// como valor por defecto, o mandar `36507` directamente, da igual.
 #[tauri::command]
 pub async fn servir_iniciar(
     app: State<'_, AppState>,
@@ -229,11 +328,11 @@ pub async fn servir_iniciar(
 }
 
 #[tauri::command]
-pub fn servir_detener(
+pub async fn servir_detener(
     app: State<'_, AppState>,
     srv: State<'_, ServidorState>,
 ) -> Result<EstadoServidor> {
-    detener(&app.db, &srv)
+    detener(&app.db, &srv).await
 }
 
 // ── Token ────────────────────────────────────────────────────────────────
@@ -297,6 +396,10 @@ fn bytes_aleatorios(n: usize) -> Vec<u8> {
 /// saldría?» sin enumerar interfaces a mano ni sumar una dependencia para
 /// eso. Con varias interfaces activas, la que gane aquí es la de la ruta por
 /// defecto del sistema.
+///
+/// Ya no decide dónde escucha el servidor (eso es `0.0.0.0`, todas): solo se
+/// usa para ordenar `direcciones_locales`, poniendo primera la dirección que
+/// más probablemente sirve.
 fn ip_local_predeterminada() -> Option<Ipv4Addr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect(("8.8.8.8", 80)).ok()?;
@@ -304,6 +407,52 @@ fn ip_local_predeterminada() -> Option<Ipv4Addr> {
         std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
         _ => None,
     }
+}
+
+/// Todas las IPv4 locales por las que se puede llegar a este servidor: una
+/// por cada interfaz activa que no sea loopback, incluida la de Tailscale si
+/// la máquina la tiene (es la vía buena para conectarse desde fuera de la
+/// red local). El servidor escucha en `0.0.0.0`, así que todas sirven a la
+/// vez; esto es lo que le deja al panel mostrárselas todas a quien lo
+/// enciende, en vez de adivinar una sola y fallar en silencio si esa no es
+/// la que le sirve a quien se conecta.
+///
+/// La de la ruta por defecto del sistema, si se pudo determinar, va primero:
+/// es la más probable de servir, pero no se marca de ninguna otra forma para
+/// no romper el contrato `direcciones: string[]` ya fijado con el frontend.
+///
+/// Si no se puede enumerar interfaces (raro; solo pasa si el sistema
+/// operativo niega la consulta), devuelve una lista vacía en vez de fallar:
+/// no tener direcciones que mostrar no debería tumbar el resto del estado
+/// del servidor.
+fn direcciones_locales() -> Vec<String> {
+    let preferida = ip_local_predeterminada();
+
+    let mut resto: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(|i| i.is_oper_up() && !i.is_loopback())
+                .filter_map(|i| match i.ip() {
+                    std::net::IpAddr::V4(ip) => Some(ip),
+                    std::net::IpAddr::V6(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    resto.sort();
+    resto.dedup();
+
+    let mut direcciones = Vec::with_capacity(resto.len() + 1);
+    if let Some(ip) = preferida {
+        direcciones.push(ip.to_string());
+    }
+    for ip in resto {
+        if Some(ip) != preferida {
+            direcciones.push(ip.to_string());
+        }
+    }
+    direcciones
 }
 
 // ── El servidor HTTP en sí ───────────────────────────────────────────────
@@ -603,15 +752,23 @@ impl RegistroWs {
     }
 
     /// Suelta `articulo` si de verdad era `sesion_id` quien lo tenía. Si no
-    /// —ya se había soltado, o el cliente se desincronizó— no hace nada.
-    fn soltar(&self, sesion_id: &str, articulo: Articulo) {
+    /// —ya se había soltado, se lo arrebataron con `forzar` mientras tanto, o
+    /// el cliente se desincronizó— no hace nada: es un no-op silencioso, no
+    /// un error. Pasa de verdad y no es un fallo del cliente: si a esta
+    /// sesión le quitaron el artículo con `forzar` y después sale de la
+    /// pantalla, manda `soltar` sobre algo que ya no tiene. Devuelve si de
+    /// verdad soltó algo, para que quien llama solo difunda presencia si
+    /// cambió algo de verdad.
+    fn soltar(&self, sesion_id: &str, articulo: Articulo) -> bool {
         let mut g = self.0.lock().unwrap();
         if let Some(s) = g.sesiones.get_mut(sesion_id) {
             if s.ocupa == Some(articulo) {
                 s.ocupa = None;
                 g.bloqueos.remove(&articulo);
+                return true;
             }
         }
+        false
     }
 
     /// Arrebata `articulo` para `sesion_id`, sin importar quién lo tuviera:
@@ -890,8 +1047,12 @@ fn procesar_mensaje_cliente(registro: &RegistroWs, sesion_id: &str, texto: &str)
             ResultadoTomar::SesionDesconocida => {}
         },
         MensajeCliente::Soltar { lote_id, wp_id } => {
-            registro.soltar(sesion_id, (lote_id, wp_id));
-            difundir_presencia(registro);
+            // No-op silencioso si esta sesión no tenía de verdad ese
+            // artículo: ni error ni difusión de presencia, porque no cambió
+            // nada que las demás sesiones necesiten saber.
+            if registro.soltar(sesion_id, (lote_id, wp_id)) {
+                difundir_presencia(registro);
+            }
         }
         MensajeCliente::Forzar { lote_id, wp_id } => {
             let (nombre, emoji) = registro.identidad(sesion_id).unwrap_or(("", ""));
@@ -1280,6 +1441,16 @@ mod tests {
         (path.clone(), Arc::new(Db::open(&path).unwrap()))
     }
 
+    /// El `iniciar` que usan casi todas las pruebas de este módulo: pide un
+    /// puerto efímero de verdad (por `iniciar_interno`, que no traduce `0`),
+    /// para que muchas pruebas puedan correr a la vez sin pisarse el mismo
+    /// puerto. La traducción de `0` a `PUERTO_PREDETERMINADO` que hace
+    /// `iniciar` es justo lo que las pruebas de más abajo sobre el puerto fijo
+    /// comprueban aparte, contra el `iniciar` público de verdad.
+    async fn iniciar_prueba(db: Arc<Db>, srv: &ServidorState) -> Result<EstadoServidor> {
+        iniciar_interno(db, srv, 0, LATIDO_TIMEOUT, VIGILANCIA_INTERVALO).await
+    }
+
     /// Un cliente HTTP mínimo hecho a mano, sin sumar `reqwest` ni `tower` solo
     /// para las pruebas: abre el socket, escribe la petición en crudo y separa
     /// el código de estado del cuerpo de la respuesta.
@@ -1312,10 +1483,10 @@ mod tests {
     async fn sin_token_da_401_y_con_token_incorrecto_tambien() {
         let (path, db) = db_de_prueba("401");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
         assert!(est.activo, "servir_iniciar debe devolver activo=true solo si ya está escuchando");
         let addr: std::net::SocketAddr =
-            format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+            format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let (codigo, cuerpo) = pedir(addr, "GET", "/api/salud", None, "").await;
         assert_eq!(codigo, 401, "sin token: {cuerpo}");
@@ -1324,7 +1495,7 @@ mod tests {
         let (codigo, cuerpo) = pedir(addr, "GET", "/api/salud", Some("ZZZZ-ZZZZ-ZZZZ-ZZZZ"), "").await;
         assert_eq!(codigo, 401, "token incorrecto: {cuerpo}");
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1332,9 +1503,9 @@ mod tests {
     async fn comando_fuera_de_la_lista_da_400_por_http() {
         let (path, db) = db_de_prueba("400");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
         let addr: std::net::SocketAddr =
-            format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+            format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let (codigo, cuerpo) =
             pedir(addr, "POST", "/api/probar_credencial", Some(&est.token), "{}").await;
@@ -1345,7 +1516,7 @@ mod tests {
             pedir(addr, "POST", "/api/esto_no_existe", Some(&est.token), "{}").await;
         assert_eq!(codigo, 400);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1353,9 +1524,9 @@ mod tests {
     async fn salud_con_token_correcto_da_200_con_protocolo_1() {
         let (path, db) = db_de_prueba("salud");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
         let addr: std::net::SocketAddr =
-            format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+            format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let (codigo, cuerpo) = pedir(addr, "GET", "/api/salud", Some(&est.token), "").await;
         assert_eq!(codigo, 200, "{cuerpo}");
@@ -1364,7 +1535,7 @@ mod tests {
         assert_eq!(json["ok"]["lotes"], 0);
         assert!(json["ok"]["version"].is_string());
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1372,13 +1543,112 @@ mod tests {
     async fn iniciar_dos_veces_no_cambia_el_puerto_ni_rompe_nada() {
         let (path, db) = db_de_prueba("doble-inicio");
         let srv = ServidorState::default();
-        let primero = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let segundo = iniciar(db.clone(), &srv, 0).await.unwrap();
+        let primero = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let segundo = iniciar_prueba(db.clone(), &srv).await.unwrap();
         assert_eq!(primero.puerto, segundo.puerto);
         assert_eq!(primero.token, segundo.token);
         assert_eq!(primero.direcciones, segundo.direcciones);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── El puerto fijo: 36507 siempre, y nunca una reserva automática ────────
+    //
+    // Estas pruebas son las únicas del módulo que usan el `iniciar` público
+    // de verdad (no `iniciar_prueba`), porque lo que comprueban es
+    // precisamente su traducción de `0` a `PUERTO_PREDETERMINADO`. Solo una
+    // de ellas llega a escuchar de verdad en el puerto 36507 real —el resto
+    // usa puertos que ella misma libera o que obtiene de forma efímera para
+    // simular "ocupado"—, así que no compite por ese puerto con las demás
+    // pruebas del módulo, que corren en paralelo con `cargo test`.
+    #[tokio::test]
+    async fn el_puerto_es_siempre_36507_estable_y_sin_reserva_automatica_si_esta_ocupado() {
+        let (path, db) = db_de_prueba("puerto-fijo");
+        let srv = ServidorState::default();
+
+        // 0 significa PUERTO_PREDETERMINADO, no «elige uno libre».
+        let primero = iniciar(db.clone(), &srv, 0).await.unwrap();
+        assert_eq!(primero.puerto, PUERTO_PREDETERMINADO);
+
+        // Apagar y volver a encender da el mismo puerto: la estabilidad que
+        // ya tenía el token ahora también la tiene el puerto.
+        detener(&db, &srv).await.unwrap();
+        let segundo = iniciar(db.clone(), &srv, 0).await.unwrap();
+        assert_eq!(segundo.puerto, PUERTO_PREDETERMINADO);
+        assert_eq!(segundo.token, primero.token);
+        detener(&db, &srv).await.unwrap();
+
+        // Pedir un puerto que ya está ocupado falla con un mensaje que nombra
+        // el puerto y dice que está en uso; nunca cae en silencio a otro.
+        let ocupante = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let puerto_ocupado = ocupante.local_addr().unwrap().port();
+        let err = iniciar(db.clone(), &srv, puerto_ocupado).await.unwrap_err();
+        let mensaje = err.to_string();
+        assert!(
+            mensaje.contains(&puerto_ocupado.to_string()),
+            "el mensaje debía nombrar el puerto {puerto_ocupado}: {mensaje}"
+        );
+        assert!(
+            mensaje.to_lowercase().contains("ocupado") || mensaje.to_lowercase().contains("en uso"),
+            "el mensaje debía decir que está ocupado: {mensaje}"
+        );
+        // El fallo no dejó nada escuchando en otro puerto por su cuenta.
+        let estado_tras_fallo = estado(&db, &srv).unwrap();
+        assert!(!estado_tras_fallo.activo, "un puerto ocupado no debía dejar el servidor arrancado en otro puerto");
+        drop(ocupante);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn un_puerto_explicito_distinto_de_36507_se_respeta() {
+        // El puerto fijo es el *valor por defecto*, no el único posible:
+        // `servir_iniciar` sigue aceptando un puerto explícito.
+        let (path, db) = db_de_prueba("puerto-explicito");
+        let srv = ServidorState::default();
+        let libre = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let puerto = libre.local_addr().unwrap().port();
+        drop(libre); // se libera para que iniciar() pueda tomarlo de verdad.
+
+        let est = iniciar(db.clone(), &srv, puerto).await.unwrap();
+        assert_eq!(est.puerto, puerto);
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── `direcciones`: todas las interfaces, no una sola ─────────────────────
+
+    #[test]
+    fn direcciones_locales_reporta_varias_interfaces_no_loopback() {
+        // Esta máquina, al escribir esta prueba, tiene a la vez una interfaz
+        // ethernet y una wifi en la misma red más Tailscale: es exactamente
+        // el caso —varias interfaces activas a la vez— que la función tiene
+        // que enumerar entera, no solo adivinar una. Se prueba la función
+        // directamente, sin levantar un servidor, porque es donde vive de
+        // verdad la enumeración; `EstadoServidor::direcciones` solo la llama.
+        let direcciones = direcciones_locales();
+        assert!(!direcciones.is_empty(), "debía reportar al menos una dirección local");
+        assert!(
+            !direcciones.iter().any(|d| d == "127.0.0.1"),
+            "no debía incluir loopback: {direcciones:?}"
+        );
+        assert!(
+            direcciones.len() >= 2,
+            "esta máquina tiene varias interfaces no-loopback activas; se esperaba más de una dirección, se obtuvo {direcciones:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn el_estado_activo_expone_direcciones_locales() {
+        let (path, db) = db_de_prueba("direcciones-activo");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        assert!(!est.direcciones.is_empty());
+        assert_eq!(est.direcciones, direcciones_locales());
+
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1386,7 +1656,7 @@ mod tests {
     async fn detener_sin_haber_iniciado_no_falla() {
         let (path, db) = db_de_prueba("apagar-en-frio");
         let srv = ServidorState::default();
-        let est = detener(&db, &srv).unwrap();
+        let est = detener(&db, &srv).await.unwrap();
         assert!(!est.activo);
         assert_eq!(est.puerto, 0);
         assert!(est.direcciones.is_empty());
@@ -1409,9 +1679,9 @@ mod tests {
         .unwrap();
 
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
         let addr: std::net::SocketAddr =
-            format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+            format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let cuerpo = format!("{{\"connectionId\": {conn_id}}}");
         let (codigo, resp) = pedir(addr, "POST", "/api/lotes", Some(&est.token), &cuerpo).await;
@@ -1421,7 +1691,7 @@ mod tests {
         assert_eq!(lotes.len(), 1);
         assert_eq!(lotes[0]["etiqueta"], "lote de prueba");
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1582,12 +1852,41 @@ mod tests {
         ws_enviar(stream, &serde_json::json!({ "tipo": "tomar", "loteId": lote_id, "wpId": wp_id }).to_string()).await;
     }
 
+    async fn ws_forzar(stream: &mut tokio::net::TcpStream, lote_id: i64, wp_id: i64) {
+        ws_enviar(stream, &serde_json::json!({ "tipo": "forzar", "loteId": lote_id, "wpId": wp_id }).to_string()).await;
+    }
+
+    async fn ws_soltar(stream: &mut tokio::net::TcpStream, lote_id: i64, wp_id: i64) {
+        ws_enviar(stream, &serde_json::json!({ "tipo": "soltar", "loteId": lote_id, "wpId": wp_id }).to_string()).await;
+    }
+
+    /// Lee y descarta frames hasta que pasan `quieto` sin que llegue ninguno
+    /// más: deja el socket sin nada pendiente (los `presencia` que dispara
+    /// cada conexión, típicamente), para que lo que se compruebe después sea
+    /// solo lo que provoque la propia acción de la prueba.
+    async fn ws_drenar(stream: &mut tokio::net::TcpStream, quieto: Duration) {
+        loop {
+            match tokio::time::timeout(quieto, ws_recibir(stream)).await {
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) => break,
+            }
+        }
+    }
+
+    /// `true` si no llega ningún frame en `espera`. Es el reverso de
+    /// `ws_recibir_tipo`: sirve para comprobar que una acción no provocó
+    /// ningún mensaje —ni de respuesta ni de difusión— en vez de esperar uno
+    /// que se sabe que sí debe llegar.
+    async fn ws_nada_en(stream: &mut tokio::net::TcpStream, espera: Duration) -> bool {
+        tokio::time::timeout(espera, ws_recibir(stream)).await.is_err()
+    }
+
     #[tokio::test]
     async fn dos_sesiones_y_la_segunda_recibe_ocupado() {
         let (path, db) = db_de_prueba("ws-ocupado");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.expect("upgrade de a");
         let bienvenida_a = ws_hola(&mut a, "maquina-a").await;
@@ -1607,16 +1906,19 @@ mod tests {
         assert_eq!(ocupado["por"]["nombre"], bienvenida_a["nombre"]);
         assert_eq!(ocupado["por"]["emoji"], bienvenida_a["emoji"]);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
+    // Nótese que "b" nunca manda "tomar" antes de este "forzar": `forzar`
+    // significa «quítaselo a quien lo tenga y dámelo», no «reintenta lo que
+    // ya pedí», así que no hace falta haberlo pedido antes para forzarlo.
     async fn forzar_transfiere_y_el_anterior_recibe_perdido() {
         let (path, db) = db_de_prueba("ws-forzar");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
         ws_hola(&mut a, "maquina-a").await;
@@ -1626,7 +1928,7 @@ mod tests {
         ws_tomar(&mut a, 1, 10).await;
         let _ = ws_recibir_tipo(&mut a, "tomado").await;
 
-        ws_enviar(&mut b, &serde_json::json!({ "tipo": "forzar", "loteId": 1, "wpId": 10 }).to_string()).await;
+        ws_forzar(&mut b, 1, 10).await;
         let tomado_b = ws_recibir_tipo(&mut b, "tomado").await;
         assert_eq!(tomado_b["loteId"], 1);
         assert_eq!(tomado_b["wpId"], 10);
@@ -1637,7 +1939,80 @@ mod tests {
         assert_eq!(perdido_a["por"]["nombre"], bienvenida_b["nombre"]);
         assert_eq!(perdido_a["por"]["emoji"], bienvenida_b["emoji"]);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn forzar_sobre_articulo_libre_lo_concede_como_un_tomar() {
+        // Sin ningún "tomar" antes ni ningún otro dueño: "forzar" sobre un
+        // artículo libre tiene que concederlo igual que lo haría un "tomar"
+        // normal, no rechazarlo por no haberlo pedido primero.
+        let (path, db) = db_de_prueba("ws-forzar-libre");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut a, "maquina-a").await;
+
+        ws_forzar(&mut a, 1, 10).await;
+        let tomado = ws_recibir_tipo(&mut a, "tomado").await;
+        assert_eq!(tomado["loteId"], 1);
+        assert_eq!(tomado["wpId"], 10);
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn soltar_sin_tener_nada_no_rompe_ni_difunde() {
+        // Pasa de verdad y no es un fallo del cliente: si a "a" le
+        // arrebataron el artículo con "forzar" y sale de la pantalla, manda
+        // "soltar" sobre algo que ya no tiene. Tiene que ser un no-op
+        // silencioso: ni error para quien lo pide, ni difusión de presencia
+        // para nadie, porque no cambió nada que las demás sesiones necesiten
+        // saber.
+        let (path, db) = db_de_prueba("ws-soltar-vacio");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut a, "maquina-a").await;
+        let mut b = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut b, "maquina-b").await;
+
+        // Deja ambos sockets sin nada pendiente de los `presencia` que ya
+        // disparó cada conexión, para que lo que se compruebe después sea
+        // solo lo que provoque el `soltar` de esta prueba.
+        ws_drenar(&mut a, Duration::from_millis(200)).await;
+        ws_drenar(&mut b, Duration::from_millis(200)).await;
+
+        // "a" nunca tomó (1, 999): soltarlo no debe mandarle nada a "a" ni
+        // difundir presencia a "b".
+        ws_soltar(&mut a, 1, 999).await;
+        assert!(
+            ws_nada_en(&mut a, Duration::from_millis(300)).await,
+            "soltar sin tener nada no debía mandarle nada a quien lo pidió"
+        );
+        assert!(
+            ws_nada_en(&mut b, Duration::from_millis(300)).await,
+            "soltar sin tener nada no debía difundir presencia a otras sesiones"
+        );
+
+        // La conexión sigue viva y funcionando con normalidad: un "tomar"
+        // real después sí difunde presencia, lo que prueba que las dos
+        // comprobaciones de arriba de verdad habrían detectado una difusión
+        // si el "soltar" la hubiera provocado.
+        ws_tomar(&mut a, 1, 999).await;
+        let tomado = ws_recibir_tipo(&mut a, "tomado").await;
+        assert_eq!(tomado["loteId"], 1);
+        assert_eq!(tomado["wpId"], 999);
+        let presencia_b = ws_recibir_tipo(&mut b, "presencia").await;
+        assert_eq!(presencia_b["sesiones"].as_array().unwrap().len(), 2);
+
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1645,8 +2020,8 @@ mod tests {
     async fn tomar_un_segundo_articulo_suelta_el_primero() {
         let (path, db) = db_de_prueba("ws-un-bloqueo");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
         ws_hola(&mut a, "maquina-a").await;
@@ -1666,7 +2041,7 @@ mod tests {
         assert_eq!(tomado_10_por_b["loteId"], 1);
         assert_eq!(tomado_10_por_b["wpId"], 10);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1677,7 +2052,7 @@ mod tests {
         let est = iniciar_interno(db.clone(), &srv, 0, Duration::from_millis(150), Duration::from_millis(30))
             .await
             .unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
         ws_hola(&mut a, "maquina-a").await;
@@ -1696,7 +2071,7 @@ mod tests {
         assert_eq!(tomado["loteId"], 1);
         assert_eq!(tomado["wpId"], 10);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1704,8 +2079,8 @@ mod tests {
     async fn desconectar_libera() {
         let (path, db) = db_de_prueba("ws-desconecta");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
         ws_hola(&mut a, "maquina-a").await;
@@ -1722,7 +2097,7 @@ mod tests {
         assert_eq!(tomado["loteId"], 1);
         assert_eq!(tomado["wpId"], 10);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1730,8 +2105,8 @@ mod tests {
     async fn dos_sesiones_con_el_mismo_cliente_reciben_el_mismo_animal_si_esta_libre() {
         let (path, db) = db_de_prueba("ws-animal-estable");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
         let primera = ws_hola(&mut a, "portatil-fijo").await;
@@ -1744,7 +2119,7 @@ mod tests {
         assert_eq!(primera["nombre"], segunda["nombre"], "el mismo cliente debía recuperar su animal");
         assert_eq!(primera["emoji"], segunda["emoji"]);
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1752,8 +2127,8 @@ mod tests {
     async fn upgrade_sin_token_o_con_token_malo_es_rechazado() {
         let (path, db) = db_de_prueba("ws-token");
         let srv = ServidorState::default();
-        let est = iniciar(db.clone(), &srv, 0).await.unwrap();
-        let addr: std::net::SocketAddr = format!("{}:{}", est.direcciones[0], est.puerto).parse().unwrap();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
 
         assert!(
             ws_conectar(addr, "/ws?token=ZZZZ-ZZZZ-ZZZZ-ZZZZ").await.is_none(),
@@ -1765,7 +2140,7 @@ mod tests {
             "con el token correcto sí debía aceptar el upgrade"
         );
 
-        detener(&db, &srv).unwrap();
+        detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
 }
