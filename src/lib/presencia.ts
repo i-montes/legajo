@@ -101,6 +101,14 @@ function suscribir(cb: () => void) {
   return () => suscriptores.delete(cb);
 }
 
+/** El aviso `cambiado` (ver más abajo, en `manejarMensaje`) no es estado
+ *  persistente como sesiones/identidad/bloqueo —no hay un "valor actual" que
+ *  leer en cualquier momento, solo el instante en que ocurre—, así que no
+ *  encaja en `useSyncExternalStore` y lleva su propio conjunto de oyentes,
+ *  aparte de `suscriptores`. */
+type OyenteCambio = (loteId: number, wpId: number) => void;
+const oyentesCambio = new Set<OyenteCambio>();
+
 // ── Id de cliente persistente ────────────────────────────────────────────
 
 const CLAVE_CLIENTE = "legajo.presencia.cliente";
@@ -307,6 +315,12 @@ function manejarMensaje(data: unknown): void {
       notificar();
       break;
     }
+    case "cambiado": {
+      const loteId = Number(m.loteId);
+      const wpId = Number(m.wpId);
+      oyentesCambio.forEach((cb) => cb(loteId, wpId));
+      break;
+    }
     case "perdido": {
       const por = m.por as { nombre: string; emoji: string };
       // El mismo orden que gobernaba la exclusividad servir/anotar de antes,
@@ -382,6 +396,22 @@ export function leerBloqueoArticulo(loteId: number | null, wpId: number | null):
   }
   if (!conectado) return DESCONECTADO;
   return resultadoTomar;
+}
+
+/** Se suscribe al aviso `cambiado` del servidor para un artículo concreto.
+ *  Solo invoca `cb` cuando el aviso es para ESE artículo Y esta ventana NO
+ *  tiene su bloqueo. Si lo tiene, recargar le pisaría el trabajo en curso —
+ *  eso solo puede pasar si alguien se lo arrebató, y para eso ya está
+ *  `perdido`, que no depende de esto. Un artículo distinto al indicado se
+ *  ignora sin más. */
+export function suscribirCambio(loteId: number, wpId: number, cb: () => void): () => void {
+  const oyente: OyenteCambio = (l, w) => {
+    if (l !== loteId || w !== wpId) return;
+    if (leerBloqueoArticulo(loteId, wpId).tipo === "propio") return;
+    cb();
+  };
+  oyentesCambio.add(oyente);
+  return () => oyentesCambio.delete(oyente);
 }
 
 export function leerSesiones(): SesionPresencia[] {

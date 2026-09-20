@@ -15,7 +15,7 @@ import {
 import type { FilaPanel, Nodo } from "../lib/propagacion";
 import { ETIQUETA_RELOJ, mmss, useCronometro } from "../lib/cronometro";
 import { destinoArticulo, pareceDescripcion, revisar, siguienteMencion, vigenciaSugerida } from "../lib/revision";
-import { puedeEditar, useBloqueoArticulo } from "../lib/presencia";
+import { puedeEditar, suscribirCambio, useBloqueoArticulo } from "../lib/presencia";
 import { useModoRemoto } from "../lib/conexionRemota";
 import type { EntradaLexico, FilaAnotable, Mencion, RelacionFila, Vigencia } from "../types";
 import type { EstadoApp } from "../App";
@@ -56,6 +56,11 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
   const [pendiente, setPendiente] = useState<Pendiente | null>(null);
   const [punto, setPunto] = useState<Punto | null>(null);
   const [relPicker, setRelPicker] = useState(false);
+  /* Señal pura para forzar la recarga del artículo cuando la OTRA máquina
+     guarda un cambio por HTTP mientras esta ventana lo mira en solo lectura
+     (ver `suscribirCambio` en `lib/presencia.ts`). No se lee su valor, solo
+     se usa como dependencia del efecto de carga, más abajo. */
+  const [recargaCambio, setRecargaCambio] = useState(0);
   /* Con 35 predicados, entre dos personas encajan dieciocho: no caben en las
      teclas 1—9. Cuando pasan de nueve, el menú pide primero la familia
      (Familia, Trabajo, Política…) y después el predicado; esto guarda la
@@ -205,9 +210,24 @@ export default function Revision({ estado }: { estado: EstadoApp }) {
        a «propio»: es la señal de que se obtuvo o se recuperó el bloqueo de
        este artículo, así que toca traer de la base lo que de verdad hay
        ahí, por si la otra máquina lo tocó mientras estuvo bloqueado por
-       ella —en vez de confiar en lo que hubiera en memoria de antes—. */
+       ella —en vez de confiar en lo que hubiera en memoria de antes—.
+       `recargaCambio` cubre el caso simétrico: no obtener el bloqueo, sino
+       enterarse (vía `suscribirCambio`, más abajo) de que la otra máquina
+       guardó algo por HTTP mientras esta ventana seguía mirando en solo
+       lectura. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loteId, fila?.wp_id, lexico, bloqueo.tipo]);
+  }, [loteId, fila?.wp_id, lexico, bloqueo.tipo, recargaCambio]);
+
+  /* Complemento de `useBloqueoArticulo`: mientras esta ventana no tiene el
+     bloqueo de este artículo, es la única forma de enterarse de que la otra
+     máquina guardó un cambio por HTTP —ver el bug que motiva esto en la
+     cabecera de `lib/presencia.ts` y en `suscribirCambio`—. Solo dispara una
+     recarga (vía `recargaCambio`); el efecto de arriba es quien de verdad
+     trae los datos frescos. */
+  useEffect(() => {
+    if (loteId == null || !fila) return;
+    return suscribirCambio(loteId, fila.wp_id, () => setRecargaCambio((n) => n + 1));
+  }, [loteId, fila?.wp_id]);
 
   // El guardado es automático: perder media hora de anotación por olvidar
   // pulsar un botón es inaceptable en un trabajo que se mide en horas.

@@ -247,3 +247,63 @@ describe("modo remoto", () => {
     expect(presencia.leerBloqueoArticulo(1, 1)).toEqual({ tipo: "sin-servidor" });
   });
 });
+
+describe("cambiado", () => {
+  it("sin bloqueo propio del artículo, recarga", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    // Sin haber pedido este artículo (o habiéndolo pedido pero sin
+    // `tomado` todavía, o tras un `perdido`): en ninguno de esos casos hay
+    // bloqueo propio, así que el aviso debe disparar la recarga.
+    const cb = vi.fn();
+    m.suscribirCambio(10, 20, cb);
+
+    ws.recibir({ tipo: "cambiado", loteId: 10, wpId: 20 });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("con bloqueo propio del artículo, NO recarga", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    m.pedirArticulo(10, 20);
+    ws.recibir({ tipo: "bienvenida", sesion: "s1", nombre: "Ana", emoji: "🦊" });
+    ws.recibir({ tipo: "tomado" });
+    expect(m.leerBloqueoArticulo(10, 20)).toEqual({ tipo: "propio" });
+
+    // Recargar aquí le pisaría a esta misma ventana el trabajo en curso:
+    // si alguien se lo arrebató de verdad, eso llega por `perdido`, no por
+    // aquí.
+    const cb = vi.fn();
+    m.suscribirCambio(10, 20, cb);
+    ws.recibir({ tipo: "cambiado", loteId: 10, wpId: 20 });
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("de otro artículo, se ignora", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    const cb = vi.fn();
+    m.suscribirCambio(1, 2, cb);
+
+    ws.recibir({ tipo: "cambiado", loteId: 3, wpId: 4 });
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("un tipo desconocido no rompe nada ni llama a ningún oyente", async () => {
+    const m = await moduloFresco();
+    m.notificarEstadoServidor(ESTADO_ACTIVO);
+    const ws = FakeWebSocket.instancias[0];
+    ws.abrir();
+    const cb = vi.fn();
+    m.suscribirCambio(1, 2, cb);
+
+    expect(() => ws.recibir({ tipo: "algo-que-no-existe" })).not.toThrow();
+    expect(cb).not.toHaveBeenCalled();
+  });
+});

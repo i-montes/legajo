@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { baseUrlRemota, leerConexionRemota, leerModo, type ConexionRemota } from "./conexionRemota";
+import { leerIdentidad } from "./presencia";
 import { desenvolverOk } from "./protocolo";
 import type {
   Alcance, ArbolCategorias, AristaGrafo, Calibracion, Capabilities, Caso, CatalogoModelos,
@@ -35,6 +36,12 @@ export async function llamarRemoto<T>(
   conexion: ConexionRemota, comando: string, args?: unknown
 ): Promise<T> {
   const url = `${baseUrlRemota(conexion)}/api/${comando}`;
+  // Se manda la sesión de presencia de esta ventana, si ya se conoce, para
+  // que el servidor pueda avisar por `cambiado` (WebSocket) a todas las
+  // sesiones MENOS a quien provocó el cambio. Sin identidad —sin servidor de
+  // presencia, o su WebSocket aún no conectado— se manda sin esta cabecera,
+  // y el servidor lo trata como "avisar a todos": el lado seguro.
+  const identidad = leerIdentidad();
   let respuesta: Response;
   try {
     respuesta = await fetch(url, {
@@ -42,6 +49,7 @@ export async function llamarRemoto<T>(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${conexion.token}`,
+        ...(identidad ? { "X-Legajo-Sesion": identidad.sesion } : {}),
       },
       body: JSON.stringify(args ?? {}),
       signal: AbortSignal.timeout(TIEMPO_ESPERA_MS),
