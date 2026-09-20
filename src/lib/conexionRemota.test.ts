@@ -89,6 +89,178 @@ describe("el modo y la conexión remota persisten", () => {
     expect(() => m.activarModoRemoto({ direccion: "x", puerto: 1, token: "t" })).not.toThrow();
     expect(m.leerModo()).toBe("remoto");
   });
+
+  it("la restauración automática al arrancar en modo remoto sigue funcionando con la lista guardada al lado", async () => {
+    const m = await moduloFresco();
+    m.activarModoRemoto({ direccion: "192.168.1.9", puerto: 4177, token: "abc123" });
+
+    // Reabrir la app: un módulo nuevo, mismo localStorage.
+    const m2 = await moduloFresco();
+    expect(m2.leerModo()).toBe("remoto");
+    expect(m2.leerConexionRemota()).toEqual({ direccion: "192.168.1.9", puerto: 4177, token: "abc123" });
+    expect(m2.leerConexionesGuardadas()).toHaveLength(1);
+    expect(m2.leerConexionesGuardadas()[0]).toMatchObject({ direccion: "192.168.1.9", puerto: 4177, token: "ABC123" });
+  });
+});
+
+describe("la lista de conexiones guardadas", () => {
+  it("empieza vacía sin nada guardado", async () => {
+    const m = await moduloFresco();
+    expect(m.leerConexionesGuardadas()).toEqual([]);
+  });
+
+  it("guardarConexionUsada añade una conexión nueva, primera en la lista", async () => {
+    const m = await moduloFresco();
+    m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+    const lista = m.leerConexionesGuardadas();
+    expect(lista).toHaveLength(1);
+    expect(lista[0]).toMatchObject({ direccion: "10.0.0.1", puerto: 1, token: "A" });
+    expect(typeof lista[0].id).toBe("string");
+    expect(typeof lista[0].ultimoUso).toBe("number");
+  });
+
+  it("ordena por uso más reciente primero", async () => {
+    const m = await moduloFresco();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1000);
+      m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+      vi.setSystemTime(2000);
+      m.guardarConexionUsada({ direccion: "10.0.0.2", puerto: 2, token: "b" });
+      vi.setSystemTime(3000);
+      m.guardarConexionUsada({ direccion: "10.0.0.3", puerto: 3, token: "c" });
+
+      expect(m.leerConexionesGuardadas().map((c) => c.direccion)).toEqual([
+        "10.0.0.3", "10.0.0.2", "10.0.0.1",
+      ]);
+
+      // Volver a usar la más vieja la sube al primer puesto.
+      vi.setSystemTime(4000);
+      m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+      expect(m.leerConexionesGuardadas().map((c) => c.direccion)).toEqual([
+        "10.0.0.1", "10.0.0.3", "10.0.0.2",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guardar la misma dirección y puerto otra vez actualiza la entrada en vez de duplicarla", async () => {
+    const m = await moduloFresco();
+    m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+    const id1 = m.leerConexionesGuardadas()[0].id;
+    m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "b" });
+    const lista = m.leerConexionesGuardadas();
+    expect(lista).toHaveLength(1);
+    expect(lista[0].id).toBe(id1);
+    expect(lista[0].token).toBe("B");
+  });
+
+  it("pasado el tope, descarta la que se usó hace más tiempo", async () => {
+    const m = await moduloFresco();
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 6; i++) {
+        vi.setSystemTime(1000 * (i + 1));
+        m.guardarConexionUsada({ direccion: `10.0.0.${i}`, puerto: i + 1, token: "t" });
+      }
+      const lista = m.leerConexionesGuardadas();
+      expect(lista).toHaveLength(5);
+      // La primera guardada (10.0.0.0, la de menor ultimoUso) es la que sobra.
+      expect(lista.map((c) => c.direccion)).not.toContain("10.0.0.0");
+      expect(lista.map((c) => c.direccion)).toEqual([
+        "10.0.0.5", "10.0.0.4", "10.0.0.3", "10.0.0.2", "10.0.0.1",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("eliminarConexionGuardada borra una sin tocar las demás", async () => {
+    const m = await moduloFresco();
+    m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+    m.guardarConexionUsada({ direccion: "10.0.0.2", puerto: 2, token: "b" });
+    const [aBorrar, aConservar] = m.leerConexionesGuardadas();
+    m.eliminarConexionGuardada(aBorrar.id);
+    const lista = m.leerConexionesGuardadas();
+    expect(lista).toHaveLength(1);
+    expect(lista[0].id).toBe(aConservar.id);
+  });
+
+  it("migra una conexión del formato viejo (sin lista) la primera vez que se lee", async () => {
+    localStorage.setItem("legajo.conexionRemota", JSON.stringify({
+      direccion: "192.168.1.9", puerto: 4177, token: "abc123",
+    }));
+    const m = await moduloFresco();
+    const lista = m.leerConexionesGuardadas();
+    expect(lista).toHaveLength(1);
+    expect(lista[0]).toMatchObject({ direccion: "192.168.1.9", puerto: 4177, token: "ABC123" });
+    expect(typeof lista[0].id).toBe("string");
+  });
+
+  it("no migra si la lista ya existe, aunque esté vacía", async () => {
+    localStorage.setItem("legajo.conexionRemota", JSON.stringify({
+      direccion: "192.168.1.9", puerto: 4177, token: "abc123",
+    }));
+    localStorage.setItem("legajo.conexionesRemotas", JSON.stringify([]));
+    const m = await moduloFresco();
+    expect(m.leerConexionesGuardadas()).toEqual([]);
+  });
+
+  it("normaliza el token de una entrada ya guardada en la lista, por si quedó grabada antes de normalizarToken", async () => {
+    localStorage.setItem("legajo.conexionesRemotas", JSON.stringify([
+      { id: "x", direccion: "10.0.0.1", puerto: 1, token: "  abc-123  ", ultimoUso: 1 },
+    ]));
+    const m = await moduloFresco();
+    expect(m.leerConexionesGuardadas()[0].token).toBe("ABC-123");
+  });
+
+  it("guardarConexionUsada persiste: una copia fresca del módulo la sigue viendo", async () => {
+    const m = await moduloFresco();
+    m.guardarConexionUsada({ direccion: "10.0.0.1", puerto: 1, token: "a" });
+    const m2 = await moduloFresco();
+    expect(m2.leerConexionesGuardadas()).toHaveLength(1);
+    expect(m2.leerConexionesGuardadas()[0]).toMatchObject({ direccion: "10.0.0.1", puerto: 1, token: "A" });
+  });
+});
+
+describe("entrarConexionGuardada", () => {
+  const GUARDADA = { id: "x", direccion: "192.168.1.9", puerto: 4177, token: "abc", ultimoUso: 1 };
+
+  it("llama a comprobarSalud y, si va bien, activa el modo remoto", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: { lotes: 0, protocolo: 1, version: "1" } }))
+    ));
+    const m = await moduloFresco();
+    const r = await m.entrarConexionGuardada(GUARDADA);
+    expect(r.ok).toBe(true);
+    expect(m.leerModo()).toBe("remoto");
+    expect(m.leerConexionRemota()).toEqual({ direccion: "192.168.1.9", puerto: 4177, token: "ABC" });
+  });
+
+  it("si comprobarSalud falla, no activa el modo remoto y la entrada guardada sigue ahí con el motivo", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const m = await moduloFresco();
+    m.guardarConexionUsada(GUARDADA); // ya estaba en la lista, como lo estaría en la pantalla real.
+    const antes = m.leerConexionesGuardadas();
+
+    const r = await m.entrarConexionGuardada(GUARDADA);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.motivo).toBe("sin-contacto");
+    expect(m.leerModo()).toBe("local");
+    expect(m.leerConexionRemota()).toBeNull();
+    // La entrada guardada no se borró ni cambió sola por el fallo.
+    expect(m.leerConexionesGuardadas()).toEqual(antes);
+  });
+
+  it("un token que ya no vale se distingue con el motivo «token», sin activar nada", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
+    const m = await moduloFresco();
+    const r = await m.entrarConexionGuardada(GUARDADA);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.motivo).toBe("token");
+    expect(m.leerModo()).toBe("local");
+  });
 });
 
 describe("normalizarToken", () => {

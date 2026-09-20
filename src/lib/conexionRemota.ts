@@ -11,6 +11,22 @@
  * mientras no cambien —si `getSnapshot` devolviera un objeto nuevo en cada
  * llamada, React lo entendería como un cambio permanente y entraría en un
  * ciclo de renderizados—.
+ *
+ * Aparte de la conexión activa, se guarda una lista corta de conexiones
+ * usadas (ver `ConexionGuardada` más abajo), para que volver a una máquina
+ * ya visitada sea un clic y no teclear otra vez dirección, puerto y token.
+ *
+ * El token se guarda en claro en `localStorage`, sin cifrar. Es una decisión,
+ * no un descuido: es lo que hace posible el acceso de un clic que pide esta
+ * función, y ese `localStorage` vive solo en esta máquina —no viaja a
+ * ninguna parte salvo en la cabecera `Authorization` de las peticiones a la
+ * máquina remota—. Lo que ese token protege son anotaciones de trabajo, no
+ * credenciales: las de WordPress quedan fuera del servidor de Legajo a
+ * propósito (ver `ipc.ts`), así que lo peor que permite un token filtrado es
+ * leer o corregir el mismo trabajo que ya comparten quienes anotan, no
+ * publicar nada. Si el cálculo alguna vez cambia —por ejemplo, si el
+ * servidor llega a exponer algo más sensible—, este es el sitio para
+ * reconsiderar guardarlo en claro, no un lugar para "arreglarlo" sin más.
  */
 import { useSyncExternalStore } from "react";
 import { desenvolverOk } from "./protocolo";
@@ -22,6 +38,21 @@ export interface ConexionRemota {
 }
 
 export type Modo = "local" | "remoto";
+
+/** Una conexión que ya se usó con éxito, para el acceso rápido de la
+ *  pantalla de conexión remota. `id` es estable mientras la entrada exista
+ *  —se usa para borrarla sin ambigüedad y como `key` de React—, aunque
+ *  cambien la dirección, el puerto o el token con el tiempo. */
+export interface ConexionGuardada extends ConexionRemota {
+  id: string;
+  /** epoch ms de la última vez que se entró con esta conexión. Determina el
+   *  orden de la lista y cuál se descarta al pasar el tope. */
+  ultimoUso: number;
+  /** Nombre opcional que la persona le puede poner para distinguirla de
+   *  otras —«la del periódico», «la de casa»—. Sin nombre, la pantalla
+   *  muestra dirección y puerto, que ya identifican la máquina. */
+  nombre?: string;
+}
 
 /** Recorta espacios/saltos de línea y sube a mayúsculas.
  *
@@ -41,7 +72,19 @@ export function normalizarToken(s: string): string {
 }
 
 const CLAVE_MODO = "legajo.modo";
+// Clave vieja, de cuando solo existía una conexión activa (sin lista). Sigue
+// escribiéndose tal cual —es lo que lee `leerConexionInicial`, y de ahí sale
+// la restauración automática al arrancar en modo remoto, que no conviene
+// tocar aparte— y además es la fuente de la migración de abajo la primera
+// vez que se arranca con la lista todavía sin crear.
 const CLAVE_CONEXION = "legajo.conexionRemota";
+const CLAVE_CONEXIONES = "legajo.conexionesRemotas";
+
+/** Cuántas conexiones guardadas se conservan como mucho. Quien anota desde
+ *  dos o tres máquinas distintas ya cabe de sobra; pasado esto se descarta
+ *  la usada hace más tiempo —no la guardada hace más tiempo—, así que una
+ *  máquina que se sigue usando nunca se cae de la lista por vieja. */
+const MAX_CONEXIONES_GUARDADAS = 5;
 
 function esConexionValida(v: unknown): v is ConexionRemota {
   return (
@@ -49,6 +92,16 @@ function esConexionValida(v: unknown): v is ConexionRemota {
     typeof (v as Record<string, unknown>).direccion === "string" &&
     typeof (v as Record<string, unknown>).puerto === "number" &&
     typeof (v as Record<string, unknown>).token === "string"
+  );
+}
+
+function esConexionGuardadaValida(v: unknown): v is ConexionGuardada {
+  if (!esConexionValida(v)) return false;
+  const o = v as unknown as Record<string, unknown>;
+  return (
+    typeof o.id === "string" &&
+    typeof o.ultimoUso === "number" &&
+    (o.nombre === undefined || typeof o.nombre === "string")
   );
 }
 
@@ -74,8 +127,59 @@ function leerModoInicial(conexionInicial: ConexionRemota | null): Modo {
   }
 }
 
+function ordenarPorUsoReciente(lista: ConexionGuardada[]): ConexionGuardada[] {
+  return [...lista].sort((a, b) => b.ultimoUso - a.ultimoUso);
+}
+
+/** Lee la lista guardada, o la migra desde el formato viejo (una sola
+ *  conexión, `CLAVE_CONEXION`) si la lista todavía no existe.
+ *
+ *  Por qué hace falta la migración: `CLAVE_CONEXION` es anterior a esta
+ *  lista, así que quien ya tenía una conexión guardada con ese formato debe
+ *  encontrarla aquí al actualizar Legajo, no perderla solo porque ahora se
+ *  guardan varias. Se trata como si fuera la más reciente —es lo único que
+ *  había—, y con un `id` nuevo, porque el formato viejo nunca tuvo uno.
+ *
+ *  El token, tanto el migrado como el que ya viniera en la lista, pasa por
+ *  `normalizarToken`: `CLAVE_CONEXION` y esta misma lista pueden tener
+ *  entradas guardadas antes de que esa función existiera. */
+function leerConexionesGuardadasInicial(conexionInicial: ConexionRemota | null): ConexionGuardada[] {
+  try {
+    const bruto = localStorage.getItem(CLAVE_CONEXIONES);
+    if (bruto !== null) {
+      const v: unknown = JSON.parse(bruto);
+      const lista = Array.isArray(v)
+        ? v.filter(esConexionGuardadaValida).map((c) => ({ ...c, token: normalizarToken(c.token) }))
+        : [];
+      return ordenarPorUsoReciente(lista).slice(0, MAX_CONEXIONES_GUARDADAS);
+    }
+  } catch {
+    // JSON corrupto: se trata como si la lista no existiera todavía y se
+    // sigue abajo, a la migración o a una lista vacía.
+  }
+  if (conexionInicial) {
+    return [{
+      ...conexionInicial,
+      token: normalizarToken(conexionInicial.token),
+      id: crypto.randomUUID(),
+      ultimoUso: Date.now(),
+    }];
+  }
+  return [];
+}
+
 let conexion: ConexionRemota | null = leerConexionInicial();
 let modo: Modo = leerModoInicial(conexion);
+let conexionesGuardadas: ConexionGuardada[] = leerConexionesGuardadasInicial(conexion);
+
+function persistirConexionesGuardadas(): void {
+  try {
+    localStorage.setItem(CLAVE_CONEXIONES, JSON.stringify(conexionesGuardadas));
+  } catch {
+    // ver nota en activarModoRemoto: sin almacenamiento persistente la
+    // sesión actual sigue funcionando igual, solo no sobrevive a un reinicio.
+  }
+}
 
 const suscriptores = new Set<() => void>();
 function notificar() {
@@ -98,8 +202,13 @@ export function leerConexionRemota(): ConexionRemota | null {
 
 /** Valida y guarda, y pasa a modo remoto. Se llama solo después de que
  *  `comprobarSalud` haya confirmado que al otro lado hay un Legajo que
- *  responde con ese token — nunca antes. */
-export function activarModoRemoto(c: ConexionRemota): void {
+ *  responde con ese token — nunca antes.
+ *
+ *  También registra el uso en la lista de conexiones guardadas (abajo): es
+ *  el único sitio por el que se entra de verdad a una conexión —tanto si el
+ *  formulario se tecleó como si vino de un clic en una guardada—, así que es
+ *  el único sitio que necesita acordarse de la lista. */
+export function activarModoRemoto(c: ConexionRemota, nombre?: string): void {
   conexion = c;
   modo = "remoto";
   try {
@@ -109,6 +218,7 @@ export function activarModoRemoto(c: ConexionRemota): void {
     // Sin almacenamiento persistente el modo no sobrevive a un reinicio, pero
     // la sesión actual sigue funcionando: no es motivo para fallar aquí.
   }
+  guardarConexionUsada(c, nombre);
   notificar();
 }
 
@@ -151,6 +261,58 @@ export function useModoRemoto(): boolean {
 
 export function useConexionRemotaGuardada(): ConexionRemota | null {
   return useSyncExternalStore(suscribir, () => conexion);
+}
+
+// ── Lista de conexiones guardadas ───────────────────────────────────────────
+/* El acceso rápido de la pantalla de conexión remota: varias máquinas, no
+ * solo la que está activa ahora mismo, para no tener que teclear otra vez
+ * dirección, puerto y token de una que ya se usó antes. */
+
+/** Las conexiones guardadas, más reciente primero. */
+export function leerConexionesGuardadas(): ConexionGuardada[] {
+  return conexionesGuardadas;
+}
+
+/** Añade esta conexión a la lista, o la actualiza si ya estaba —se
+ *  reconoce por dirección y puerto, no por token: es la misma máquina
+ *  aunque le hayan rotado el token—, con "ahora" como su último uso y por
+ *  tanto primera en la lista. Si supera el tope ([`MAX_CONEXIONES_GUARDADAS`]),
+ *  se descarta la que se usó hace más tiempo.
+ *
+ *  No es lo mismo que `activarModoRemoto`: esa activa el modo remoto de
+ *  verdad y la llama a esta para llevar la cuenta; se exporta aparte para
+ *  que se pueda ejercitar y llamar sin pasar por todo lo demás que hace
+ *  `activarModoRemoto`. */
+export function guardarConexionUsada(c: ConexionRemota, nombre?: string): ConexionGuardada[] {
+  const direccion = c.direccion.trim();
+  const token = normalizarToken(c.token);
+  const existente = conexionesGuardadas.find((g) => g.direccion === direccion && g.puerto === c.puerto);
+  const actualizada: ConexionGuardada = {
+    id: existente?.id ?? crypto.randomUUID(),
+    direccion,
+    puerto: c.puerto,
+    token,
+    ultimoUso: Date.now(),
+    nombre: nombre ?? existente?.nombre,
+  };
+  const resto = conexionesGuardadas.filter((g) => g.id !== actualizada.id);
+  conexionesGuardadas = ordenarPorUsoReciente([actualizada, ...resto]).slice(0, MAX_CONEXIONES_GUARDADAS);
+  persistirConexionesGuardadas();
+  notificar();
+  return conexionesGuardadas;
+}
+
+/** Borra una conexión guardada por su `id`. No toca las demás ni la
+ *  conexión activa —si era la que está en uso ahora mismo, se sigue
+ *  trabajando contra ella; solo desaparece del acceso rápido—. */
+export function eliminarConexionGuardada(id: string): void {
+  conexionesGuardadas = conexionesGuardadas.filter((g) => g.id !== id);
+  persistirConexionesGuardadas();
+  notificar();
+}
+
+export function useConexionesGuardadas(): ConexionGuardada[] {
+  return useSyncExternalStore(suscribir, () => conexionesGuardadas);
 }
 
 // ── Dirección del servidor remoto ───────────────────────────────────────────
@@ -278,4 +440,25 @@ export async function comprobarSalud(c: ConexionRemota): Promise<ResultadoSalud>
       lotes: (salud as Record<string, unknown>).lotes as number,
     },
   };
+}
+
+/** Un clic en una conexión guardada, desde la pantalla de conexión remota.
+ *
+ *  Pasa siempre por `comprobarSalud` antes de dar la conexión por buena: la
+ *  máquina pudo apagarse, cambiar de puerto o rotar el token desde la
+ *  última vez, y entrar a ciegas es como se llega a un error confuso tres
+ *  pantallas más adelante, en vez de aquí, con el motivo delante. Si
+ *  responde bien, activa el modo remoto —lo que también refresca su
+ *  `ultimoUso` y la deja primera en la lista—; si no, la entrada guardada
+ *  se queda tal cual, sin borrarse sola: decidir si se corrige o se quita
+ *  es de quien mira la pantalla, no de esta función. */
+export async function entrarConexionGuardada(g: ConexionGuardada): Promise<ResultadoSalud> {
+  // `normalizarToken` de nuevo aquí, aunque `guardarConexionUsada` y la
+  // lectura inicial ya normalizan al guardar: una entrada pudo quedar
+  // grabada antes de que esa normalización existiera, y esta es la última
+  // parada antes de mandar el token de verdad por HTTP.
+  const c: ConexionRemota = { direccion: g.direccion.trim(), puerto: g.puerto, token: normalizarToken(g.token) };
+  const r = await comprobarSalud(c);
+  if (r.ok) activarModoRemoto(c, g.nombre);
+  return r;
 }
