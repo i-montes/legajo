@@ -17,6 +17,18 @@
 //!   - `GET /api/salud`: igual de protegida que el resto; es con lo que el
 //!     cliente valida la conexión antes de guardarla.
 //!   - `Authorization: Bearer <token>` en todas las rutas.
+//!   - `X-Legajo-Sesion: <sesion>` (opcional) en `POST /api/<comando>`: el id
+//!     de sesión de WebSocket (el mismo `sesion` que llegó en `bienvenida`,
+//!     §ws) de quien hace la petición HTTP. Sirve para que el aviso
+//!     `cambiado` (ver «El WebSocket», más abajo) no se le mande de vuelta a
+//!     quien acaba de provocar el cambio con su propia petición. Es
+//!     enteramente opcional y hacia atrás compatible: un cliente que no la
+//!     mande —uno viejo, o la propia ventana Tauri, que nunca pasa por
+//!     HTTP— simplemente hace que el aviso salga para todas las sesiones
+//!     presentes, que es el comportamiento seguro por defecto y no una
+//!     regresión. Si la cabecera trae un id que no corresponde a ninguna
+//!     sesión presente, tampoco pasa nada: no coincide con nadie, así que el
+//!     aviso sale para todas igual.
 //!   - CORS abierto a cualquier origen: la protección es el token, no el
 //!     origen, porque el cliente es otra app Tauri y su origen no es algo
 //!     que valga la pena fijar.
@@ -599,9 +611,16 @@ async fn manejar_salud(AxState(estado): AxState<EstadoHttp>) -> Response {
 async fn manejar_comando(
     AxState(estado): AxState<EstadoHttp>,
     AxPath(comando): AxPath<String>,
+    headers: axum::http::HeaderMap,
     cuerpo: Bytes,
 ) -> Response {
-    match despachar(&comando, estado.db.clone(), &cuerpo).await {
+    // La sesión de WebSocket de quien hizo esta petición, si la mandó (ver
+    // `X-Legajo-Sesion` en el doc-comment del módulo). `HeaderMap` ya es
+    // case-insensitive, así que no hace falta normalizar el nombre.
+    let sesion_autora = headers
+        .get("x-legajo-sesion")
+        .and_then(|v| v.to_str().ok());
+    match despachar(&comando, estado.db.clone(), &cuerpo, &estado.registro, sesion_autora).await {
         Despacho::Ok(v) => {
             con_cors((StatusCode::OK, Json(serde_json::json!({ "ok": v }))).into_response())
         }
@@ -888,6 +907,23 @@ impl RegistroWs {
         self.0.lock().unwrap().sesiones.values().map(|s| s.tx.clone()).collect()
     }
 
+    /// Como `destinatarios`, pero sin la sesión `excluir` si se da una. Para
+    /// `cambiado` (ver `difundir_cambiado`): a quien provocó el cambio con su
+    /// propia petición HTTP no hace falta avisarle de un cambio que él mismo
+    /// acaba de hacer. `None` —o un id que no corresponde a ninguna sesión
+    /// presente— se comporta exactamente como `destinatarios`: nadie queda
+    /// excluido.
+    fn destinatarios_salvo(&self, excluir: Option<&str>) -> Vec<tokio::sync::mpsc::UnboundedSender<Message>> {
+        self.0
+            .lock()
+            .unwrap()
+            .sesiones
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != excluir)
+            .map(|(_, s)| s.tx.clone())
+            .collect()
+    }
+
     /// El `{"tipo":"presencia", ...}` con el estado actual de todas las
     /// sesiones presentes.
     fn presencia_json(&self) -> String {
@@ -936,6 +972,14 @@ fn msg_perdido(lote_id: i64, wp_id: i64, nombre: &str, emoji: &str) -> String {
     .to_string()
 }
 
+/// Aviso de que `guardar_anotacion` cambió el artículo por HTTP: quien lo
+/// tenga abierto en otra ventana sabe que lo que ve en pantalla ya no es lo
+/// último. A diferencia de `ocupado`/`perdido`, no lleva `por`: no es sobre
+/// un bloqueo ni sobre una identidad, solo sobre qué artículo cambió.
+fn msg_cambiado(lote_id: i64, wp_id: i64) -> String {
+    serde_json::json!({ "tipo": "cambiado", "loteId": lote_id, "wpId": wp_id }).to_string()
+}
+
 /// Manda `payload` solo a `sesion_id`. Si ya no está presente (se desconectó
 /// justo antes), no hace nada: no hay nadie a quien avisar.
 fn enviar_a(registro: &RegistroWs, sesion_id: &str, payload: String) {
@@ -950,6 +994,36 @@ fn enviar_a(registro: &RegistroWs, sesion_id: &str, payload: String) {
 fn difundir_presencia(registro: &RegistroWs) {
     let payload = registro.presencia_json();
     for tx in registro.destinatarios() {
+        let _ = tx.send(Message::Text(payload.clone().into()));
+    }
+}
+
+/// Difunde `cambiado` tras un `guardar_anotacion` de verdad por HTTP.
+///
+/// Por qué solo este comando avisa: `guardar_anotacion` es el único de los
+/// comandos HTTP que toca `menciones`/`relaciones`, que es justo lo que
+/// pinta la pantalla de otra ventana sobre el mismo artículo.
+/// `cerrar_articulo`, `apuntar_tiempo` y `descartar_tiempo` solo tocan
+/// `tiempos` (segundos invertidos y la marca de cierre), un dato que ninguna
+/// otra ventana vuelve a leer en vivo —solo como semilla inicial del
+/// cronómetro al cargar—, y en el flujo real del frontend `cerrar_articulo`
+/// siempre va precedido, en la misma cadena, de un `guardar_anotacion` que
+/// ya disparó el aviso. Avisar además por esos tres no añadiría nada
+/// visible, y en el caso de `apuntar_tiempo` —que se llama cada pocos
+/// segundos mientras se anota— sería activamente malo: la otra ventana
+/// recargaría y reiniciaría su cronómetro en pantalla todo el rato sin
+/// ganar nada. Ver el brazo `"guardar_anotacion"` de `despachar`, donde es
+/// el único sitio que llama a esta función.
+///
+/// Por qué `excluir`: a quien hizo la propia petición HTTP —identificado por
+/// la cabecera opcional `X-Legajo-Sesion`, ver el doc-comment del módulo—
+/// no hace falta avisarle de un cambio que él mismo acaba de guardar; ya lo
+/// tiene en pantalla. Sin esa cabecera (cliente viejo, o la ventana Tauri
+/// local que nunca pasa por HTTP) `excluir` es `None` y el aviso sale para
+/// todas las sesiones presentes: el comportamiento seguro por defecto.
+fn difundir_cambiado(registro: &RegistroWs, lote_id: i64, wp_id: i64, excluir: Option<&str>) {
+    let payload = msg_cambiado(lote_id, wp_id);
+    for tx in registro.destinatarios_salvo(excluir) {
         let _ = tx.send(Message::Text(payload.clone().into()));
     }
 }
@@ -1242,7 +1316,20 @@ fn a_json<T: serde::Serialize>(v: T) -> Despacho {
 /// llamada de verdad contra la base. Cualquier nombre que no sea uno de los
 /// brazos de este `match` cae en `_` sin que se deserialice nada ni se toque
 /// `Db`: no hay ningún camino desde un nombre arbitrario hasta `commands.rs`.
-async fn despachar(comando: &str, db: Arc<Db>, cuerpo: &[u8]) -> Despacho {
+///
+/// `registro` y `sesion_autora` no los usa casi ningún brazo: están aquí
+/// solo porque `"guardar_anotacion"` los necesita para difundir `cambiado`
+/// (ver `difundir_cambiado`). Pasarlos por la firma en vez de, por ejemplo,
+/// meterlos en `EstadoHttp` y sacarlos de ahí dentro del brazo, deja a la
+/// vista en la firma de la función qué brazo puede tener efectos más allá de
+/// `Db`.
+async fn despachar(
+    comando: &str,
+    db: Arc<Db>,
+    cuerpo: &[u8],
+    registro: &RegistroWs,
+    sesion_autora: Option<&str>,
+) -> Despacho {
     let cuerpo = if cuerpo.is_empty() { b"{}".as_slice() } else { cuerpo };
 
     match comando {
@@ -1260,8 +1347,26 @@ async fn despachar(comando: &str, db: Arc<Db>, cuerpo: &[u8]) -> Despacho {
         }
         "guardar_anotacion" => {
             let a: ArgsGuardarAnotacion = match serde_json::from_slice(cuerpo) { Ok(a) => a, Err(e) => return args_invalidos(e) };
+            let (lote_id, wp_id) = (a.lote_id, a.wp_id);
             match commands::guardar_anotacion_impl(db, a.lote_id, a.wp_id, a.menciones, a.relaciones).await {
-                Ok(v) => a_json(v), Err(e) => Despacho::Fallo(e.to_string()),
+                Ok(v) => {
+                    // Solo este comando difunde `cambiado`: es el único que
+                    // toca `menciones`/`relaciones`, que es lo que otra
+                    // ventana abierta sobre el mismo artículo tiene en
+                    // pantalla. `cerrar_articulo`, `apuntar_tiempo` y
+                    // `descartar_tiempo` solo tocan `tiempos` —nada que se
+                    // vuelva a leer en vivo— y en el flujo real del frontend
+                    // `cerrar_articulo` siempre va precedido de un
+                    // `guardar_anotacion` que ya avisó; sumarles el aviso no
+                    // enseñaría nada nuevo y, en `apuntar_tiempo` (que se
+                    // llama cada pocos segundos mientras se anota), haría que
+                    // la otra ventana recargara y reiniciara su cronómetro en
+                    // pantalla sin parar. Ver `difundir_cambiado` para el
+                    // razonamiento completo, incluido a quién no se le avisa.
+                    difundir_cambiado(registro, lote_id, wp_id, sesion_autora);
+                    a_json(v)
+                }
+                Err(e) => Despacho::Fallo(e.to_string()),
             }
         }
         "cerrar_articulo" => {
@@ -1416,7 +1521,7 @@ mod tests {
         assert!(!reales.is_empty());
 
         for nombre in &reales {
-            let resultado = despachar(nombre, db.clone(), b"{}").await;
+            let resultado = despachar(nombre, db.clone(), b"{}", &RegistroWs::default(), None).await;
             if expuestos.contains(nombre.as_str()) {
                 assert!(
                     !matches!(resultado, Despacho::NoEncontrado),
@@ -1448,7 +1553,10 @@ mod tests {
             "iniciar_extraccion", "cancelar_extraccion", "deshacer_extraccion", "sondear_archivo",
         ] {
             assert!(
-                matches!(despachar(peligroso, db.clone(), b"{}").await, Despacho::NoEncontrado),
+                matches!(
+                    despachar(peligroso, db.clone(), b"{}", &RegistroWs::default(), None).await,
+                    Despacho::NoEncontrado
+                ),
                 "«{peligroso}» debía estar bloqueado y no lo está"
             );
         }
@@ -1512,12 +1620,38 @@ mod tests {
     async fn pedir(
         addr: std::net::SocketAddr, metodo: &str, ruta: &str, token: Option<&str>, cuerpo: &str,
     ) -> (u16, String) {
+        pedir_con_cabecera(addr, metodo, ruta, token, None, cuerpo).await
+    }
+
+    /// Igual que `pedir`, pero mandando además `X-Legajo-Sesion: <sesion>`
+    /// (ver el doc-comment del módulo): para las pruebas que simulan una
+    /// petición HTTP hecha «desde» una sesión de WebSocket ya identificada.
+    async fn pedir_con_sesion(
+        addr: std::net::SocketAddr, metodo: &str, ruta: &str, token: Option<&str>, sesion: &str, cuerpo: &str,
+    ) -> (u16, String) {
+        pedir_con_cabecera(addr, metodo, ruta, token, Some(sesion), cuerpo).await
+    }
+
+    /// Lo que de verdad hacen `pedir` y `pedir_con_sesion`: un cliente HTTP
+    /// mínimo hecho a mano, sin sumar `reqwest` ni `tower` solo para las
+    /// pruebas. Abre el socket, escribe la petición en crudo —con la
+    /// cabecera `X-Legajo-Sesion` si se da una— y separa el código de estado
+    /// del cuerpo de la respuesta.
+    async fn pedir_con_cabecera(
+        addr: std::net::SocketAddr,
+        metodo: &str,
+        ruta: &str,
+        token: Option<&str>,
+        sesion: Option<&str>,
+        cuerpo: &str,
+    ) -> (u16, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+        let cab_sesion = sesion.map(|s| format!("X-Legajo-Sesion: {s}\r\n")).unwrap_or_default();
         let peticion = format!(
             "{metodo} {ruta} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n{auth}\r\n{cuerpo}",
+             Content-Length: {}\r\nConnection: close\r\n{auth}{cab_sesion}\r\n{cuerpo}",
             cuerpo.len()
         );
         stream.write_all(peticion.as_bytes()).await.unwrap();
@@ -2294,5 +2428,142 @@ mod tests {
 
         detener(&db, &srv).await.unwrap();
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Pruebas de `cambiado`: HTTP que avisa por WebSocket ──────────────────
+    //
+    // `guardar_anotacion` es HTTP y `cambiado` es WebSocket: estas pruebas
+    // arrancan el servidor de verdad, conectan sesiones WS de verdad y llaman
+    // a `guardar_anotacion` por HTTP de verdad con `pedir`/`pedir_con_sesion`,
+    // igual que el resto de este módulo. Con `menciones: []` y
+    // `relaciones: []` basta: `Db::guardar_anotacion` (core/src/db.rs) solo
+    // hace un `DELETE` de lo que hubiera para ese `(lote_id, wp_id)` y luego
+    // inserta lo que traiga el cuerpo, así que un lote/wp que no existe de
+    // verdad en `lotes` no dispara ninguna violación de clave foránea
+    // mientras no haya nada que insertar.
+
+    /// Prueba 1 del encargo: la otra sesión presente recibe `cambiado` con el
+    /// lote y el wp de verdad guardados.
+    #[tokio::test]
+    async fn guardar_anotacion_por_http_difunde_cambiado_a_las_otras_sesiones() {
+        let (path, db) = db_de_prueba("cambiado-difunde");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        let bienvenida_a = ws_hola(&mut a, "maquina-a").await;
+        let sesion_a = bienvenida_a["sesion"].as_str().unwrap().to_string();
+        let mut b = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut b, "maquina-b").await;
+
+        let cuerpo =
+            serde_json::json!({ "loteId": 1, "wpId": 10, "menciones": [], "relaciones": [] }).to_string();
+        let (codigo, resp) =
+            pedir_con_sesion(addr, "POST", "/api/guardar_anotacion", Some(&est.token), &sesion_a, &cuerpo)
+                .await;
+        assert_eq!(codigo, 200, "guardar_anotacion debía tener éxito: {resp}");
+
+        let cambiado = ws_recibir_tipo(&mut b, "cambiado").await;
+        assert_eq!(cambiado["loteId"], 1);
+        assert_eq!(cambiado["wpId"], 10);
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Prueba 2 del encargo: a quien identificó la petición con
+    /// `X-Legajo-Sesion` no se le manda el `cambiado` que él mismo provocó.
+    #[tokio::test]
+    async fn guardar_anotacion_no_le_avisa_a_la_sesion_que_lo_provoco() {
+        let (path, db) = db_de_prueba("cambiado-sin-autora");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        let bienvenida_a = ws_hola(&mut a, "maquina-a").await;
+        let sesion_a = bienvenida_a["sesion"].as_str().unwrap().to_string();
+
+        // Deja "a" sin nada pendiente de la `presencia` que ya disparó su
+        // propia conexión, para que lo único que se compruebe después sea lo
+        // que provoque (o no) el `guardar_anotacion` de esta prueba.
+        ws_drenar(&mut a, Duration::from_millis(200)).await;
+
+        let cuerpo =
+            serde_json::json!({ "loteId": 1, "wpId": 20, "menciones": [], "relaciones": [] }).to_string();
+        let (codigo, resp) =
+            pedir_con_sesion(addr, "POST", "/api/guardar_anotacion", Some(&est.token), &sesion_a, &cuerpo)
+                .await;
+        assert_eq!(codigo, 200, "guardar_anotacion debía tener éxito: {resp}");
+
+        assert!(
+            ws_nada_en(&mut a, Duration::from_millis(300)).await,
+            "la sesión que hizo la petición no debía recibir su propio «cambiado»"
+        );
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Prueba 3 del encargo: sin `X-Legajo-Sesion` (cliente viejo, o la
+    /// propia ventana Tauri) el aviso sale para todas las sesiones presentes,
+    /// sin excluir a ninguna.
+    #[tokio::test]
+    async fn guardar_anotacion_sin_cabecera_de_sesion_avisa_a_todas() {
+        let (path, db) = db_de_prueba("cambiado-a-todas");
+        let srv = ServidorState::default();
+        let est = iniciar_prueba(db.clone(), &srv).await.unwrap();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", est.puerto).parse().unwrap();
+
+        let mut a = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut a, "maquina-a").await;
+        let mut b = ws_conectar_con_token(addr, &est.token).await.unwrap();
+        ws_hola(&mut b, "maquina-b").await;
+
+        let cuerpo =
+            serde_json::json!({ "loteId": 1, "wpId": 30, "menciones": [], "relaciones": [] }).to_string();
+        let (codigo, resp) =
+            pedir(addr, "POST", "/api/guardar_anotacion", Some(&est.token), &cuerpo).await;
+        assert_eq!(codigo, 200, "guardar_anotacion debía tener éxito: {resp}");
+
+        let cambiado_a = ws_recibir_tipo(&mut a, "cambiado").await;
+        assert_eq!(cambiado_a["loteId"], 1);
+        assert_eq!(cambiado_a["wpId"], 30);
+        let cambiado_b = ws_recibir_tipo(&mut b, "cambiado").await;
+        assert_eq!(cambiado_b["loteId"], 1);
+        assert_eq!(cambiado_b["wpId"], 30);
+
+        detener(&db, &srv).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Unitaria de `RegistroWs::destinatarios_salvo`, aparte de las de
+    /// extremo a extremo de arriba: deja claro, sin levantar servidor ni
+    /// WebSocket de verdad, que excluye exactamente a quien se le pide y a
+    /// nadie más, y que un id que no corresponde a ninguna sesión presente no
+    /// excluye a nadie.
+    #[test]
+    fn destinatarios_salvo_excluye_solo_la_sesion_pedida() {
+        let registro = RegistroWs::default();
+        let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel::<Message>();
+        let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel::<Message>();
+        let (sesion_a, _, _) = registro.conectar("cliente-a".to_string(), tx_a);
+        let (sesion_b, _, _) = registro.conectar("cliente-b".to_string(), tx_b);
+
+        let destinatarios = registro.destinatarios_salvo(Some(&sesion_a));
+        assert_eq!(destinatarios.len(), 1, "solo debía quedar la sesión no excluida");
+        for tx in destinatarios {
+            let _ = tx.send(Message::Text("hola".into()));
+        }
+        assert!(rx_a.try_recv().is_err(), "la sesión excluida no debía recibir nada");
+        assert!(rx_b.try_recv().is_ok(), "la sesión no excluida sí debía recibir algo");
+
+        // Un id que no corresponde a nadie presente no excluye a nadie de
+        // verdad: es el mismo caso que «la cabecera no coincide con ninguna
+        // sesión», que debe comportarse como si no se hubiera excluido nada.
+        assert_eq!(registro.destinatarios_salvo(Some("no-existe")).len(), 2);
+        assert_eq!(registro.destinatarios_salvo(None).len(), 2);
+        let _ = sesion_b;
     }
 }
