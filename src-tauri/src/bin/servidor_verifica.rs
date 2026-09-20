@@ -6,6 +6,10 @@
 //! recibe ni siembra nada en él: abre lo que ya hay y sirve encima.
 //!
 //! Uso: cargo run -p legajo --bin servidor_verifica -- <ruta-sqlite> [puerto]
+//!
+//! Sin `[puerto]`, o con `0`, usa el puerto por defecto del modo servidor
+//! (`servidor::PUERTO_PREDETERMINADO`, 36507): `servidor::iniciar` traduce el
+//! `0` él solo, este binario no le pone ningún caso especial.
 use legajo_lib::servidor::{self, ServidorState};
 use legajo_core::db::Db;
 use std::sync::Arc;
@@ -36,7 +40,11 @@ async fn main() {
 
     println!("base: {}", path.display());
     println!("activo: {}", estado.activo);
-    println!("direccion: {}:{}", estado.direcciones.first().cloned().unwrap_or_default(), estado.puerto);
+    println!("puerto: {}", estado.puerto);
+    println!("direcciones:");
+    for ip in &estado.direcciones {
+        println!("  - {ip}:{}", estado.puerto);
+    }
     println!("token: {}", estado.token);
     println!("esperando peticiones (Ctrl+C para salir)...");
 
